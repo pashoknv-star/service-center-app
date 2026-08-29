@@ -1039,6 +1039,10 @@
       align-items: center;
       gap: 5px;
     }
+    
+    .vacation-legend .legend-forecast .legend-dot {
+      background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(33,150,243,0.45) 3px 6px);
+    }
 
     .vacation-legend .legend-dot {
       width: 12px;
@@ -1087,6 +1091,20 @@
     .matrix-table .name-col:hover {
       background: rgba(119, 0, 255, 0.13);
       color: var(--rt-purple);
+    }
+    
+    .matrix-table .trip-row-selected .name-col {
+      background: var(--rt-purple);
+      color: white;
+      box-shadow: 0 0 12px rgba(119, 0, 255, 0.4);
+    }
+    
+    .matrix-table .trip-row-dimmed .name-col {
+      opacity: 0.35;
+    }
+    
+    .matrix-table .trip-row-dimmed .name-col:hover {
+      opacity: 1;
     }
 
     /* Group separators reproduce staff zones 0–6 in the matrix. */
@@ -1773,6 +1791,144 @@
       /* Тосты не вылезают за экран */
       .toast { max-width: calc(100vw - 32px); }
     }
+    
+    /* T5-DEFECT-3: Tab glow effect */
+    .panel-tab.tab-glow {
+      box-shadow: 0 0 0 2px var(--trip-blue);
+    }
+    
+    /* T5-DEFECT-5: Employee pick dock */
+    .trip-panel-slided {
+      transform: translateX(calc(-100% + 46px));
+      transition: transform 0.25s ease;
+    }
+    
+    .trip-pick-dock {
+      position: fixed;
+      left: 0px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 320px;
+      max-height: 80vh;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      transition: left 0.25s ease;
+    }
+    
+    .dock-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .dock-title {
+      font-weight: 600;
+      color: var(--text);
+    }
+    
+    .dock-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: #999;
+    }
+    
+    .dock-content {
+      max-height: calc(80vh - 120px);
+      overflow-y: auto;
+    }
+    
+    .dock-search {
+      padding: 16px 20px;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .dock-search input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    
+    .dock-employees {
+      padding: 8px 0;
+    }
+    
+    .dock-employee-item {
+      padding: 12px 20px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.2s ease;
+    }
+    
+    .dock-employee-item:hover {
+      background: #f5f5f5;
+    }
+    
+    .dock-employee-item.selected {
+      background: rgba(33, 150, 243, 0.1);
+      border-left: 3px solid var(--trip-blue);
+    }
+    
+    .employee-info {
+      flex: 1;
+    }
+    
+    .employee-name {
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    
+    .employee-dept {
+      font-size: 12px;
+      color: #666;
+    }
+    
+    .employee-checkbox {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      background: #f0f0f0;
+      font-weight: bold;
+    }
+    
+    .dock-footer {
+      padding: 16px 20px;
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    
+    .dock-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .dock-btn-primary {
+      background: var(--trip-blue);
+      color: white;
+    }
+    
+    .dock-btn-secondary {
+      background: #f0f0f0;
+      color: #666;
+    }
   </style>
 </head>
 <body>
@@ -1828,7 +1984,8 @@
       <span style="font-weight:600; color:var(--text)">Обозначения:</span>
       <span class="legend-item"><span class="legend-dot" style="background:var(--vacation-green)"></span> Отпуск</span>
       <span class="legend-item"><span class="legend-dot" style="background:var(--sick-red)"></span> Больничный</span>
-      <span class="legend-item"><span class="legend-dot" style="background:var(--trip-blue)"></span> Командировка</span>
+      <span class="legend-item legend-forecast"><span class="legend-dot" style="background:rgba(33,150,243,0.35); background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(33,150,243,0.45) 3px 6px)"></span> Командировка (прогноз)</span>
+      <span class="legend-item"><span class="legend-dot" style="background:var(--trip-blue)"></span> Командировка (подтверждена)</span>
       <span class="legend-item"><span class="legend-dot" style="background:var(--dayoff-orange)"></span> Отгул</span>
     </div>
     
@@ -1851,6 +2008,7 @@
     <div class="popup-item" data-type="sick"><span class="color-dot sick"></span> Больничный</div>
     <div class="popup-item" data-type="trip"><span class="color-dot trip"></span> Командировка</div>
     <div class="popup-item" data-type="dayoff"><span class="color-dot dayoff"></span> Отгул</div>
+    <div class="popup-item" data-type="trip-draft" style="color:var(--trip-blue); font-weight:600;"><span class="color-dot trip"></span> Создать командировку</div>
     <div class="popup-comment-row" id="popupCommentRow">
       <input type="text" id="popupCommentInput" maxlength="60" placeholder="Город" />
     </div>
@@ -3485,7 +3643,27 @@
         cell.addEventListener('click', function(event) {
           event.stopPropagation();
           var empId = parseInt(cell.dataset.empId);
-          openMatrixEmployeeCard(empId);
+          
+          // Ctrl/Cmd multi-selection
+          if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            var row = cell.parentElement;
+            row.classList.toggle('trip-row-selected');
+            
+            // Toggle dimmed effect for non-selected rows
+            var allRows = matrixBody.querySelectorAll('.name-col[data-emp-id]');
+            allRows.forEach(function(otherCell) {
+              var otherRow = otherCell.parentElement;
+              if (otherRow !== row && !otherRow.classList.contains('trip-row-selected')) {
+                otherRow.classList.add('trip-row-dimmed');
+              } else {
+                otherRow.classList.remove('trip-row-dimmed');
+              }
+            });
+          } else {
+            // Regular click - open employee card
+            openMatrixEmployeeCard(empId);
+          }
         });
       });
 
@@ -3878,7 +4056,7 @@
           // Warn before placing a vacation-type status on a festive day.
           // Per business rule Q11–Q12, such a day extends the vacation; we
           // only inform the user (actual extension is resolved server-side).
-          if (type && type !== 'work' && type !== 'clear') {
+          if (type && type !== 'work' && type !== 'clear' && type !== 'trip-draft') {
             var day = popupTarget.day;
             var ok = warnIfVacationOnHoliday(popupTarget.empId, currentYear, day, day);
             if (!ok) {
@@ -3887,6 +4065,23 @@
               return;
             }
           }
+          
+          // Handle trip-draft option
+          if (type === 'trip-draft') {
+            var empId = popupTarget.empId;
+            var startDay = popupTarget.isRange ? popupTarget.startDay : popupTarget.day;
+            var endDay = popupTarget.isRange ? popupTarget.endDay : popupTarget.day;
+            
+            // Create trip draft from selection
+            if (window.Trips && window.Trips.createDraftFromSelection) {
+              window.Trips.createDraftFromSelection(empId, startDay, endDay);
+            }
+            
+            cellPopup.classList.remove('show');
+            popupTarget = null;
+            return;
+          }
+          
           setDayVacationType(popupTarget.empId, currentYear, popupTarget.day, type);
         }
         cellPopup.classList.remove('show');
@@ -3966,6 +4161,11 @@
     });
 
     document.getElementById('closeVacation').addEventListener('click', function() {
+      // T5-DEFECT-7: Guard info panel access
+      if (window.Trips && window.Trips.suppressInfoPanel && window.Trips.suppressInfoPanel()) {
+        return;
+      }
+      
       vacationPanel.classList.remove('open');
       vacationPanel.classList.remove('employee-card-open');
       vacationTrigger.style.display = 'flex';
