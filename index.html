@@ -1805,6 +1805,10 @@
   <aside class="vacation-panel" id="vacationPanel">
     <div class="vacation-panel-header">
       <h2>Матрица отпусков<span id="syncBadge" style="display:none; margin-left:8px; font-size:11px; color:#888; font-weight:400; white-space:nowrap;">обновлено --:--</span></h2>
+      <div class="panel-tabs" id="panelTabs">
+        <button type="button" class="panel-tab active" id="tabMatrix">Матрица отпусков</button>
+        <button type="button" class="panel-tab" id="tabTrips">Командировки</button>
+      </div>
       <div class="year-selector">
         <button class="year-btn" id="prevYear">◀</button>
         <span class="year-display" id="yearDisplay">2026</span>
@@ -1827,6 +1831,14 @@
       <span class="legend-item"><span class="legend-dot" style="background:var(--trip-blue)"></span> Командировка</span>
       <span class="legend-item"><span class="legend-dot" style="background:var(--dayoff-orange)"></span> Отгул</span>
     </div>
+    
+    <!-- Trips List View -->
+    <div id="tripsListView" style="display:none;">
+      <h3>Командировки</h3>
+      <button type="button" class="btn" id="newTripBtn">+ Новая командировка</button>
+      <div id="tripsList"></div>
+    </div>
+
   </aside>
 
   <!-- ===== CELL POPUP MENU ===== -->
@@ -1855,6 +1867,7 @@
     <header class="header">
       <div class="header-controls">
         <button class="btn editor-only" id="addBtn">+ Добавить сотрудника</button>
+        <button class="btn editor-only" id="tripFromEmpBtn" style="display:none;">Командировка от сотрудника</button>
         <input type="text" id="searchEmployee" placeholder="Поиск сотрудника (не менее 3 букв + Enter)..." style="width: 420px; max-width: 100%; padding: 10px 16px; border: 1.5px solid rgba(119, 0, 255, 0.2); border-radius: 8px; font-size: 14px; color: var(--text); background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.02); transition: all 0.2s ease;">
         <!-- ===== USER INDICATOR (Phase 2B) ===== -->
         <!-- 2026-08-24: упрощена — только бейдж роли (аватар и имя аккаунта убраны по ТЗ). -->
@@ -2296,6 +2309,7 @@
   </div>
 
   <script src="js/storage.js"></script>
+  <script src="js/trips.js"></script>
   <script>
     const ZONES = [
       "Группа клиентского сервиса",
@@ -5043,6 +5057,9 @@
       function applyDelta(d) {
         if (!d) return false;
         var changed = false;
+        
+        // T4-fix: sync-delta hook for trips
+        if (d && (d.tripsChanged || d.tripsDeleted) && window.Trips) { try { Trips.syncDelta(d); } catch (e) { console.warn('trips delta failed', e); } }
 
         if (d.entries && Object.keys(d.entries).length) {
           if (cellEditInProgress()) {
@@ -5155,6 +5172,30 @@
         if (realConflict) {
           showToast('Часть правок отклонена: ячейку изменил другой пользователь', 'error');
         }
+      }
+
+      // Inject trip status CSS for trip-blue color
+      function InjectTripStatusCSS() {
+        const style = document.createElement('style');
+        style.textContent = `
+          /* Trip blue color */
+          .trip-blue { color: #2196F3; }
+          
+          /* Trip status indicators */
+          .status-forecast {
+            background-color: rgba(33, 150, 243, 0.35);
+            background-image: repeating-linear-gradient(
+              45deg,
+              transparent 0 3px,
+              rgba(33, 150, 243, 0.35) 3px 6px
+            );
+          }
+          
+          .status-confirmed {
+            background-color: #2196F3;
+          }
+        `;
+        document.head.appendChild(style);
       }
 
       function updateBadge() {
