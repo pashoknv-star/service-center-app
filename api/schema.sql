@@ -1,9 +1,11 @@
 -- ============================================================================
 -- Service Center App — SQLite Schema
--- Version: 5
+-- Version: 6
 -- Tables: groups, positions, employees, schedule_entries, holidays,
---         vacation_balances, users, meta, sync_log, audit_log
+--         vacation_balances, users, meta, sync_log, audit_log,
+--         trips, trip_participants
 -- Features: E5-4 automatic audit_log cleanup (>7 days)
+--           Business trips (trips + trip_participants, schema v6)
 -- ============================================================================
 
 PRAGMA foreign_keys = ON;
@@ -142,3 +144,36 @@ CREATE TABLE IF NOT EXISTS audit_log (
     details     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+
+-- ----------------------------------------------------------------------------
+-- trips: командировки (фича «Командировки», schema v6)
+-- status: 'forecast' | 'confirmed' (ровно два по ТЗ)
+-- version: E8 optimistic concurrency (entryVersion-сверка в trips.php PUT)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS trips (
+    id          TEXT PRIMARY KEY,           -- genId('trip_'), сервер
+    title       TEXT NOT NULL,              -- цель/название
+    location    TEXT,                       -- населённый пункт
+    comment     TEXT,
+    status      TEXT NOT NULL DEFAULT 'forecast',  -- forecast | confirmed
+    version     INTEGER NOT NULL DEFAULT 1, -- E8 optimistic concurrency
+    created_by  TEXT,
+    created_at  TEXT, updated_at TEXT
+);
+
+-- ----------------------------------------------------------------------------
+-- trip_participants: участники командировки (индивидуальные периоды)
+-- FK trip_id     -> trips(id)     ON DELETE CASCADE
+-- FK employee_id -> employees(id) ON DELETE CASCADE
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS trip_participants (
+    trip_id     TEXT NOT NULL,
+    employee_id TEXT NOT NULL,
+    start_date  TEXT NOT NULL,              -- индивидуальный период
+    end_date    TEXT NOT NULL,
+    PRIMARY KEY (trip_id, employee_id),
+    FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+    FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_trips_dates ON trips (created_at);
+CREATE INDEX IF NOT EXISTS idx_trip_participants_emp ON trip_participants (employee_id);

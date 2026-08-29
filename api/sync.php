@@ -35,6 +35,52 @@ require_once __DIR__ . '/auth.php';
 handleOptions();
 require_auth();
 
+/**
+ * Полный объект trip с участниками (camelCase) — локальная копия логики
+ * trips_fetch() из trips.php, чтобы sync.php оставался самодостаточным.
+ */
+function trips_sync_fetch_trip(PDO $pdo, string $id): ?array
+{
+    $stmtT = $pdo->prepare(
+        'SELECT id, title, location, comment, status, version, created_by, created_at, updated_at
+         FROM trips WHERE id = :id LIMIT 1'
+    );
+    $stmtT->bindValue(':id', $id, PDO::PARAM_STR);
+    $stmtT->execute();
+    $row = $stmtT->fetch(PDO::FETCH_ASSOC);
+    if (!$row) {
+        return null;
+    }
+
+    $stmtP = $pdo->prepare(
+        'SELECT employee_id, start_date, end_date
+         FROM trip_participants WHERE trip_id = :id ORDER BY employee_id'
+    );
+    $stmtP->bindValue(':id', $id, PDO::PARAM_STR);
+    $stmtP->execute();
+    $participants = [];
+    foreach ($stmtP->fetchAll(PDO::FETCH_ASSOC) as $p) {
+        $participants[] = [
+            'employeeId' => $p['employee_id'],
+            'startDate'  => $p['start_date'],
+            'endDate'    => $p['end_date'],
+        ];
+    }
+
+    return [
+        'id'           => $row['id'],
+        'title'        => $row['title'],
+        'location'     => $row['location'],
+        'comment'      => $row['comment'],
+        'status'       => $row['status'],
+        'version'      => (int) $row['version'],
+        'createdBy'    => $row['created_by'],
+        'createdAt'    => $row['created_at'],
+        'updatedAt'    => $row['updated_at'],
+        'participants' => $participants,
+    ];
+}
+
 try {
     $db = Database::getInstance();
     $pdo = $db->getPDO();
@@ -176,6 +222,8 @@ try {
     $deletedEntries = [];
     $employeesChanged = [];
     $employeesDeleted = [];
+    $tripsChanged = [];
+    $tripsDeleted = [];
 
     if ($lastSyncId > $afterId) {
         // События журнала после курсора.
@@ -188,6 +236,7 @@ try {
              FROM schedule_entries WHERE employee_id || \':\' || date = :k LIMIT 1'
         );
         $stmtEmp = $pdo->prepare('SELECT id FROM employees WHERE id = :id LIMIT 1');
+        $stmtTrip = $pdo->prepare('SELECT id FROM trips WHERE id = :id LIMIT 1');
 
         foreach ($rows as $row) {
             $type = $row['entity_type'];
@@ -218,6 +267,21 @@ try {
                 } else {
                     $employeesDeleted[] = $eid;
                 }
+            } elseif ($type === 'trip') {
+                // Командировка: актуальное состояние в tripsChanged, либо
+                // tripsDeleted, если её уже нет в БД.
+                $stmtTrip->bindValue(':id', $eid, PDO::PARAM_STR);
+                $stmtTrip->execute();
+                if ($stmtTrip->fetch()) {
+                    $tripObj = trips_sync_fetch_trip($pdo, $eid);
+                    if ($tripObj !== null) {
+                        $tripsChanged[$eid] = $tripObj;
+                    } else {
+                        $tripsDeleted[] = $eid;
+                    }
+                } else {
+                    $tripsDeleted[] = $eid;
+                }
             }
         }
     }
@@ -231,6 +295,8 @@ try {
         'deletedEntries'   => $deletedEntries,
         'employeesChanged' => $employeesChanged,
         'employeesDeleted' => $employeesDeleted,
+        'tripsChanged'     => (object) $tripsChanged,
+        'tripsDeleted'     => $tripsDeleted,
     ]);
 } catch (Throwable $e) {
     error('Server error: ' . $e->getMessage(), 500);

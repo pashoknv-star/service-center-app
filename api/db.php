@@ -20,14 +20,14 @@ final class Database
     /** Корень проекта (на два уровня выше api/). */
     private const PROJECT_ROOT = __DIR__ . DIRECTORY_SEPARATOR . '..';
 
-    /** Путь к файлу БД. */
+    /** Путь к файлу БД (по умолчанию; переопределяется env SC_APP_DB для тестов на копии). */
     private const DB_PATH = self::PROJECT_ROOT . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'app.db';
 
     /** Путь к schema.sql. */
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 5;
+    private const SCHEMA_VERSION = 6;
 
     private static ?Database $instance = null;
 
@@ -191,6 +191,209 @@ final class Database
         if ($current < 5) {
             $this->cleanupAuditLog();
         }
+
+        // --- v5 → v6: командировки (trips + trip_participants) ---
+        if ($current < 6) {
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS trips (' .
+                "    id          TEXT PRIMARY KEY," .
+                "    title       TEXT NOT NULL," .
+                "    location    TEXT," .
+                "    comment     TEXT," .
+                "    status      TEXT NOT NULL DEFAULT 'forecast'," .
+                "    version     INTEGER NOT NULL DEFAULT 1," .
+                "    created_by  TEXT," .
+                "    created_at  TEXT, updated_at TEXT" .
+                ')'
+            );
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS trip_participants (' .
+                "    trip_id     TEXT NOT NULL," .
+                "    employee_id TEXT NOT NULL," .
+                "    start_date  TEXT NOT NULL," .
+                "    end_date    TEXT NOT NULL," .
+                "    PRIMARY KEY (trip_id, employee_id)," .
+                "    FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE," .
+                "    FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE" .
+                ')'
+            );
+            $this->pdo->exec(
+                'CREATE INDEX IF NOT EXISTS idx_trips_dates ON trips (created_at)'
+            );
+            $this->pdo->exec(
+                'CREATE INDEX IF NOT EXISTS idx_trip_participants_emp ON trip_participants (employee_id)'
+            );
+        }
+
+        // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---
+        // Происходит при миграции (в т.ч. когда схема уже v6), защищена
+        // meta-флагом 'trips_legacy_migrated' — повторный запуск дублей не даёт.
+        $this->migrateLegacyTrips();
+
+        // E5-4: периодическая очистка журнала аудита (сохраняет прежнее
+        // поведение для БД, пришедших с версии >= 5).
+        $this->cleanupAuditLog();
+    }
+
+    /**
+     * Legacy-конверсия: подряд идущие schedule_entries со статусом 'trip'
+     * группируются в Trip-объекты (status='confirmed' — визуал не меняется).
+     * Разрыв в датах = новая командировка; год НЕ ограничивает группировку.
+     *
+     * Каждой командировке: genId('trip_'), version=1, участники — периоды
+     * сотрудника. sync_log НЕ пишется (миграция, а не пользовательское
+     * действие); в audit_log пишется одно событие 'trip.legacy_migrate'
+     * с количеством созданных командировок.
+     *
+     * Идемпотентность обеспечивает meta-ключ 'trips_legacy_migrated'.
+     */
+    private function migrateLegacyTrips(): void
+    {
+        // Флаг уже стоит — повторный запуск ничего не делает (дублей нет).
+        $flagStmt = $this->pdo->prepare(
+            "SELECT value FROM meta WHERE key = 'trips_legacy_migrated'"
+        );
+        $flagStmt->execute();
+        if ($flagStmt->fetch(PDO::FETCH_COLUMN)) {
+            return;
+        }
+
+        try {
+            // Таблицы trips/schedule_entries могут отсутствовать, если миграция
+            // v6 ещё не выполняла CREATE (свежая БД без схема-прохода) — в этом
+            // случае конвертировать нечего; помечаем флаг и выходим.
+            $tables = $this->pdo->query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('trips','schedule_entries')"
+            )->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('trips', $tables, true) || !in_array('schedule_entries', $tables, true)) {
+                $this->setMeta('trips_legacy_migrated', '1');
+                return;
+            }
+
+            $rows = $this->pdo->query(
+                "SELECT employee_id, date, comment
+                 FROM schedule_entries
+                 WHERE status = 'trip'
+                 ORDER BY employee_id, date"
+            )->fetchAll(PDO::FETCH_ASSOC);
+
+            if (empty($rows)) {
+                $this->setMeta('trips_legacy_migrated', '1');
+                return;
+            }
+
+            // Группировка по сотрудникам.
+            $byEmp = [];
+            foreach ($rows as $r) {
+                $byEmp[$r['employee_id']][] = $r;
+            }
+
+            // Защита от осиротевших ссылок: если сотрудник удалён (schedule_entries
+            // остались), его run-ы пропускаем — иначе FK trip_participants упал бы
+            // и прервал миграцию, оставив частичное состояние.
+            $empExistsStmt = $this->pdo->prepare(
+                'SELECT 1 FROM employees WHERE id = :id LIMIT 1'
+            );
+            foreach (array_keys($byEmp) as $empId) {
+                $empExistsStmt->bindValue(':id', (string) $empId, PDO::PARAM_STR);
+                $empExistsStmt->execute();
+                if (!$empExistsStmt->fetch()) {
+                    error_log('T3: legacy trips migration — employee ' . $empId . ' not found, skipping its runs');
+                    unset($byEmp[$empId]);
+                }
+            }
+
+            $createdCount = 0;
+            $stmtTrip = $this->pdo->prepare(
+                'INSERT INTO trips (id, title, location, comment, status, version, created_by, created_at, updated_at)
+                 VALUES (:id, :title, :location, :comment, :status, 1, :created_by, :ts, :ts)'
+            );
+            $stmtPart = $this->pdo->prepare(
+                'INSERT INTO trip_participants (trip_id, employee_id, start_date, end_date)
+                 VALUES (:trip_id, :employee_id, :start_date, :end_date)'
+            );
+
+            $ts = gmdate('Y-m-d\TH:i:s+00:00');
+
+            foreach ($byEmp as $empId => $empRows) {
+                $runs = [];
+                $currentRun = null;
+                $prevDate = null;
+
+                foreach ($empRows as $r) {
+                    $date = (string) $r['date'];
+                    if ($currentRun === null) {
+                        $currentRun = [
+                            'employee_id' => $empId,
+                            'start'       => $date,
+                            'end'         => $date,
+                            'comment'     => isset($r['comment']) && $r['comment'] !== ''
+                                ? (string) $r['comment'] : null,
+                        ];
+                    } else {
+                        // Разрыв строго больше 1 дня => новая командировка.
+                        $gapDays = (strtotime($date) - strtotime($prevDate)) / 86400;
+                        if ($gapDays > 1) {
+                            $runs[] = $currentRun;
+                            $currentRun = [
+                                'employee_id' => $empId,
+                                'start'       => $date,
+                                'end'         => $date,
+                                'comment'     => isset($r['comment']) && $r['comment'] !== ''
+                                    ? (string) $r['comment'] : null,
+                            ];
+                        } else {
+                            $currentRun['end'] = $date;
+                            if ($currentRun['comment'] === null
+                                && isset($r['comment']) && $r['comment'] !== '') {
+                                $currentRun['comment'] = (string) $r['comment'];
+                            }
+                        }
+                    }
+                    $prevDate = $date;
+                }
+                if ($currentRun !== null) {
+                    $runs[] = $currentRun;
+                }
+
+                foreach ($runs as $run) {
+                    $tripId = uniqid('trip_', true);
+                    $stmtTrip->bindValue(':id', $tripId, PDO::PARAM_STR);
+                    $stmtTrip->bindValue(':title', 'Командировка (миграция)', PDO::PARAM_STR);
+                    $stmtTrip->bindValue(':location', $run['comment'], PDO::PARAM_STR);
+                    $stmtTrip->bindValue(':comment', null, PDO::PARAM_STR);
+                    $stmtTrip->bindValue(':status', 'confirmed', PDO::PARAM_STR);
+                    $stmtTrip->bindValue(':created_by', 'legacy_migration', PDO::PARAM_STR);
+                    $stmtTrip->bindValue(':ts', $ts, PDO::PARAM_STR);
+                    $stmtTrip->execute();
+
+                    $stmtPart->bindValue(':trip_id', $tripId, PDO::PARAM_STR);
+                    $stmtPart->bindValue(':employee_id', $run['employee_id'], PDO::PARAM_STR);
+                    $stmtPart->bindValue(':start_date', $run['start'], PDO::PARAM_STR);
+                    $stmtPart->bindValue(':end_date', $run['end'], PDO::PARAM_STR);
+                    $stmtPart->execute();
+
+                    $createdCount++;
+                }
+            }
+
+            // Аудит миграции (одна запись на весь прогон через audit(), если helpers загружен).
+            if ($createdCount > 0 && function_exists('audit')) {
+                audit($this->pdo, 'trip.legacy_migrate', null, null, 'trip', null, ['count' => $createdCount]);
+            }
+            if ($createdCount > 0) {
+                error_log('T3: legacy trips migration created ' . $createdCount . ' trip(s)');
+            }
+
+            $this->setMeta('trips_legacy_migrated', '1');
+        } catch (Throwable $e) {
+            // Миграция не должна валить первый HTTP-запрос: логируем ошибку.
+            // НЕ ставим флаг 'trips_legacy_migrated' — при исправлении данных
+            // следующий запрос корректно повторит конверсию (без дублей, т.к.
+            // уже созданные trip-строки не пересекаются с повторным SELECT).
+            error_log('T3: legacy trips migration FAILED: ' . $e->getMessage());
+            throw $e;
+        }
     }
 
     /**
@@ -257,7 +460,12 @@ final class Database
      */
     private function connect(): void
     {
-        $dataDir = dirname(self::DB_PATH);
+        $dbPath = self::DB_PATH;
+        $envPath = getenv('SC_APP_DB');
+        if (is_string($envPath) && $envPath !== '') {
+            $dbPath = $envPath;
+        }
+        $dataDir = dirname($dbPath);
         if (!is_dir($dataDir)) {
             if (!mkdir($dataDir, 0775, true) && !is_dir($dataDir)) {
                 throw new RuntimeException(
@@ -266,7 +474,7 @@ final class Database
             }
         }
 
-        $dsn = 'sqlite:' . self::DB_PATH;
+        $dsn = 'sqlite:' . $dbPath;
 
         $this->pdo = new PDO($dsn, null, null, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,

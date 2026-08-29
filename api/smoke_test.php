@@ -181,6 +181,17 @@ function cleanup(string $base, string $cookieAdmin, string $testEmpId, string $a
         $stmt->execute([':emp1' => 'emp_1', ':d1' => $approvedDate, ':emp2' => 'emp_1', ':d2' => $importDate, ':emp3' => 'emp_1', ':d3' => '2099-12-30']);
         $stmt = $pdo->prepare('DELETE FROM employees WHERE id = :id');
         $stmt->execute([':id' => $testEmpId]);
+        // T3: удаляем все созданные smoke-командировки и их участников.
+        $stmt = $pdo->prepare('DELETE FROM trips WHERE created_by = :cb AND title LIKE :tl');
+        $stmt->execute([':cb' => 'admin', ':tl' => 'T3-%']);
+        $stmt = $pdo->prepare('DELETE FROM trips WHERE created_by = :cb AND (title = :t1 OR title = :t2 OR title = :t3)');
+        $stmt->execute([':cb' => 'admin', ':t1' => 'Совещание в Москве', ':t2' => 'Совещание в Москве (обновлено)', ':t3' => 'Поверх больничного']);
+        $stmt = $pdo->prepare('DELETE FROM trips WHERE created_by = :cb AND title = :t');
+        $stmt->execute([':cb' => 'admin', ':t' => 'На удаление']);
+        $stmt = $pdo->prepare('DELETE FROM trips WHERE created_by = :cb AND title = :t');
+        $stmt->execute([':cb' => 'supervisor_zone0', ':t' => 'Зональный forecast']);
+        // Удаляем осиротевшие/leftover trip participants (от trips, удалённых выше/ранее).
+        $pdo->exec("DELETE FROM trip_participants WHERE trip_id NOT IN (SELECT id FROM trips)");
     } catch (Throwable $e) {
         $cleanupErrors[] = 'sqlite cleanup: ' . $e->getMessage();
     }
@@ -252,11 +263,38 @@ try {
             $pdoF->exec("INSERT INTO groups (id, name, sort_order) VALUES ('g0', 'Smoke Fixture Group', 0)");
             $fixtureCreatedGroup = true;
         }
+        $g1 = $pdoF->query("SELECT COUNT(*) FROM groups WHERE id = 'g1'")->fetchColumn();
+        if (!$g1) {
+            $pdoF->exec("INSERT INTO groups (id, name, sort_order) VALUES ('g1', 'Smoke Fixture Group 1', 1)");
+        }
         $e = $pdoF->query("SELECT COUNT(*) FROM employees WHERE id = 'emp_1'")->fetchColumn();
         if (!$e) {
             $pdoF->exec("INSERT INTO employees (id, full_name, position_id, location, group_id, phone, sort_order)
                          VALUES ('emp_1', 'Smoke Fixture Employee', 'pos_master', 'QA', 'g0', '', 0)");
             $fixtureCreatedEmployee = true;
+        }
+        // T3 fixtures. Каноническая зональная раскладка (T2-аудит):
+        //   g0: emp_5, emp_16, emp_17, emp_18
+        //   g1: emp_1, emp_2
+        // supervisor_zone0 -> g0, supervisor_zone1 -> g1.
+        // Принудительно (идемпотентно) выставляем group_id, чтобы тесты E8/T3
+        // не зависели от dev-данных.
+        $fixtureEmps = [
+            ['emp_1', 'Smoke Fixture Employee', 'g1'],
+            ['emp_2', 'Smoke Employee 2', 'g1'],
+            ['emp_5', 'Smoke Employee 5', 'g0'],
+            ['emp_16', 'Smoke Employee 16', 'g0'],
+            ['emp_17', 'Smoke Employee 17', 'g0'],
+            ['emp_18', 'Smoke Employee 18', 'g0'],
+        ];
+        foreach ($fixtureEmps as [$fid, $fname, $fgid]) {
+            $exists = $pdoF->query("SELECT COUNT(*) FROM employees WHERE id = '{$fid}'")->fetchColumn();
+            if (!$exists) {
+                $pdoF->exec("INSERT INTO employees (id, full_name, position_id, location, group_id, phone, sort_order)
+                             VALUES ('{$fid}', '{$fname}', 'pos_master', 'QA', '{$fgid}', '', 0)");
+            } else {
+                $pdoF->exec("UPDATE employees SET group_id = '{$fgid}' WHERE id = '{$fid}'");
+            }
         }
         // Remove any stale smoke entries from previous runs.
         $del = $pdoF->prepare('DELETE FROM schedule_entries WHERE employee_id IN (:e1, :e2) AND date IN (:d1, :d2)');
@@ -995,6 +1033,325 @@ try {
         assertTrue(!$foundG0, 'g0 entry should be deleted');
         assertTrue($foundG1, 'g1 entry should remain');
         return 'only own zone deleted';
+    });
+
+    // --- T3: фича «Командировки» (trips.php + sync-ветка) ---
+    // Используем год 2098 (не пересекается с 2099-фикстурами E8 и импортом).
+    $run('T3-1 trips GET anon -> 401', function () use ($base) {
+        $r = httpRequest('GET', $base . '/api/trips.php');
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 401, 'status ' . $r['status']);
+        assertTrue(($j['error'] ?? '') === 'unauthorized', 'wrong error');
+        return 'unauthorized';
+    });
+
+    $run('T3-2 trips viewer GET ok + POST 403', function () use ($base) {
+        $cookieView = tempnam(sys_get_temp_dir(), 'sc_t3view_cookie_');
+        $r0 = login($base, $cookieView, 'viewer_test', 'changeme');
+        assertTrue($r0['status'] === 200, 'viewer login failed: ' . $r0['status']);
+        $r = httpRequest('GET', $base . '/api/trips.php', ['cookie' => $cookieView]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 200, 'GET status ' . $r['status']);
+        assertTrue(array_key_exists('trips', $j), 'missing trips');
+        $r2 = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieView,
+            'body' => ['title' => 'x', 'participants' => []],
+        ]);
+        @unlink($cookieView);
+        $j2 = jsonDecode($r2['body']);
+        assertTrue($r2['status'] === 403, 'POST status ' . $r2['status']);
+        assertTrue(($j2['error'] ?? '') === 'forbidden', 'wrong error');
+        return 'GET ok, POST forbidden';
+    });
+
+    $run('T3-3 admin POST create forecast trip (2 participants)', function () use ($base, $cookieAdmin) {
+        $r = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieAdmin,
+            'body' => [
+                'title' => 'Совещание в Москве',
+                'location' => 'Москва',
+                'comment' => 'квартальный отчёт',
+                'participants' => [
+                    ['employeeId' => 'emp_5', 'startDate' => '2098-03-01', 'endDate' => '2098-03-03'],
+                    ['employeeId' => 'emp_16', 'startDate' => '2098-03-04', 'endDate' => '2098-03-06'],
+                ],
+            ],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 201, 'status ' . $r['status']);
+        assertTrue(($j['success'] ?? false) === true, 'success!=true');
+        $trip = $j['trip'] ?? null;
+        assertTrue(is_array($trip), 'missing trip');
+        $tripId = $trip['id'] ?? '';
+        assertTrue(strpos((string) $tripId, 'trip_') === 0, 'id not trip_: ' . $tripId);
+        assertTrue((int) ($trip['version'] ?? 0) === 1, 'expected version 1');
+        assertTrue(($trip['status'] ?? '') === 'forecast', 'expected forecast');
+        assertTrue(count($trip['participants'] ?? []) === 2, 'expected 2 participants');
+        $GLOBALS['T3_TRIP_ID'] = $tripId;
+        return $tripId . ' v' . $trip['version'];
+    });
+
+    $run('T3-4 GET contains created trip', function () use ($base, $cookieAdmin) {
+        $r = httpRequest('GET', $base . '/api/trips.php', ['cookie' => $cookieAdmin]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 200, 'status ' . $r['status']);
+        $found = false;
+        foreach ($j['trips'] ?? [] as $t) {
+            if (($t['id'] ?? '') === ($GLOBALS['T3_TRIP_ID'] ?? '')) {
+                $found = true;
+                assertTrue(count($t['participants'] ?? []) === 2, 'participants mismatch');
+                assertTrue(array_key_exists('updatedAt', $t), 'missing updatedAt');
+                break;
+            }
+        }
+        assertTrue($found, 'trip not found in GET list');
+        return 'found with participants';
+    });
+
+    $run('T3-5 POST overlap vacation -> 409', function () use ($base, $cookieAdmin) {
+        // Создаём vacation на 2098-03-10 у emp_1 через save.php.
+        $r1 = httpRequest('POST', $base . '/api/save.php', [
+            'cookie' => $cookieAdmin,
+            'body' => ['year' => 2098, 'entries' => [
+                ['employeeId' => 'emp_1', 'date' => '2098-03-10', 'status' => 'vacation', 'comment' => 'T3-vac'],
+            ]],
+        ]);
+        $j1 = jsonDecode($r1['body']);
+        assertTrue($r1['status'] === 200 && ($j1['success'] ?? false) === true, 'vacation setup failed');
+        $r = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieAdmin,
+            'body' => [
+                'title' => 'Пересечение отпуск',
+                'participants' => [
+                    ['employeeId' => 'emp_1', 'startDate' => '2098-03-10', 'endDate' => '2098-03-10'],
+                ],
+            ],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 409, 'status ' . $r['status']);
+        assertTrue(($j['error'] ?? '') === 'overlapping_entry', 'wrong error: ' . ($j['error'] ?? ''));
+        assertTrue(($j['employeeId'] ?? '') === 'emp_1', 'wrong employeeId');
+        assertTrue(($j['date'] ?? '') === '2098-03-10', 'wrong date: ' . ($j['date'] ?? ''));
+        assertTrue(($j['status'] ?? '') === 'vacation', 'wrong status');
+        return '409 overlapping_entry';
+    });
+
+    $run('T3-6 POST overlap day_off -> 409', function () use ($base, $cookieAdmin) {
+        $r1 = httpRequest('POST', $base . '/api/save.php', [
+            'cookie' => $cookieAdmin,
+            'body' => ['year' => 2098, 'entries' => [
+                ['employeeId' => 'emp_5', 'date' => '2098-03-12', 'status' => 'day_off', 'comment' => 'T3-doff'],
+            ]],
+        ]);
+        $j1 = jsonDecode($r1['body']);
+        assertTrue($r1['status'] === 200 && ($j1['success'] ?? false) === true, 'day_off setup failed');
+        $r = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieAdmin,
+            'body' => [
+                'title' => 'Пересечение выходной',
+                'participants' => [
+                    ['employeeId' => 'emp_5', 'startDate' => '2098-03-12', 'endDate' => '2098-03-12'],
+                ],
+            ],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 409, 'status ' . $r['status']);
+        assertTrue(($j['error'] ?? '') === 'overlapping_entry', 'wrong error');
+        assertTrue(($j['status'] ?? '') === 'day_off', 'wrong status');
+        return '409 day_off';
+    });
+
+    $run('T3-7 POST overlap sick -> SUCCESS', function () use ($base, $cookieAdmin) {
+        $r1 = httpRequest('POST', $base . '/api/save.php', [
+            'cookie' => $cookieAdmin,
+            'body' => ['year' => 2098, 'entries' => [
+                ['employeeId' => 'emp_1', 'date' => '2098-03-15', 'status' => 'sick', 'comment' => 'T3-sick'],
+            ]],
+        ]);
+        $j1 = jsonDecode($r1['body']);
+        assertTrue($r1['status'] === 200 && ($j1['success'] ?? false) === true, 'sick setup failed');
+        $r = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieAdmin,
+            'body' => [
+                'title' => 'Поверх больничного',
+                'participants' => [
+                    ['employeeId' => 'emp_1', 'startDate' => '2098-03-15', 'endDate' => '2098-03-15'],
+                ],
+            ],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 201, 'status ' . $r['status']);
+        assertTrue(($j['success'] ?? false) === true, 'success!=true');
+        $GLOBALS['T3_TRIP_SICK'] = $j['trip']['id'] ?? '';
+        return 'created over sick';
+    });
+
+    $run('T3-8 PUT without entryVersion -> title updated, version=2', function () use ($base, $cookieAdmin) {
+        $id = $GLOBALS['T3_TRIP_ID'] ?? '';
+        assertTrue($id !== '', 'no trip id');
+        $r = httpRequest('PUT', $base . '/api/trips.php?id=' . rawurlencode($id), [
+            'cookie' => $cookieAdmin,
+            'body' => ['title' => 'Совещание в Москве (обновлено)'],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 200, 'status ' . $r['status']);
+        $trip = $j['trip'] ?? [];
+        assertTrue(($trip['title'] ?? '') === 'Совещание в Москве (обновлено)', 'title not updated');
+        assertTrue((int) ($trip['version'] ?? 0) === 2, 'expected version 2, got ' . ($trip['version'] ?? 'null'));
+        return 'v2';
+    });
+
+    $run('T3-9 PUT stale entryVersion=1 -> 409 version_conflict', function () use ($base, $cookieAdmin) {
+        $id = $GLOBALS['T3_TRIP_ID'] ?? '';
+        $r = httpRequest('PUT', $base . '/api/trips.php?id=' . rawurlencode($id), [
+            'cookie' => $cookieAdmin,
+            'body' => ['title' => 'конфликт', 'entryVersion' => 1],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 409, 'status ' . $r['status']);
+        assertTrue(($j['error'] ?? '') === 'version_conflict', 'wrong error');
+        assertTrue((int) ($j['clientVersion'] ?? -1) === 1, 'wrong clientVersion');
+        assertTrue((int) ($j['serverVersion'] ?? -1) === 2, 'wrong serverVersion');
+        assertTrue(is_array($j['serverTrip'] ?? null), 'missing serverTrip');
+        return '409 conflict with serverTrip';
+    });
+
+    $run('T3-10 confirm + admin edit confirmed OK', function () use ($base, $cookieAdmin) {
+        $id = $GLOBALS['T3_TRIP_ID'] ?? '';
+        $r = httpRequest('PUT', $base . '/api/trips.php?id=' . rawurlencode($id) . '&action=confirm', [
+            'cookie' => $cookieAdmin,
+            'body' => [],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 200, 'confirm status ' . $r['status']);
+        assertTrue(($j['trip']['status'] ?? '') === 'confirmed', 'not confirmed');
+        // admin может править confirmed:
+        $r2 = httpRequest('PUT', $base . '/api/trips.php?id=' . rawurlencode($id), [
+            'cookie' => $cookieAdmin,
+            'body' => ['comment' => 'после подтверждения'],
+        ]);
+        $j2 = jsonDecode($r2['body']);
+        assertTrue($r2['status'] === 200, 'admin edit confirmed status ' . $r2['status']);
+        assertTrue(($j2['trip']['comment'] ?? '') === 'после подтверждения', 'comment not updated');
+        return 'confirmed + admin edit ok';
+    });
+
+    $run('T3-11 supervisor_zone0 confirmed immutable + delete confirmed 403 + delete forecast ok', function () use ($base) {
+        // supervisor_zone0: emp_5, emp_16/17/18 (g0) — его зона; emp_1/emp_2 (g1) — чужая.
+        // T3_TRIP_ID (Совещание в Москве) имеет участников только g0 → зона проходит,
+        // и confirmed-гвард срабатывает.
+        $cookieS0 = tempnam(sys_get_temp_dir(), 'sc_t3s0_cookie_');
+        $r0 = login($base, $cookieS0, 'supervisor_zone0', 'changeme');
+        assertTrue($r0['status'] === 200, 'sup0 login failed: ' . $r0['status']);
+        $id = $GLOBALS['T3_TRIP_ID'] ?? '';
+        // PUT confirmed -> 403
+        $r = httpRequest('PUT', $base . '/api/trips.php?id=' . rawurlencode($id), [
+            'cookie' => $cookieS0,
+            'body' => ['title' => 'ne popadet'],
+        ]);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 403, 'PUT confirmed status ' . $r['status']);
+        assertTrue(($j['error'] ?? '') === 'confirmed_immutable', 'wrong error');
+        // DELETE confirmed -> 403
+        $r2 = httpRequest('DELETE', $base . '/api/trips.php?id=' . rawurlencode($id), ['cookie' => $cookieS0]);
+        $j2 = jsonDecode($r2['body']);
+        assertTrue($r2['status'] === 403, 'DELETE confirmed status ' . $r2['status']);
+        assertTrue(($j2['error'] ?? '') === 'confirmed_immutable', 'wrong error');
+        // CREATE forecast с участником g0 (emp_5) и DELETE (forecast, своя зона) -> success
+        $r3 = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieS0,
+            'body' => [
+                'title' => 'Зональный forecast',
+                'participants' => [
+                    ['employeeId' => 'emp_5', 'startDate' => '2098-04-01', 'endDate' => '2098-04-02'],
+                ],
+            ],
+        ]);
+        $j3 = jsonDecode($r3['body']);
+        assertTrue($r3['status'] === 201, 'sup0 create status ' . $r3['status']);
+        $forecastId = $j3['trip']['id'] ?? '';
+        $r4 = httpRequest('DELETE', $base . '/api/trips.php?id=' . rawurlencode($forecastId), ['cookie' => $cookieS0]);
+        $j4 = jsonDecode($r4['body']);
+        @unlink($cookieS0);
+        assertTrue($r4['status'] === 200, 'sup0 delete forecast status ' . $r4['status']);
+        assertTrue(($j4['deleted'] ?? false) === true, 'not deleted');
+        return 'confirmed immutable, forecast deleted';
+    });
+
+    $run('T3-12 supervisor foreign zone POST -> 403 zone_forbidden', function () use ($base) {
+        $cookieS0 = tempnam(sys_get_temp_dir(), 'sc_t3s0b_cookie_');
+        login($base, $cookieS0, 'supervisor_zone0', 'changeme');
+        // emp_2 belongs to g1 (чужой зоне).
+        $r = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieS0,
+            'body' => [
+                'title' => 'Чужой участник',
+                'participants' => [
+                    ['employeeId' => 'emp_2', 'startDate' => '2098-05-01', 'endDate' => '2098-05-02'],
+                ],
+            ],
+        ]);
+        @unlink($cookieS0);
+        $j = jsonDecode($r['body']);
+        assertTrue($r['status'] === 403, 'status ' . $r['status']);
+        assertTrue(($j['error'] ?? '') === 'zone_forbidden', 'wrong error');
+        assertTrue(in_array('emp_2', $j['foreignEmployees'] ?? [], true), 'missing foreignEmployees');
+        return '403 zone_forbidden';
+    });
+
+    $run('T3-13 DELETE forecast admin + sync contains trip events', function () use ($base, $cookieAdmin) {
+        // Сначала создаём forecast через админа, чтобы затем удалить.
+        $r0 = httpRequest('POST', $base . '/api/trips.php', [
+            'cookie' => $cookieAdmin,
+            'body' => [
+                'title' => 'На удаление',
+                'participants' => [
+                    ['employeeId' => 'emp_16', 'startDate' => '2098-06-01', 'endDate' => '2098-06-01'],
+                ],
+            ],
+        ]);
+        $j0 = jsonDecode($r0['body']);
+        $delId = $j0['trip']['id'] ?? '';
+        assertTrue($delId !== '', 'create before delete failed');
+        $r1 = httpRequest('DELETE', $base . '/api/trips.php?id=' . rawurlencode($delId), ['cookie' => $cookieAdmin]);
+        $j1 = jsonDecode($r1['body']);
+        assertTrue($r1['status'] === 200 && ($j1['deleted'] ?? false) === true, 'admin delete failed');
+        // Синк от нулевого курсора: содержит trip-события (создание+обновления+удаление).
+        $r2 = httpRequest('GET', $base . '/api/sync.php?afterId=0', ['cookie' => $cookieAdmin]);
+        $j2 = jsonDecode($r2['body']);
+        assertTrue($r2['status'] === 200, 'sync status ' . $r2['status']);
+        assertTrue(is_array($j2['tripsChanged'] ?? null) || is_object($j2['tripsChanged'] ?? null), 'missing tripsChanged');
+        assertTrue(isset($j2['tripsDeleted']) && is_array($j2['tripsDeleted']), 'missing tripsDeleted');
+        $changed = (array) ($j2['tripsChanged'] ?? []);
+        $deleted = (array) ($j2['tripsDeleted'] ?? []);
+        // Должны присутствовать: созданный trip (T3-3), trip поверх sick (T3-7) и удалённый delId.
+        $foundChanged = isset($changed[$GLOBALS['T3_TRIP_ID'] ?? '']) || isset($changed[$GLOBALS['T3_TRIP_SICK'] ?? '']);
+        assertTrue($foundChanged, 'no trip events in tripsChanged');
+        assertTrue(in_array($delId, $deleted, true), 'deleted trip missing from tripsDeleted');
+        return 'tripsChanged=' . count($changed) . ', tripsDeleted=' . count($deleted);
+    });
+
+    $run('T3-14 validations: empty title / bad dates / unknown employee', function () use ($base, $cookieAdmin) {
+        $mk = function (array $body) use ($base, $cookieAdmin) {
+            return jsonDecode(httpRequest('POST', $base . '/api/trips.php', [
+                'cookie' => $cookieAdmin,
+                'body' => $body,
+            ])['body']);
+        };
+        $basePayload = ['title' => 'вал', 'participants' => [['employeeId' => 'emp_1', 'startDate' => '2098-07-01', 'endDate' => '2098-07-01']]];
+        // empty title
+        $j1 = $mk(['title' => '   ', 'participants' => $basePayload['participants']]);
+        assertTrue(($j1['error'] ?? '') === 'title_required', 'title_required expected, got ' . ($j1['error'] ?? ''));
+        // endDate < startDate
+        $j2 = $mk(['title' => 'bad', 'participants' => [['employeeId' => 'emp_1', 'startDate' => '2098-07-10', 'endDate' => '2098-07-01']]]);
+        assertTrue(($j2['error'] ?? '') === 'date_range_invalid', 'date_range_invalid expected');
+        // nonexistent employee
+        $j3 = $mk(['title' => 'bad', 'participants' => [['employeeId' => 'emp_ghost', 'startDate' => '2098-07-01', 'endDate' => '2098-07-01']]]);
+        assertTrue(($j3['error'] ?? '') === 'participant_not_found', 'participant_not_found expected');
+        // invalid date format
+        $j4 = $mk(['title' => 'bad', 'participants' => [['employeeId' => 'emp_1', 'startDate' => '2098-13-99', 'endDate' => '2098-13-99']]]);
+        assertTrue(($j4['error'] ?? '') === 'invalid_date', 'invalid_date expected');
+        return '4 validations ok';
     });
 
     // 7 RESET
