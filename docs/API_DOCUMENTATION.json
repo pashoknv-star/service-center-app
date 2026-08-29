@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Service Center App — API Documentation (P10)",
+  "version": "1.1.0",
+  "updated": "2026-08-16",
+  "baseUrl": "https://host1882970.hostland.pro",
+  "baseUrlLocal": "http://127.0.0.1:8090",
+  "auth": {
+    "type": "two_schemes",
+    "description": "Сессийная cookie-авторизация (PHPSESSID) для UI-клиентов; Bearer-токен для внешней системы отпусков.",
+    "session": {
+      "description": "PHP session cookie. Получается через login.php, передаётся браузером автоматически при credentials: 'include'.",
+      "cookieName": "PHPSESSID",
+      "roles": ["admin", "supervisor", "viewer"]
+    },
+    "bearer": {
+      "description": "Статический токен внешней системы. Хранится в БД: meta.external_api_token. Только для vacation_import.php.",
+      "header": "Authorization: Bearer <token>",
+      "roles": ["external_system"]
+    }
+  },
+  "roles": {
+    "admin": "Полный доступ (только Администратор)",
+    "supervisor": "Редактирование своей зоны: supervisor_zone0 (ГКС), supervisor_zone1 (ГЭ)",
+    "viewer": "Только чтение",
+    "external_system": "Внешняя система отпусков — только vacation_import.php по Bearer-токену"
+  },
+  "endpoints": [
+    {
+      "id": "login",
+      "name": "Вход в систему",
+      "url": "/api/login.php",
+      "method": "POST",
+      "headers": { "Content-Type": "application/json" },
+      "credentials": "omit",
+      "body": {
+        "username": "string — логин (admin | supervisor_zone0 | supervisor_zone1 | viewer)",
+        "password": "string — пароль"
+      },
+      "requestExample": {
+        "username": "admin",
+        "password": "********"
+      },
+      "responseExample": {
+        "success": true,
+        "user": {
+          "id": "admin",
+          "username": "admin",
+          "displayName": "Administrator",
+          "role": "admin",
+          "canEdit": true,
+          "isAdmin": true,
+          "scopeGroupId": null
+        }
+      },
+      "errors": { "401": { "success": false, "error": "invalid_credentials" } },
+      "note": "Устанавливает cookie PHPSESSID (session_regenerate_id). Дальнейшие запросы — с credentials: 'include'."
+    },
+    {
+      "id": "session",
+      "name": "Текущая сессия",
+      "url": "/api/session.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "responseExample": { "authenticated": true, "user": { "role": "admin" } },
+      "errors": {},
+      "note": "Аноним: { authenticated: false }"
+    },
+    {
+      "id": "logout",
+      "name": "Выход",
+      "url": "/api/logout.php",
+      "method": "POST",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "responseExample": { "success": true }
+    },
+    {
+      "id": "load",
+      "name": "Загрузка полного состояния",
+      "url": "/api/load.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "responseExample": {
+        "version": 1,
+        "year": 2026,
+        "groups": [],
+        "positions": [],
+        "employees": [],
+        "entries": { "emp_1:2026-07-15": { "employeeId": "emp_1", "date": "2026-07-15", "status": "vacation", "comment": "", "approvalStatus": "approved", "version": 1, "updatedAt": "..." } },
+        "holidays": {},
+        "vacationBalances": {},
+        "lastSyncId": 42,
+        "updatedAt": "2026-08-16T13:00:00+00:00"
+      },
+      "errors": { "401": { "error": "unauthorized" } },
+      "note": "entries — объект с ключами \"employeeId:date\". version и lastSyncId — E8-синхронизация."
+    },
+    {
+      "id": "save",
+      "name": "Полное сохранение состояния",
+      "url": "/api/save.php",
+      "method": "POST",
+      "headers": { "Content-Type": "application/json" },
+      "credentials": "include",
+      "body": {
+        "year": "number — отображаемый год",
+        "groups": "array — [{id, name, sortOrder}]",
+        "positions": "array — [{id, name, sortOrder}]",
+        "employees": "array — [{id, fullName, positionId, location, groupId, phone, photoUrl, isTechnical, requiresFullProfile, sortOrder}]",
+        "entries": "array|object — [{employeeId, date, status, comment, approvalStatus, entryVersion?}]",
+        "holidays": "array — [{date, type, label}]",
+        "vacationBalances": "array — [{employeeId, year, totalDays, usedDays, remainingDays}]"
+      },
+      "requestExample": {
+        "year": 2026,
+        "entries": [
+          { "employeeId": "emp_1", "date": "2026-09-07", "status": "vacation", "comment": "", "approvalStatus": "approved", "entryVersion": 1 }
+        ]
+      },
+      "responseExample": {
+        "success": true,
+        "savedAt": "2026-08-16T13:00:00+00:00",
+        "conflicts": []
+      },
+      "conflictsExample": {
+        "success": true,
+        "savedAt": "2026-08-16T13:00:00+00:00",
+        "conflicts": [
+          {
+            "key": "emp_1:2026-09-07",
+            "clientVersion": 1,
+            "serverVersion": 2,
+            "serverEntry": { "employeeId": "emp_1", "date": "2026-09-07", "status": "trip", "comment": "Советский", "approvalStatus": "approved", "version": 2, "updatedAt": "..." }
+          }
+        ]
+      },
+      "errors": { "401": { "error": "unauthorized" }, "403": { "error": "forbidden" } },
+      "note": "SYNC: payload = полное состояние; записи годов payload, отсутствующие в payload, УДАЛЯЮТСЯ. entryVersion (E8): при расхождении с серверной версией entry отклоняется и попадает в conflicts[]. Без entryVersion — прежнее поведение (конфликтов нет)."
+    },
+    {
+      "id": "sync",
+      "name": "Дельта-синхронизация (E8)",
+      "url": "/api/sync.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "query": { "afterId": "number — курсор из lastSyncId (load.php или предыдущей дельты)" },
+      "responseExample": {
+        "success": true,
+        "serverTime": "2026-08-16T13:00:00+00:00",
+        "afterId": 0,
+        "lastSyncId": 42,
+        "entries": { "emp_1:2026-09-07": { "status": "trip", "comment": "Советский", "version": 2 } },
+        "deletedEntries": ["emp_2:2026-08-01"],
+        "employeesChanged": ["emp_3"],
+        "employeesDeleted": ["emp_9"]
+      },
+      "errors": { "401": { "error": "unauthorized" } },
+      "note": "POST того же URL с {keys: [\"empId:date\"]} возвращает {versions: {key: N}} — пред-проверка перед save."
+    },
+    {
+      "id": "vacation_import",
+      "name": "Приём отпусков из внешней системы",
+      "url": "/api/vacation_import.php",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <external_api_token>"
+      },
+      "credentials": "omit",
+      "body": {
+        "single": {
+          "employeeId": "string — id сотрудника в справочнике (напр. emp_1)",
+          "startDate": "string YYYY-MM-DD — первый день",
+          "endDate": "string YYYY-MM-DD — последний день (включительно)",
+          "status": "string — vacation | trip | day_off | sick | work (по умолчанию vacation)",
+          "comment": "string — комментарий (для trip: город/задача; для day_off: причина)",
+          "approvalStatus": "string — по умолчанию approved"
+        },
+        "batch": {
+          "vacations": "array — список объектов single без обёртки"
+        }
+      },
+      "requestExample": {
+        "employeeId": "emp_1",
+        "startDate": "2026-09-07",
+        "endDate": "2026-09-28",
+        "status": "vacation",
+        "comment": "",
+        "approvalStatus": "approved"
+      },
+      "batchRequestExample": {
+        "vacations": [
+          { "employeeId": "emp_1", "startDate": "2026-07-15", "endDate": "2026-07-28" },
+          { "employeeId": "emp_2", "startDate": "2026-08-03", "endDate": "2026-08-16", "status": "trip", "comment": "Советский" }
+        ]
+      },
+      "responseExample": { "success": true, "imported": 14, "skipped": 0, "errors": [] },
+      "errors": {
+        "401": { "success": false, "error": "invalid_token" },
+        "4xx": "errors[] внутри 200-ответа: missing_employeeId | missing_dates | invalid_date_format | end_before_start | range_too_large (макс. 366*3 дней) | employee_not_found (skipped)"
+      },
+      "note": "СОБЫТИЙНЫЙ ВХОД внешней системы. Создаёт по одной schedule_entry на каждый день диапазона. Токен выдаёт администратор (хранится в meta.external_api_token). Каждая запись пишется в sync_log (actor=external_api)."
+    },
+    {
+      "id": "upload",
+      "name": "Загрузка фото сотрудника",
+      "url": "/api/upload.php",
+      "method": "POST",
+      "headers": {},
+      "credentials": "include",
+      "body": {
+        "_format": "multipart/form-data",
+        "photo": "file — jpg | jpeg | png | webp, до 2 МБ"
+      },
+      "responseExample": { "success": true, "path": "images/photo_1786820689_eeb0a6ae.webp", "size": 24576, "dimensions": "512x512", "format": "webp" },
+      "errors": { "400": "no_file | invalid_format | too_large", "401": { "error": "unauthorized" }, "403": { "error": "forbidden" } },
+      "note": "Сервер сам делает center-crop 512x512, WebP q85, strip EXIF (Imagick/GD)."
+    },
+    {
+      "id": "change_password",
+      "name": "Смена пароля",
+      "url": "/api/change_password.php",
+      "method": "POST",
+      "headers": { "Content-Type": "application/json" },
+      "credentials": "include",
+      "body": {
+        "currentPassword": "string — текущий пароль",
+        "newPassword": "string — новый пароль, минимум 8 символов, не совпадает с текущим"
+      },
+      "responseExample": { "success": true },
+      "errors": {
+        "400": "invalid_input | password_too_short | passwords_match",
+        "401": "unauthorized | invalid_credentials"
+      }
+    },
+    {
+      "id": "export",
+      "name": "JSON-бэкап состояния",
+      "url": "/api/export.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "query": { "download": "1 — отдать как вложение service-center-backup-YYYY-MM-DD.json" },
+      "responseExample": "{ version, year, groups, positions, employees, entries, holidays, vacationBalances, exportedAt }",
+      "errors": { "401": { "error": "unauthorized" } },
+      "note": "Доступен всем залогиненным (включая viewer)."
+    },
+    {
+      "id": "reset",
+      "name": "Сброс к последнему сохранённому",
+      "url": "/api/reset.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "responseExample": "полный ScheduleState, как load.php",
+      "errors": { "401": { "error": "unauthorized" } },
+      "note": "no-cache; откат несохранённых локальных изменений."
+    },
+    {
+      "id": "positions",
+      "name": "Справочник должностей",
+      "url": "/api/positions.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "responseExample": { "positions": [{ "id": "pos_1", "name": "Электромонтер", "sortOrder": 1 }] },
+      "errors": { "401": { "error": "unauthorized" } }
+    },
+    {
+      "id": "employees",
+      "name": "Сотрудники (CRUD)",
+      "url": "/api/employees.php",
+      "method": "GET | POST | PUT | DELETE",
+      "headers": { "Content-Type": "application/json" },
+      "credentials": "include",
+      "query": { "id": "id сотрудника", "year": "год (для связанных entries)" },
+      "body": {
+        "POST": "{ fullName, positionId, location, groupId, phone, photoUrl, ... }",
+        "PUT": "{ id, ...изменяемые поля }",
+        "DELETE": "{ confirm: true } — защита от случайного удаления"
+      },
+      "errors": { "400": "invalid_input | confirmation_required", "401": "unauthorized", "403": "forbidden" },
+      "note": "DELETE требует ?id= и body {confirm:true}."
+    },
+    {
+      "id": "entries",
+      "name": "Записи матрицы (CRUD по одной)",
+      "url": "/api/entries.php",
+      "method": "GET | POST | PUT | DELETE",
+      "headers": { "Content-Type": "application/json" },
+      "credentials": "include",
+      "query": { "employeeId": "фильтр по сотруднику", "year": "фильтр по году", "date": "конкретный день (DELETE/PUT)" },
+      "body": {
+        "POST/PUT": "{ employeeId, date, status, comment, approvalStatus }",
+        "DELETE": "{ force: true } — для удаления approved-записей"
+      },
+      "errors": { "403": "protected — approved-запись без force", "401": "unauthorized" },
+      "note": "Согласованные (approved) записи защищены от удаления без force:true."
+    },
+    {
+      "id": "groups",
+      "name": "Справочник групп/зон",
+      "url": "/api/groups.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "body": null,
+      "responseExample": { "groups": [{ "id": "g0", "name": "Зона 0 ГКС", "sortOrder": 0 }] },
+      "errors": { "401": { "error": "unauthorized" } }
+    },
+    {
+      "id": "holidays",
+      "name": "Праздники/выходные (реестр)",
+      "url": "/api/holidays.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "query": { "year": "число — год реестра" },
+      "responseExample": { "117": "records для 2026: [{date, type: weekend|holiday|transferred_day_off|working_weekend, label}]" },
+      "errors": { "401": { "error": "unauthorized" } }
+    },
+    {
+      "id": "holidays_provider",
+      "name": "Провайдер производственного календаря",
+      "url": "/api/holidays_provider.php",
+      "method": "GET",
+      "headers": {},
+      "credentials": "include",
+      "query": { "year": "число" },
+      "note": "Отдаёт данные из data/holidays/{year}.json, кеширование в таблицу holidays."
+    },
+    {
+      "id": "import",
+      "name": "Импорт состояния (бэкап)",
+      "url": "/api/import.php",
+      "method": "POST",
+      "headers": { "Content-Type": "application/json" },
+      "credentials": "include",
+      "body": "{ version, year, groups, positions, employees, entries, holidays, vacationBalances } — формат export.php",
+      "errors": { "403": "forbidden — только admin" },
+      "note": "Восстановление из JSON-бэкапа. Только Администратор."
+    }
+  ],
+  "integrationExample": {
+    "description": "Подключение внешней системы отпусков (главный сценарий P10)",
+    "javascriptFetch": "const resp = await fetch('https://host1882970.hostland.pro/api/vacation_import.php', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN }, credentials: 'omit', body: JSON.stringify({ employeeId: 'emp_1', startDate: '2026-09-07', endDate: '2026-09-28', status: 'vacation' }) }); const result = await resp.json();",
+    "curl": "curl -X POST https://host1882970.hostland.pro/api/vacation_import.php -H 'Content-Type: application/json' -H 'Authorization: Bearer <TOKEN>' -d '{\"employeeId\":\"emp_1\",\"startDate\":\"2026-09-07\",\"endDate\":\"2026-09-28\"}'"
+  },
+  "statusCodes": {
+    "200": "успех (ошибки уровня записи могут быть внутри errors[])",
+    "400": "invalid_input / no_file / password_too_short и т.п.",
+    "401": "unauthorized / invalid_credentials / invalid_token",
+    "403": "forbidden (роль не проходит) / protected (approved без force)",
+    "405": "method not allowed",
+    "500": "server error"
+  }
+}

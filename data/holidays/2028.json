@@ -1,0 +1,473 @@
+{
+  "year": 2028,
+  "holidays": {
+    "2028-01-01": {
+      "type": "holiday",
+      "label": "Новый год"
+    },
+    "2028-01-02": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2028-01-03": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2028-01-04": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2028-01-05": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2028-01-06": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2028-01-07": {
+      "type": "holiday",
+      "label": "Рождество Христово"
+    },
+    "2028-01-08": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2028-01-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-01-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-01-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-01-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-01-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-01-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-01-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-23": {
+      "type": "holiday",
+      "label": "День защитника Отечества"
+    },
+    "2028-02-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-02-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-08": {
+      "type": "holiday",
+      "label": "Международный женский день"
+    },
+    "2028-03-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-03-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-04-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-01": {
+      "type": "holiday",
+      "label": "Праздник Весны и Труда"
+    },
+    "2028-05-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-09": {
+      "type": "holiday",
+      "label": "День Победы"
+    },
+    "2028-05-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-05-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-12": {
+      "type": "holiday",
+      "label": "День России"
+    },
+    "2028-06-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-06-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-07-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-08-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-09-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-10-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-11-04": {
+      "type": "holiday",
+      "label": "День народного единства"
+    },
+    "2028-11-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-11-06": {
+      "type": "transferred_day_off",
+      "label": "Перенос выходного"
+    },
+    "2028-11-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-11-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-11-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-11-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-11-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-11-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2028-12-31": {
+      "type": "weekend",
+      "label": null
+    }
+  }
+}

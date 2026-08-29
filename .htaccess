@@ -1,0 +1,16 @@
+# Харденинг PHP (корень приложения):
+# - display_errors off — не светить ошибки/пути/стек-трейсы пользователю в браузер;
+# - log_errors on      — ошибки логируются в error_log сервера, ничего не теряется.
+php_flag display_errors off
+php_flag log_errors on
+
+# --------------------------------------------------------------------
+# Проксирование Authorization заголовка для API (Bearer token)
+# --------------------------------------------------------------------
+# Apache по умолчанию обрезает Authorization заголовок при передаче в PHP.
+# Это правило проксирует его через переменную окружения.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>

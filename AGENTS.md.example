@@ -1,0 +1,31 @@
+# AGENTS.md — Project Runtime Instructions
+
+## Scope
+
+These instructions apply to this project. Keep them operational and concise; durable historical knowledge belongs in the Wiki.
+
+## Build
+
+- Document the canonical build command here.
+
+## Test
+
+- Document the canonical test/lint/type-check commands here.
+
+## Repository rules
+
+- Define protected files/directories.
+- Define branch/worktree/PR expectations.
+- Define forbidden operations.
+
+## Architecture
+
+- Record only stable operational constraints needed during implementation.
+
+## Security and side effects
+
+- State project-specific rules for credentials, production, public writes, migrations and data handling.
+
+## Source of truth
+
+When instructions conflict, inspect the repository and current project configuration; do not use Wiki history to override actual code state.

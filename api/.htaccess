@@ -1,0 +1,2 @@
+# Apache (Hostland) срезает Authorization для PHP-CGI: восстанавливаем.
+SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1

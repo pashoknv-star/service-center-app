@@ -1,0 +1,17 @@
+# --- Local / runtime hygiene ---
+*.log
+.DS_Store
+Thumbs.db
+/tmp/
+.cache/
+
+# --- SQLite WAL sidecars (churn on every request; app.db itself tracked as snapshot) ---
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+
+# --- Editor / OS ---
+*.swp
+*~
+.idea/
+.vscode/

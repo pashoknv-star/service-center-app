@@ -1,0 +1,473 @@
+{
+  "year": 2026,
+  "holidays": {
+    "2026-01-01": {
+      "type": "holiday",
+      "label": "Новый год"
+    },
+    "2026-01-02": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2026-01-03": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2026-01-04": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2026-01-05": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2026-01-06": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2026-01-07": {
+      "type": "holiday",
+      "label": "Рождество Христово"
+    },
+    "2026-01-08": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2026-01-09": {
+      "type": "transferred_day_off",
+      "label": "Перенос выходного"
+    },
+    "2026-01-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-01-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-01-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-01-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-01-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-01-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-01-31": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-02-23": {
+      "type": "holiday",
+      "label": "День защитника Отечества"
+    },
+    "2026-02-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-08": {
+      "type": "holiday",
+      "label": "Международный женский день"
+    },
+    "2026-03-09": {
+      "type": "transferred_day_off",
+      "label": "Перенос выходного"
+    },
+    "2026-03-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-03-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-04-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-01": {
+      "type": "holiday",
+      "label": "Праздник Весны и Труда"
+    },
+    "2026-05-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-09": {
+      "type": "holiday",
+      "label": "День Победы"
+    },
+    "2026-05-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-11": {
+      "type": "transferred_day_off",
+      "label": "Перенос выходного"
+    },
+    "2026-05-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-05-31": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-12": {
+      "type": "holiday",
+      "label": "День России"
+    },
+    "2026-06-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-06-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-07-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-08-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-09-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-10-31": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-04": {
+      "type": "holiday",
+      "label": "День народного единства"
+    },
+    "2026-11-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-11-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2026-12-27": {
+      "type": "weekend",
+      "label": null
+    }
+  }
+}

@@ -1,0 +1,469 @@
+{
+  "year": 2027,
+  "holidays": {
+    "2027-01-01": {
+      "type": "holiday",
+      "label": "Новый год"
+    },
+    "2027-01-02": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2027-01-03": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2027-01-04": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2027-01-05": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2027-01-06": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2027-01-07": {
+      "type": "holiday",
+      "label": "Рождество Христово"
+    },
+    "2027-01-08": {
+      "type": "holiday",
+      "label": "Новогодние каникулы"
+    },
+    "2027-01-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-01-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-01-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-01-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-01-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-01-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-01-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-01-31": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-23": {
+      "type": "holiday",
+      "label": "День защитника Отечества"
+    },
+    "2027-02-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-02-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-08": {
+      "type": "holiday",
+      "label": "Международный женский день"
+    },
+    "2027-03-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-03-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-04-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-01": {
+      "type": "holiday",
+      "label": "Праздник Весны и Труда"
+    },
+    "2027-05-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-03": {
+      "type": "transferred_day_off",
+      "label": "Перенос выходного"
+    },
+    "2027-05-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-09": {
+      "type": "holiday",
+      "label": "День Победы"
+    },
+    "2027-05-10": {
+      "type": "transferred_day_off",
+      "label": "Перенос выходного"
+    },
+    "2027-05-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-05-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-06-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-06-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-06-12": {
+      "type": "holiday",
+      "label": "День России"
+    },
+    "2027-06-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-06-14": {
+      "type": "transferred_day_off",
+      "label": "Перенос выходного"
+    },
+    "2027-06-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-06-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-06-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-06-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-07-31": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-01": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-08": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-15": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-22": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-08-29": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-09-26": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-02": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-03": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-09": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-10": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-16": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-17": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-23": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-24": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-30": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-10-31": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-04": {
+      "type": "holiday",
+      "label": "День народного единства"
+    },
+    "2027-11-06": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-07": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-13": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-14": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-20": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-21": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-27": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-11-28": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-04": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-05": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-11": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-12": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-18": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-19": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-25": {
+      "type": "weekend",
+      "label": null
+    },
+    "2027-12-26": {
+      "type": "weekend",
+      "label": null
+    }
+  }
+}
