@@ -76,9 +76,26 @@
       try { overlay(window.currentYear); } catch (e) { console.warn(LOG_PREFIX, 'Overlay error:', e); }
     }
 
-    // Initialize if not already done
+    // Initialize if not already done. loadTrips() is async — the overlay
+    // painted above ran on an empty state, so re-run overlay() once the trips
+    // arrive, otherwise cells/classes/click-listeners never appear.
+    // Self-healing: on session race (load fires before login -> 401) retry
+    // with backoff until authorized (max ~5 attempts / ~8s total).
     if (_state.trips.length === 0) {
-      loadTrips();
+      var attempts = 0;
+      var tryLoad = function() {
+        attempts++;
+        loadTrips().then(function(ok) {
+          if (ok) {
+            try { overlay(window.currentYear); } catch (e) { console.warn(LOG_PREFIX, 'Overlay error:', e); }
+          } else if (attempts < 5) {
+            setTimeout(tryLoad, attempts * 1500);
+          } else {
+            console.warn(LOG_PREFIX, 'Gave up loading trips after', attempts, 'attempts');
+          }
+        });
+      };
+      tryLoad();
     }
     
     // Setup event listeners after DOM is ready
@@ -432,18 +449,22 @@
       /* Trip blue color */
       .trip-blue { color: #2196F3; }
       
-      /* Matrix trip overlays */
-      .type-trip-confirmed {
-        background-color: var(--trip-blue);
+      /* Matrix trip overlays — high specificity to win over .day-holiday /
+         .day-weekend background rules in the host page. */
+      .matrix-table .day-cell-data.type-trip-confirmed,
+      .day-cell-data.type-trip-confirmed {
+        background-color: var(--trip-blue) !important;
+        background-image: none !important;
       }
       
-      .type-trip-forecast {
-        background-color: rgba(33, 150, 243, 0.35);
+      .matrix-table .day-cell-data.type-trip-forecast,
+      .day-cell-data.type-trip-forecast {
+        background-color: rgba(33, 150, 243, 0.35) !important;
         background-image: repeating-linear-gradient(
           45deg,
           transparent 0 3px,
           rgba(33, 150, 243, 0.45) 3px 6px
-        );
+        ) !important;
       }
       
       /* Trip status indicators */
@@ -859,10 +880,19 @@
    */
   function openTripModal(id) {
     var trip = _state.trips.find(function(t) { return t.id === id; });
-    if (trip) {
-      createTripModal();
-      showTripModal(trip);
-    }
+    if (!trip) return;
+    createTripModal();
+    // getCurrentUser() may still be resolving the session asynchronously on a
+    // fresh page load (_currentUser === null for one tick). Resolve first, then
+    // render — showTripModal reads user.isAdmin synchronously.
+    var render = function() { showTripModal(trip); };
+    if (_currentUser) { render(); return; }
+    api('GET', 'api/session.php').then(function(response) {
+      if (response.ok && response.data && response.data.authenticated) {
+        _currentUser = response.data.user;
+      }
+      render();
+    }).catch(function() { render(); });
   }
 
   /**
@@ -1377,19 +1407,50 @@
   // =====================
 
   /**
+   * Calendar day-of-year for "YYYY-MM-DD" (1 = Jan 1), matching the matrix
+   * convention (dayOfYearToDate is its inverse). Avoids Date-timezone math
+   * which shifts the result by one day (UTC parse vs local midnight).
+   */
+  function dateStrToDayOfYear(dateStr) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ''));
+    if (!m) return null;
+    var y = +m[1], mo = +m[2], d = +m[3];
+    var leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    var cum = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    var doy = 0;
+    for (var i = 0; i < mo - 1; i++) doy += cum[i];
+    return doy + d;
+  }
+
+  /**
    * Matrix overlay: render trips in the vacation matrix
    */
   function overlay(currentYear) {
-    if (!currentYear) currentYear = new Date().getFullYear();
+    if (!currentYear) {
+      // currentYear lives in the inline script's closure (not on window).
+      // The authoritative displayed year is the #yearDisplay element.
+      var yd = document.getElementById('yearDisplay');
+      currentYear = yd ? parseInt(yd.textContent, 10) : new Date().getFullYear();
+      if (isNaN(currentYear)) currentYear = new Date().getFullYear();
+    }
     
     // Trips overlay: apply trip data to matrix cells
     var matrixBody = document.querySelector('#matrixBody');
     if (!matrixBody) return;
 
-    // Get all trips for the current year
+    // Get all trips overlapping the current year. NOTE: the API list response
+    // carries dates only inside participants (no top-level startDate), and a
+    // participant range may span a year boundary (e.g. Dec 28 -> Jan 5).
     var yearTrips = _state.trips.filter(function(trip) {
-      var tripYear = new Date(trip.startDate).getFullYear();
-      return tripYear === currentYear;
+      var parts = trip.participants || [];
+      for (var i = 0; i < parts.length; i++) {
+        var s = new Date(parts[i].startDate).getFullYear();
+        var e = new Date(parts[i].endDate).getFullYear();
+        if (!isNaN(s) && !isNaN(e) && (s <= currentYear) && (e >= currentYear)) {
+          return true;
+        }
+      }
+      return false;
     });
 
     // Clear existing trip overlays
@@ -1406,15 +1467,31 @@
     yearTrips.forEach(function(trip) {
       trip.participants.forEach(function(participant) {
         var empId = participant.employeeId;
+        // Matrix cells carry numeric employee ids (data-emp="1"), while the
+        // API returns string ids ("emp_1"). Normalise to the numeric suffix.
+        var domEmpId = String(empId).replace(/^emp_/, '');
         var startDate = new Date(participant.startDate);
         var endDate = new Date(participant.endDate);
         
-        // Calculate day of year range
-        var startDay = Math.ceil((startDate - new Date(startDate.getFullYear(), 0, 1)) / (1000 * 60 * 60 * 24)) + 1;
-        var endDay = Math.ceil((endDate - new Date(endDate.getFullYear(), 0, 1)) / (1000 * 60 * 60 * 24)) + 1;
+        // Calculate day of year range, clamped to the displayed year so
+        // year-spanning trips (Dec 28 -> Jan 5) render in both years.
+        // dateStrToDayOfYear matches the matrix convention (no TZ shift).
+        var startDay, endDay;
+        if (startDate.getFullYear() < currentYear) {
+          startDay = 1;
+        } else {
+          startDay = dateStrToDayOfYear(participant.startDate);
+        }
+        if (endDate.getFullYear() > currentYear) {
+          var isLeap = (currentYear % 4 === 0 && currentYear % 100 !== 0) || currentYear % 400 === 0;
+          endDay = isLeap ? 366 : 365;
+        } else {
+          endDay = dateStrToDayOfYear(participant.endDate);
+        }
+        if (startDay === null || endDay === null) return;
         
         // Find cells for this employee and date range
-        var cells = matrixBody.querySelectorAll('.day-cell-data[data-emp="' + empId + '"]');
+        var cells = matrixBody.querySelectorAll('.day-cell-data[data-emp="' + domEmpId + '"]');
         cells.forEach(function(cell) {
           var cellDay = parseInt(cell.dataset.day);
           if (cellDay >= startDay && cellDay <= endDay) {
@@ -1433,24 +1510,29 @@
     matrixBody.querySelectorAll('.day-cell-data.type-trip-confirmed, .day-cell-data.type-trip-forecast').forEach(function(cell) {
       var empId = cell.dataset.emp;
       var day = parseInt(cell.dataset.day);
+      // data-emp is numeric ("1"); participant.employeeId may be "emp_1".
+      // Normalise for comparison (loose == also coerces, but be explicit).
+      var normEmpId = String(empId).replace(/^emp_/, '');
       
-      // Find trip containing this date for this employee
+      // Find trip containing this date for this employee. Compare via
+      // day-of-year (same convention as painting) — Date-object comparison
+      // mixes local midnight (new Date(y,0,d)) with UTC midnight (parsed
+      // "YYYY-MM-DD") and off-by-one TZ shifts break the range check.
       var matchingTrip = yearTrips.find(function(trip) {
         return trip.participants.some(function(participant) {
-          if (participant.employeeId == empId) {
-            var tripStart = new Date(participant.startDate);
-            var tripEnd = new Date(participant.endDate);
-            var cellDate = new Date(currentYear, 0, day);
-            return cellDate >= tripStart && cellDate <= tripEnd;
-          }
-          return false;
+          if (String(participant.employeeId).replace(/^emp_/, '') !== normEmpId) return false;
+          var sy = parseInt(String(participant.startDate).substring(0, 4), 10);
+          var ey = parseInt(String(participant.endDate).substring(0, 4), 10);
+          var sd = (isNaN(sy) || sy < currentYear) ? 1 : dateStrToDayOfYear(participant.startDate);
+          var ed = (isNaN(ey) || ey > currentYear) ? (dateStrToDayOfYear(currentYear + '-12-31')) : dateStrToDayOfYear(participant.endDate);
+          return day >= sd && day <= ed;
         });
       });
       
       if (matchingTrip) {
         cell.style.cursor = 'pointer';
         cell.addEventListener('click', function() {
-          Trips.openCard(matchingTrip.id);
+          Trips.openTripModal(matchingTrip.id);
         });
       }
     });
