@@ -2025,7 +2025,6 @@
     <header class="header">
       <div class="header-controls">
         <button class="btn editor-only" id="addBtn">+ Добавить сотрудника</button>
-        <button class="btn editor-only" id="tripFromEmpBtn" style="display:none;">Командировка от сотрудника</button>
         <input type="text" id="searchEmployee" placeholder="Поиск сотрудника (не менее 3 букв + Enter)..." style="width: 420px; max-width: 100%; padding: 10px 16px; border: 1.5px solid rgba(119, 0, 255, 0.2); border-radius: 8px; font-size: 14px; color: var(--text); background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.02); transition: all 0.2s ease;">
         <!-- ===== USER INDICATOR (Phase 2B) ===== -->
         <!-- 2026-08-24: упрощена — только бейдж роли (аватар и имя аккаунта убраны по ТЗ). -->
@@ -2439,6 +2438,10 @@
     </div>
     <div class="row editor-only">
       <button class="btn editor-only" id="cloneEmp">Дублировать сотрудника</button>
+    </div>
+    <!-- Phase 7 (spec §11): trip entry point from employee card -->
+    <div class="row editor-only">
+      <button class="btn editor-only" id="tripFromEmpCardBtn">Командировка</button>
     </div>
     <div class="row editor-only">
       <button class="btn editor-only" id="deleteEmp">Удалить сотрудника</button>
@@ -4631,6 +4634,9 @@
       document.getElementById('editDept').value = emp.dept;
       updatePreview(emp.photo);
       editor.classList.add('open');
+      // Phase 7 (spec §11): expose the editing id for the Trips module
+      // (button [Командировка] in the employee card).
+      window.__editingEmployeeId = id;
     }
 
     function updatePreview(src) {
@@ -4974,6 +4980,8 @@
     document.getElementById('closeEditor').addEventListener('click', () => {
       editor.classList.remove('open');
       document.querySelectorAll('.employee.selected').forEach(x => x.classList.remove('selected'));
+      // Phase 7: clear the exposed editing id when the card closes.
+      window.__editingEmployeeId = null;
     });
 
     // =============================================

@@ -39,6 +39,7 @@
     tripsList: null,
     newTripBtn: null,
     tripFromEmpBtn: null,
+    tripFromEmpCardBtn: null,
     tripModal: null
   };
 
@@ -50,6 +51,31 @@
   // =====================
   // INITIALIZATION
   // =====================
+
+  /**
+   * Watch #authOverlay: when login completes (overlay gets 'hidden' class),
+   * reload trips and repaint. Covers the session race where backoff retries
+   * ran out before the user finished logging in.
+   */
+  function watchAuthOverlay() {
+    if (_authWatchInstalled) return;
+    _authWatchInstalled = true;
+    var authEl = document.getElementById('authOverlay');
+    if (!authEl || typeof MutationObserver === 'undefined') return;
+    var observer = new MutationObserver(function() {
+      if (authEl.className.indexOf('hidden') >= 0) {
+        observer.disconnect();
+        _authWatchInstalled = false;
+        loadTrips().then(function(ok) {
+          if (ok) {
+            try { overlay(window.currentYear); } catch (e) { console.warn(LOG_PREFIX, 'Overlay error:', e); }
+          }
+        });
+      }
+    });
+    observer.observe(authEl, { attributes: true, attributeFilter: ['class'] });
+    console.log(LOG_PREFIX, 'authOverlay observer installed');
+  }
 
   /**
    * Auto-initialize: call on DOM ready or immediately if already loaded
@@ -81,6 +107,8 @@
     // arrive, otherwise cells/classes/click-listeners never appear.
     // Self-healing: on session race (load fires before login -> 401) retry
     // with backoff until authorized (max ~5 attempts / ~8s total).
+    // If retries run out, a MutationObserver on #authOverlay picks the load
+    // up the moment the user completes login (class -> 'auth-overlay hidden').
     if (_state.trips.length === 0) {
       var attempts = 0;
       var tryLoad = function() {
@@ -92,6 +120,7 @@
             setTimeout(tryLoad, attempts * 1500);
           } else {
             console.warn(LOG_PREFIX, 'Gave up loading trips after', attempts, 'attempts');
+            watchAuthOverlay();
           }
         });
       };
@@ -450,15 +479,17 @@
       .trip-blue { color: #2196F3; }
       
       /* Matrix trip overlays — high specificity to win over .day-holiday /
-         .day-weekend background rules in the host page. */
-      .matrix-table .day-cell-data.type-trip-confirmed,
-      .day-cell-data.type-trip-confirmed {
+         .day-weekend background rules in the host page.
+         :not(.type-sick) keeps ЭЛН (sick leave) visually ABOVE trips
+         (spec §4): a sick day inside a trip range stays red. */
+      .matrix-table .day-cell-data.type-trip-confirmed:not(.type-sick),
+      .day-cell-data.type-trip-confirmed:not(.type-sick) {
         background-color: var(--trip-blue) !important;
         background-image: none !important;
       }
       
-      .matrix-table .day-cell-data.type-trip-forecast,
-      .day-cell-data.type-trip-forecast {
+      .matrix-table .day-cell-data.type-trip-forecast:not(.type-sick),
+      .day-cell-data.type-trip-forecast:not(.type-sick) {
         background-color: rgba(33, 150, 243, 0.35) !important;
         background-image: repeating-linear-gradient(
           45deg,
@@ -467,6 +498,10 @@
         ) !important;
       }
       
+      /* Sick-day priority extends to cursor: a sick cell inside a trip keeps
+         the default cursor, hinting it opens the sick-day flow, not the trip. */
+      .matrix-table .day-cell-data.type-sick { cursor: default; }
+
       /* Trip status indicators */
       .status-forecast {
         background-color: rgba(33, 150, 243, 0.35);
@@ -723,6 +758,9 @@
     _dom.tripsList = document.getElementById('tripsList');
     _dom.newTripBtn = document.getElementById('newTripBtn');
     _dom.tripFromEmpBtn = document.getElementById('tripFromEmpBtn');
+    // Phase 7 (spec §11): the real entry point lives INSIDE the employee
+    // card panel ("Карточка сотрудника"), not in the page header.
+    _dom.tripFromEmpCardBtn = document.getElementById('tripFromEmpCardBtn');
     
     // Setup tab switching
     if (_dom.tabMatrix && _dom.tabTrips) {
@@ -738,6 +776,10 @@
     // Setup employee trip button
     if (_dom.tripFromEmpBtn) {
       _dom.tripFromEmpBtn.addEventListener('click', openTripFromEmployee);
+    }
+    // Phase 7 (spec §11): in-card [Командировка] button
+    if (_dom.tripFromEmpCardBtn) {
+      _dom.tripFromEmpCardBtn.addEventListener('click', openTripFromEmployee);
     }
     
     // T5-DEFECT-6: Remove tab-glow listener, use updateTabGlow function instead
@@ -1185,30 +1227,36 @@
       }
       return;
     }
-    
-    var employeeTrips = _state.trips.filter(function(trip) {
-      return trip.status === TRIP_STATUS.FORECAST && 
-             trip.participants.some(function(p) { return p.employeeId === currentEditingId; });
+
+    // Spec §11 СЛУЧАЙ Б: offer ALL forecast trips (not only ones the employee
+    // is already in — the employee may be ADDED to any forecast trip).
+    // Confirmed trips are deliberately NOT offered (spec §11).
+    var normId = String(currentEditingId).replace(/^emp_/, '');
+    var forecastTrips = _state.trips.filter(function(trip) {
+      return trip.status === TRIP_STATUS.FORECAST &&
+             !trip.participants.some(function(p) {
+               return String(p.employeeId).replace(/^emp_/, '') === normId;
+             });
     });
-    
-    if (employeeTrips.length === 0) {
-      // Create new trip draft
-      var newTrip = {
-        id: null,
-        title: '',
-        location: '',
-        comment: '',
-        status: TRIP_STATUS.FORECAST,
-        participants: [{
+
+    if (forecastTrips.length === 0) {
+      // Spec §11 СЛУЧАЙ А: no forecast trips exist -> create a new draft
+      // with this employee as the first participant.
+      openNewTripModal();
+      var container = document.getElementById('tripParticipants');
+      if (container) {
+        container.innerHTML = renderParticipantRow({
           employeeId: currentEditingId,
           startDate: '',
           endDate: ''
-        }]
-      };
-      openNewTripModal();
+        }, 0, false);
+      }
+      if (typeof window.showToast === 'function') {
+        window.showToast('Новая командировка: ' + getEmployeeName(currentEditingId), 'info');
+      }
     } else {
-      // Show selection modal
-      showTripSelectionModal(employeeTrips, currentEditingId);
+      // Show selection modal (spec §11 СЛУЧАЙ Б)
+      showTripSelectionModal(forecastTrips, currentEditingId);
     }
   }
 
@@ -1216,7 +1264,10 @@
    * Get currently editing employee ID
    */
   function getCurrentEditingEmployeeId() {
-    // Try to find the current editing ID from various sources
+    // Phase 7 (spec §11): the inline editor script exposes the editing id on
+    // window (set in openEditor, cleared on closeEditor).
+    if (window.__editingEmployeeId != null) return window.__editingEmployeeId;
+    // Legacy fallbacks
     if (typeof window.editingId !== 'undefined') return window.editingId;
     if (typeof window.currentEditId !== 'undefined') return window.currentEditId;
     
@@ -1279,31 +1330,40 @@
    */
   function selectTripForEmployee(tripId, employeeId) {
     var trip = _state.trips.find(function(t) { return t.id === tripId; });
+    // Phase 7 fixes: (1) close THIS selection modal only — other .trip-modal
+    // nodes (the edit modal just opened) must survive; (2) numeric ids from
+    // the inline editor ('1') must be normalised to 'emp_1' for the API/DOM.
+    var selModal = Array.prototype.slice.call(document.querySelectorAll('.trip-modal'))
+      .find(function(m) { return m.textContent.indexOf('Выберите командировку') >= 0 && !m.querySelector('#tripForm'); });
+    if (selModal) selModal.remove();
+
     if (trip) {
+      var normEmpId = /^emp_/.test(String(employeeId)) ? String(employeeId) : 'emp_' + employeeId;
       // Open the trip modal for editing
       openTripModal(tripId);
-      
-      // Add the current employee as participant with min/max dates
-      var participantsContainer = document.getElementById('tripParticipants');
-      if (participantsContainer) {
+
+      var addRow = function() {
+        var participantsContainer = document.getElementById('tripParticipants');
+        if (!participantsContainer) return;
         var minDate = trip.participants.reduce(function(min, p) {
           return min ? Math.min(min, new Date(p.startDate).getTime()) : new Date(p.startDate).getTime();
         }, null);
-        
+
         var maxDate = trip.participants.reduce(function(max, p) {
           return max ? Math.max(max, new Date(p.endDate).getTime()) : new Date(p.endDate).getTime();
         }, null);
-        
+
         participantsContainer.innerHTML += renderParticipantRow({
-          employeeId: employeeId,
+          employeeId: normEmpId,
           startDate: minDate ? formatDate(new Date(minDate)) : '',
           endDate: maxDate ? formatDate(new Date(maxDate)) : ''
         }, participantsContainer.children.length, false);
-      }
+      };
+
+      // openTripModal resolves the session asynchronously before rendering;
+      // the participant row must be added AFTER the form exists.
+      setTimeout(addRow, _currentUser ? 0 : 350);
     }
-    
-    // Close selection modal
-    document.querySelector('.trip-modal').remove();
   }
 
   // =====================
@@ -1335,9 +1395,26 @@
    * Get employee name by ID
    */
   function getEmployeeName(employeeId) {
-    if (typeof window.employees !== 'undefined') {
-      var employee = window.employees.find(function(e) { return e.id == employeeId; });
-      return employee ? employee.name : '';
+    // Normalise both sides: the inline editor exposes numeric ids ('1'),
+    // the server/API uses 'emp_1'. Accept either.
+    var norm = function(v) { return String(v).replace(/^emp_/, ''); };
+    var wanted = norm(employeeId);
+    // 1) window.employees (host page may expose it in some builds)
+    if (Array.isArray(window.employees)) {
+      var employee = window.employees.find(function(e) { return norm(e.id) === wanted; });
+      if (employee) return employee.name || employee.fullName || '';
+    }
+    // 2) DOM fallback: matrix rows carry data-emp="<numeric id>" and the
+    // employee name in the first cell. Works in current builds where the
+    // employees array lives in the host closure (not global).
+    var cell = document.querySelector('.day-cell-data[data-emp="' + wanted + '"]');
+    if (cell) {
+      var row = cell.closest('tr');
+      var label = row && (row.querySelector('.employee-name, .emp-name, td:first-child'));
+      if (label) {
+        var text = (label.textContent || '').trim();
+        if (text) return text;
+      }
     }
     return '';
   }
@@ -1506,8 +1583,11 @@
       });
     });
 
-    // Make cells clickable to open trip cards
-    matrixBody.querySelectorAll('.day-cell-data.type-trip-confirmed, .day-cell-data.type-trip-forecast').forEach(function(cell) {
+    // Make cells clickable to open trip cards.
+    // Sick days stay excluded (spec §4): ЭЛН has visual AND interaction
+    // priority over the trip underneath — clicking a red cell keeps the
+    // sick-day flow, not the trip modal.
+    matrixBody.querySelectorAll('.day-cell-data.type-trip-confirmed:not(.type-sick), .day-cell-data.type-trip-forecast:not(.type-sick)').forEach(function(cell) {
       var empId = cell.dataset.emp;
       var day = parseInt(cell.dataset.day);
       // data-emp is numeric ("1"); participant.employeeId may be "emp_1".
@@ -1558,6 +1638,7 @@
     closeTripModal: closeTripModal,
     saveTrip: saveTrip,
     openTripFromEmployee: openTripFromEmployee,
+    selectTripForEmployee: selectTripForEmployee,
     
     // Utilities
     getCurrentUser: getCurrentUser,
@@ -2079,6 +2160,8 @@
   // in the inline script AFTER js/trips.js loads — at load time it does not
   // exist yet and a top-level patch would silently no-op.
   var _renderPatched = false;
+  // Guard for the authOverlay MutationObserver (session-race self-healing).
+  var _authWatchInstalled = false;
 
   // Auto-initialize when script loads
   autoInit();
