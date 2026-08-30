@@ -432,11 +432,11 @@ try {
             if ($existing['status'] !== 'forecast') {
                 sendJson(['error' => 'invalid_status_transition'], 400);
             }
-            // Гвард: confirmed правится/подтверждается только admin; supervisor
-            // подтверждает только forecast своей зоны (зона уже проверена выше).
-            if (!$isAdmin) {
-                sendJson(['error' => 'confirmed_immutable'], 403);
-            }
+            // Гвард не нужен: до этой точки статус === forecast, а зонная
+            // проверка по существующим участникам уже выполнена выше
+            // (zone_forbidden). Спека §6/D2: confirm разрешён admin и
+            // supervisor своей зоны; confirmed остаётся admin-only для
+            // правки/удаления (гварды ниже в PUT/DELETE).
 
             $pdo->beginTransaction();
             try {
