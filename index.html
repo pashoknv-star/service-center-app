@@ -688,16 +688,18 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
       padding: 16px 24px;
       border-bottom: 1px solid var(--divider);
       flex-shrink: 0;
     }
 
-    .vacation-panel-header h2 {
-      margin: 0;
-      font-size: 18px;
-      color: var(--rt-purple);
-      font-weight: 700;
+    /* Замечания 2-3: .panel-tabs — первый элемент хедера, на одной
+       горизонтальной линии с .year-selector. Обнуляем margin-bottom,
+       приходящий из инжектированных стилей js/trips.js, чтобы табы не
+       уезжали вверх относительно год-навигации. */
+    .vacation-panel-header .panel-tabs {
+      margin-bottom: 0;
     }
 
     .vacation-panel-header .close-vacation {
@@ -1093,18 +1095,11 @@
       color: var(--rt-purple);
     }
     
-    .matrix-table .trip-row-selected .name-col {
-      background: var(--rt-purple);
-      color: white;
-      box-shadow: 0 0 12px rgba(119, 0, 255, 0.4);
-    }
-    
-    .matrix-table .trip-row-dimmed .name-col {
-      opacity: 0.35;
-    }
-    
-    .matrix-table .trip-row-dimmed .name-col:hover {
-      opacity: 1;
+    /* Замечание 4: выбранные Ctrl-кликом строки сохраняют default-вид
+       (белый-на-фиолетовом убран); невыбранные затемняются целиком —
+       ФИО-колонка и календарные ячейки. Класс вешается на <tr>. */
+    .matrix-table .trip-row-dimmed {
+      opacity: 0.4;
     }
 
     /* Group separators reproduce staff zones 0–6 in the matrix. */
@@ -1759,7 +1754,6 @@
 
       /* Панель матрицы — почти во весь экран */
       .vacation-panel { width: 100vw; left: 0; top: 0; bottom: 0; border-radius: 0; }
-      .vacation-panel-header h2 { font-size: 16px; }
 
       /* Компактная матрица: ячейки 14px вместо 22px (размеры в CSS, не inline) */
       .matrix-table th,
@@ -1960,7 +1954,6 @@
   <!-- ===== VACATION PANEL ===== -->
   <aside class="vacation-panel" id="vacationPanel">
     <div class="vacation-panel-header">
-      <h2>Матрица отпусков<span id="syncBadge" style="display:none; margin-left:8px; font-size:11px; color:#888; font-weight:400; white-space:nowrap;">обновлено --:--</span></h2>
       <div class="panel-tabs" id="panelTabs">
         <button type="button" class="panel-tab active" id="tabMatrix">Матрица отпусков</button>
         <button type="button" class="panel-tab" id="tabTrips">Командировки</button>
@@ -3653,14 +3646,17 @@
             var row = cell.parentElement;
             row.classList.toggle('trip-row-selected');
             
-            // Toggle dimmed effect for non-selected rows
+            // Замечание 4: невыбранные строки затемнены, выбранные — default.
+            // Пересчёт при каждом клике (в т.ч. при снятии выделения):
+            // побочного правила "otherRow !== row" больше нет — после toggle
+            // состояние строки уже финальное.
             var allRows = matrixBody.querySelectorAll('.name-col[data-emp-id]');
             allRows.forEach(function(otherCell) {
               var otherRow = otherCell.parentElement;
-              if (otherRow !== row && !otherRow.classList.contains('trip-row-selected')) {
-                otherRow.classList.add('trip-row-dimmed');
-              } else {
+              if (otherRow.classList.contains('trip-row-selected')) {
                 otherRow.classList.remove('trip-row-dimmed');
+              } else {
+                otherRow.classList.add('trip-row-dimmed');
               }
             });
           } else {

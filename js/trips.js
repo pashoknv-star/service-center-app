@@ -986,8 +986,8 @@
         <div class="trip-actions">
           <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripModal()">Отмена</button>
           <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip(${trip.id})" ${isViewer ? 'disabled' : ''}>Сохранить</button>
-          ${canConfirm ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.confirmTrip(${trip.id})">Подтвердить</button>` : ''}
-          ${canDelete ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.deleteTrip(${trip.id})">Удалить</button>` : ''}
+          ${canConfirm ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick(${trip.id})">Подтвердить</button>` : ''}
+          ${canDelete ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick(${trip.id})">Удалить</button>` : ''}
         </div>
       `;
     } else {
@@ -1047,14 +1047,47 @@
   }
 
   /**
-   * Add participant row
+   * Collect current participant-row field values from the live DOM.
+   */
+  function collectParticipantRowData() {
+    var participantsContainer = document.getElementById('tripParticipants');
+    if (!participantsContainer) return [];
+    var rows = participantsContainer.querySelectorAll('.trip-participant-row');
+    return Array.prototype.map.call(rows, function(row) {
+      var nameInput = row.querySelector('.trip-participant-name');
+      return {
+        name: nameInput.value,
+        startDate: row.querySelector('.trip-participant-date').value,
+        endDate: row.querySelectorAll('.trip-participant-date')[1].value,
+        disabled: nameInput.disabled
+      };
+    });
+  }
+
+  /**
+   * Re-render all participant rows with fresh sequential indices. Previously
+   * `addParticipantRow` used `innerHTML +=`, which rebuilt the container and
+   * left stale onclick indices: after removing one row the remaining rows
+   * shifted but their × handlers still targeted the old positions (removing
+   * the WRONG row). Rebuilding from the collected values on every mutation
+   * keeps DOM rows, indices and input values in lockstep.
+   */
+  function rerenderParticipantRows(rowData) {
+    var participantsContainer = document.getElementById('tripParticipants');
+    if (!participantsContainer) return;
+    participantsContainer.innerHTML = rowData.map(function(data, i) {
+      return renderParticipantRow(data, i, !!data.disabled);
+    }).join('');
+  }
+
+  /**
+   * Add participant row. Must read existing values FIRST — `innerHTML +=`
+   * would rebuild all rows and destroy typed input values.
    */
   function addParticipantRow() {
-    var participantsContainer = document.getElementById('tripParticipants');
-    if (participantsContainer) {
-      var index = participantsContainer.children.length;
-      participantsContainer.innerHTML += renderParticipantRow({}, index, false);
-    }
+    var rowData = collectParticipantRowData();
+    rowData.push({ name: '', startDate: '', endDate: '', disabled: rowData.length > 0 ? rowData[0].disabled : false });
+    rerenderParticipantRows(rowData);
   }
 
   /**
@@ -1063,7 +1096,12 @@
   function removeParticipantRow(index) {
     var participantsContainer = document.getElementById('tripParticipants');
     if (participantsContainer && participantsContainer.children[index]) {
-      participantsContainer.removeChild(participantsContainer.children[index]);
+      // Read remaining values first (the removed row's sibling values are
+      // still intact in the live DOM), then drop the row and re-render with
+      // fresh indices, so the remaining × handlers point at their own rows.
+      var rowData = collectParticipantRowData();
+      rowData.splice(index, 1);
+      rerenderParticipantRows(rowData);
     }
   }
 
@@ -1096,7 +1134,7 @@
     participantRows.forEach(function(row) {
       var name = row.querySelector('.trip-participant-name').value.trim();
       var startDate = row.querySelector('.trip-participant-date').value;
-      var endDate = row.querySelector('.trip-participant-date').value;
+      var endDate = row.querySelectorAll('.trip-participant-date')[1].value;
       
       if (name && startDate && endDate) {
         // Find employee by name (simplified)
@@ -1144,7 +1182,7 @@
   /**
    * Confirm trip
    */
-  function confirmTrip(id) {
+  function handleConfirmTripClick(id) {
     if (!confirm('Подтвердить командировку?')) {
       return;
     }
@@ -1164,7 +1202,7 @@
   /**
    * Delete trip
    */
-  function deleteTrip(id) {
+  function handleDeleteTripClick(id) {
     if (!confirm('Удалить командировку?')) {
       return;
     }
@@ -1433,6 +1471,31 @@
   }
 
   /**
+   * Resolve the host page's employee records.
+   *
+   * js/trips.js runs in its own IIFE and cannot see the `employees` variable
+   * (a closure `let` inside index.html's inline script — not a global). The
+   * host page never assigns `window.employees`, so `employees` here would be
+   * undefined (TypeError on `.find`). Prefer a global when the host exposes
+   * one; otherwise fall back to the rendered matrix DOM, whose `.day-cell-data`
+   * cells carry `data-emp="<numeric id>"` in the employee's row (same pattern
+   * getEmployeeName uses).
+   */
+  function resolveEmployeesList() {
+    if (Array.isArray(window.employees)) return window.employees;
+    var empById = {};
+    document.querySelectorAll('.day-cell-data[data-emp]').forEach(function(cell) {
+      var id = cell.getAttribute('data-emp');
+      if (!id || empById[id]) return;
+      var row = cell.closest('tr');
+      var label = row && row.querySelector('.employee-name, .emp-name, td:first-child');
+      var name = label ? (label.textContent || '').trim() : '';
+      empById[id] = { id: id, name: name, dept: null, slot: 0 };
+    });
+    return Object.keys(empById).map(function(k) { return empById[k]; });
+  }
+
+  /**
    * Check if user can delete trip
    */
   function canDeleteTrip(trip, user) {
@@ -1639,6 +1702,10 @@
     saveTrip: saveTrip,
     openTripFromEmployee: openTripFromEmployee,
     selectTripForEmployee: selectTripForEmployee,
+    addParticipantRow: addParticipantRow,
+    removeParticipantRow: removeParticipantRow,
+    handleConfirmTripClick: handleConfirmTripClick,
+    handleDeleteTripClick: handleDeleteTripClick,
     
     // Utilities
     getCurrentUser: getCurrentUser,
@@ -1678,7 +1745,9 @@
     openDraft: openDraft,
     createDraftFromSelection: createDraftFromSelection,
     startCalendarPick: startCalendarPick,
-    startEmployeePick: startEmployeePick
+    startEmployeePick: startEmployeePick,
+    confirmEmployeePick: confirmEmployeePick,
+    endEmployeePick: endEmployeePick
   };
 
   // Draft functions
@@ -2017,7 +2086,7 @@
   }
   
   function toggleEmployeePickSelection(item) {
-    var empId = parseInt(item.getAttribute('data-id'));
+    var empId = String(item.getAttribute('data-id') || '').replace(/^emp_/, '');
     item.classList.toggle('selected');
     
     if (!window.Trips.pickedEmployees) {
@@ -2074,13 +2143,19 @@
     var selectedEmployees = Array.from(window.Trips.pickedEmployees);
     var draft = window._employeePickContext;
     
+    // Resolve records through the same path other pickers use. Employee ids are
+    // strings like 'emp_1' (server) or numbers (host closure); normalise both.
+    var norm = function(v) { return String(v).replace(/^emp_/, ''); };
+    var employees = resolveEmployeesList();
+    
     if (draft && draft.participants) {
       selectedEmployees.forEach(function(empId) {
-        var employee = employees.find(function(e) { return e.id === empId; });
+        var wanted = norm(empId);
+        var employee = employees.find(function(e) { return norm(e.id) === wanted; });
         if (employee) {
           draft.participants.push({
             employeeId: employee.id,
-            name: employee.name
+            name: employee.name || employee.fullName || ''
           });
         }
       });
@@ -2093,16 +2168,17 @@
   
   function getEmployeesForPick() {
     // Get all active employees excluding those already in the draft
+    var norm = function(v) { return String(v).replace(/^emp_/, ''); };
     var draftEmployees = new Set();
     if (window._employeePickContext && window._employeePickContext.participants) {
       window._employeePickContext.participants.forEach(function(p) {
-        draftEmployees.add(p.employeeId);
+        draftEmployees.add(norm(p.employeeId));
       });
     }
     
-    return employees.filter(function(emp) {
+    return resolveEmployeesList().filter(function(emp) {
       return emp.name && emp.name !== 'Ставка' && !emp.name.startsWith('Ставка') && 
-             !draftEmployees.has(emp.id);
+             !draftEmployees.has(norm(emp.id));
     }).sort(function(a, b) {
       if (a.dept !== b.dept) return a.dept - b.dept;
       return (a.slot || 0) - (b.slot || 0);
@@ -2135,13 +2211,16 @@
     
     // Convert selected ranges to participants
     var participants = [];
+    var normId = function(v) { return String(v).replace(/^emp_/, ''); };
+    var employeesList = resolveEmployeesList();
     for (var emp in participantDates) {
       var range = participantDates[emp];
-      var employee = employees.find(function(e) { return e.id === parseInt(emp); });
+      var wanted = normId(emp);
+      var employee = employeesList.find(function(e) { return normId(e.id) === wanted; });
       if (employee) {
         participants.push({
           employeeId: employee.id,
-          name: employee.name,
+          name: employee.name || employee.fullName || '',
           startDate: formatDateStr(window.currentYear, 0, range.start),
           endDate: formatDateStr(window.currentYear, 0, range.end)
         });
