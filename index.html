@@ -5086,22 +5086,19 @@
         endDate: endDate
       };
 
-      window.Trips.createTrip({
+      window.Trips.switchTab('trips');
+
+      // Switch to trips tab and render pre-filled form in panel
+      window.Trips.renderTripFormInPanel({
         title: title,
         location: '',
         comment: '',
         status: 'forecast',
         participants: [participant]
-      }).then(function(trip) {
-        showToast('Заведена новая командировка', 'success');
-        // Показать вкладку «Командировки» со свежим списком (overlay матрицы
-        // собирается из trips по рендеру, который триггерит switchTab).
-        if (window.Trips.switchTab) {
-          window.Trips.switchTab('trips');
-        }
-      }).catch(function(error) {
-        showToast(error && error.message ? error.message : 'Ошибка создания командировки', 'error');
       });
+
+      // Show success message
+      showToast('Командировка создана', 'success');
     }
     window.createTripFromSelection = createTripFromSelection;
     // Attach to the Trips module namespace — the popup handler calls

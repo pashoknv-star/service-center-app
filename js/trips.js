@@ -83,6 +83,15 @@
   function init() {
     console.log(LOG_PREFIX, 'Initializing...');
 
+    // Create trip modal root portal for consistent stacking context
+    var portalRoot = document.getElementById('tripModalRoot');
+    if (!portalRoot) {
+      portalRoot = document.createElement('div');
+      portalRoot.id = 'tripModalRoot';
+      document.body.appendChild(portalRoot);
+      console.log(LOG_PREFIX, 'Created trip modal root portal');
+    }
+
     // T5-DEFECT-1: patch renderVacationMatrix so trips overlay renders with the
     // matrix. Safe here (DOM-ready): the inline script has executed by now.
     if (!_renderPatched && typeof window.renderVacationMatrix === 'function') {
@@ -595,6 +604,22 @@
         font-size: 0.9em;
       }
       
+      /* Trip modal root portal */
+      #tripModalRoot {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 1500;
+        display: block;
+      }
+      
+      #tripModalRoot > * {
+        pointer-events: auto;
+      }
+      
       /* Trip modal */
       .trip-modal {
         display: none;
@@ -604,7 +629,7 @@
         width: 100%;
         height: 100%;
         background: rgba(0,0,0,0.5);
-        z-index: 1000;
+        z-index: auto;
       }
       
       .trip-modal-content {
@@ -631,6 +656,47 @@
         font-size: 1.2em;
         font-weight: bold;
         color: var(--text);
+      }
+      
+      /* Trip panel form */
+      #tripFormPanel {
+        padding: 20px;
+        background: white;
+        border-radius: 8px;
+      }
+      
+      .trip-panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--divider);
+      }
+      
+      .trip-panel-close {
+        background: none;
+        border: none;
+        font-size: 1.5em;
+        cursor: pointer;
+        padding: 0;
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+      }
+      
+      .trip-panel-close:hover {
+        background: var(--hover-bg);
+      }
+      
+      .trip-panel-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        margin-top: 20px;
       }
       
       .trip-close {
@@ -865,7 +931,12 @@
         <div class="trip-form" id="tripForm"></div>
       </div>
     `;
-    document.body.appendChild(modal);
+    var portalRoot = document.getElementById('tripModalRoot');
+    if (portalRoot) {
+      portalRoot.appendChild(modal);
+    } else {
+      document.body.appendChild(modal);
+    }
     _dom.tripModal = modal;
     return modal;
   }
@@ -946,8 +1017,80 @@
    * Open new trip modal
    */
   function openNewTripModal() {
-    createTripModal();
-    showTripModal(null);
+    // Switch to trips tab
+    switchTab('trips');
+    
+    // Render trip form in panel instead of modal
+    renderTripFormInPanel(null);
+  }
+
+  /**
+   * Render trip form in tripsListView panel
+   */
+  function renderTripFormInPanel(trip) {
+    var tripsListView = document.getElementById('tripsListView');
+    if (!tripsListView) return;
+    
+    var user = getCurrentUser();
+    var isViewer = user && !user.canEdit;
+    var isEdit = trip && trip.id;
+    
+    tripsListView.innerHTML = `
+      <div id="tripFormPanel">
+        <div class="trip-panel-header">
+          <h2>${isEdit ? 'Редактирование командировки' : 'Новая командировка'}</h2>
+          <button class="trip-panel-close" onclick="window.Trips.closeTripForm()">×</button>
+        </div>
+        <div class="trip-form">
+          <div class="trip-form-row">
+            <label class="trip-form-label">Название</label>
+            <input type="text" class="trip-form-input" id="tripTitle" value="${trip ? escapeHtml(trip.title) : ''}" ${isViewer ? 'disabled' : ''}>
+          </div>
+          <div class="trip-form-row">
+            <label class="trip-form-label">Место</label>
+            <input type="text" class="trip-form-input" id="tripLocation" value="${trip ? escapeHtml(trip.location || '') : ''}" ${isViewer ? 'disabled' : ''}>
+          </div>
+          <div class="trip-form-row">
+            <label class="trip-form-label">Комментарий</label>
+            <textarea class="trip-form-input" id="tripComment" rows="3" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.comment || '') : ''}</textarea>
+          </div>
+          <div class="trip-form-row">
+            <label class="trip-form-label">Статус</label>
+            <select class="trip-form-input" id="tripStatus" ${isViewer || (trip && trip.status === TRIP_STATUS.CONFIRMED && !user.isAdmin) ? 'disabled' : ''}>
+              <option value="${TRIP_STATUS.FORECAST}" ${trip && trip.status === TRIP_STATUS.FORECAST ? 'selected' : ''}>Прогнозируемая</option>
+              <option value="${TRIP_STATUS.CONFIRMED}" ${trip && trip.status === TRIP_STATUS.CONFIRMED ? 'selected' : ''}>Подтверждённая</option>
+            </select>
+          </div>
+          <div class="trip-form-row">
+            <label class="trip-form-label">Участники</label>
+            <div id="tripParticipants">
+              ${trip && trip.participants ? trip.participants.map(function(p, i) {
+                return renderParticipantRow(p, i, isViewer);
+              }).join('') : ''}
+              ${!trip ? '<div class="trip-participant-row"><span class="participant-name"></span><span class="participant-date"></span><button type="button" class="participant-remove">×</button></div>' : ''}
+            </div>
+            <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
+          </div>
+          <div class="trip-panel-actions">
+            <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
+            <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip(${trip ? trip.id : 'null'})" ${isViewer ? 'disabled' : ''}>Сохранить</button>
+            ${trip && canConfirmTrip(trip, user) && trip.status === TRIP_STATUS.FORECAST ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick(${trip.id})">Подтвердить</button>` : ''}
+            ${trip && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick(${trip.id})">Удалить</button>` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Close trip form in panel and show trips list
+   */
+  function closeTripForm() {
+    var tripsListView = document.getElementById('tripsListView');
+    if (!tripsListView) return;
+    
+    // Re-render the trips list
+    renderTripsList();
   }
 
   /**
@@ -956,11 +1099,19 @@
   function openTripModal(id, onRendered) {
     var trip = _state.trips.find(function(t) { return t.id === id; });
     if (!trip) return;
-    createTripModal();
+    
+    // Switch to trips tab
+    switchTab('trips');
+    
+    // Render trip form in panel
+    renderTripFormInPanel(trip);
+    
     // getCurrentUser() may still be resolving the session asynchronously on a
     // fresh page load (_currentUser === null for one tick). Resolve first, then
-    // render — showTripModal reads user.isAdmin synchronously.
-    var render = function() { showTripModal(trip); if (typeof onRendered === 'function') onRendered(trip); };
+    // trigger callback if provided
+    var render = function() { 
+      if (typeof onRendered === 'function') onRendered(trip); 
+    };
     if (_currentUser) { render(); return; }
     api('GET', 'api/session.php').then(function(response) {
       if (response.ok && response.data && response.data.authenticated) {
@@ -1056,9 +1207,6 @@
           <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip()">Сохранить</button>
         </div>
       `;
-      
-      // Add one empty participant row
-      addParticipantRow();
     }
   }
 
@@ -1393,7 +1541,12 @@
         </div>
       </div>
     `;
-    document.body.appendChild(modal);
+    var portalRoot = document.getElementById('tripModalRoot');
+    if (portalRoot) {
+      portalRoot.appendChild(modal);
+    } else {
+      document.body.appendChild(modal);
+    }
   }
 
   /**
@@ -1783,6 +1936,7 @@
     removeParticipantRow: removeParticipantRow,
     handleConfirmTripClick: handleConfirmTripClick,
     handleDeleteTripClick: handleDeleteTripClick,
+    renderTripFormInPanel: renderTripFormInPanel,
     
     // Utilities
     getCurrentUser: getCurrentUser,
@@ -1994,7 +2148,12 @@
       existingOverlay.remove();
     }
     
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    var portalRoot = document.getElementById('tripModalRoot');
+    if (portalRoot) {
+      portalRoot.insertAdjacentHTML('beforeend', modalHtml);
+    } else {
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
     
     // Store participants for saving
     window.currentDraftParticipants = participants;
