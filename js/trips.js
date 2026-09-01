@@ -612,7 +612,7 @@
         width: 100%;
         height: 100%;
         pointer-events: none;
-        z-index: 1500;
+        z-index: 2500;
         display: block;
       }
       
@@ -957,6 +957,12 @@
       _dom.tripsListView.style.display = tab === 'trips' ? 'block' : 'none';
     }
     
+    // Toggle trips-tab-active class on vacation panel to hide/show legend
+    var vacationPanel = document.querySelector('.vacation-panel');
+    if (vacationPanel) {
+      vacationPanel.classList.toggle('trips-tab-active', tab === 'trips');
+    }
+    
     if (tab === 'trips') {
       renderTripsList();
     }
@@ -1062,20 +1068,19 @@
             </select>
           </div>
           <div class="trip-form-row">
-            <label class="trip-form-label">Участники</label>
+            ${trip && trip.participants && trip.participants.length > 0 ? '<label class="trip-form-label">Участники</label>' : ''}
             <div id="tripParticipants">
               ${trip && trip.participants ? trip.participants.map(function(p, i) {
                 return renderParticipantRow(p, i, isViewer);
               }).join('') : ''}
-              ${!trip ? '<div class="trip-participant-row"><span class="participant-name"></span><span class="participant-date"></span><button type="button" class="participant-remove">×</button></div>' : ''}
             </div>
             <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
           </div>
           <div class="trip-panel-actions">
             <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
-            <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip(${trip ? trip.id : 'null'})" ${isViewer ? 'disabled' : ''}>Сохранить</button>
-            ${trip && canConfirmTrip(trip, user) && trip.status === TRIP_STATUS.FORECAST ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick(${trip.id})">Подтвердить</button>` : ''}
-            ${trip && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick(${trip.id})">Удалить</button>` : ''}
+            <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
+            ${trip && canConfirmTrip(trip, user) && trip.status === TRIP_STATUS.FORECAST ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick('${trip.id}')">Подтвердить</button>` : ''}
+            ${trip && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
           </div>
         </div>
       </div>
@@ -1169,9 +1174,9 @@
         </div>
         <div class="trip-actions">
           <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripModal()">Отмена</button>
-          <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip(${trip.id})" ${isViewer ? 'disabled' : ''}>Сохранить</button>
-          ${canConfirm ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick(${trip.id})">Подтвердить</button>` : ''}
-          ${canDelete ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick(${trip.id})">Удалить</button>` : ''}
+          <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip.id}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
+          ${canConfirm ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick('${trip.id}')">Подтвердить</button>` : ''}
+          ${canDelete ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
         </div>
       `;
     } else {
@@ -1299,6 +1304,9 @@
    * Save trip (create or update)
    */
   function saveTrip(id) {
+    // Handle 'null' string as falsy (null for create)
+    if (id === 'null') id = null;
+    
     var title = document.getElementById('tripTitle').value.trim();
     var location = document.getElementById('tripLocation').value.trim();
     var comment = document.getElementById('tripComment').value.trim();
