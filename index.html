@@ -2001,7 +2001,6 @@
     <div class="popup-item" data-type="sick"><span class="color-dot sick"></span> Больничный</div>
     <div class="popup-item" data-type="trip"><span class="color-dot trip"></span> Командировка</div>
     <div class="popup-item" data-type="dayoff"><span class="color-dot dayoff"></span> Отгул</div>
-    <div class="popup-item" data-type="trip-draft" style="color:var(--trip-blue); font-weight:600;"><span class="color-dot trip"></span> Создать командировку</div>
     <div class="popup-comment-row" id="popupCommentRow">
       <input type="text" id="popupCommentInput" maxlength="60" placeholder="Город" />
     </div>
@@ -2571,6 +2570,11 @@
         StorageAdapter.load().then(d => {
           if (d && d.employees && d.employees.length) {
             employees = d.employees;
+            // R4 (D4): mirror the host employee records (with dept/zone) so
+            // js/trips.js can resolve a participant's zone for canDeleteTrip/
+            // canConfirmTrip. Legacy conversion serverToLegacy() populates
+            // dept from groupId ('g0' → 0), so the mirror is zone-capable.
+            window.__serverEmployees = d.employees;
             idCounter = d.idCounter;
             vacationData = d.vacationData || vacationData;
             render();
@@ -3715,6 +3719,11 @@
     });
 
     function openMatrixEmployeeCard(empId) {
+      // R3 (замечание 10): во время выбора сотрудников (панель уехала,
+      // Ctrl+клик по карточкам) карточка-панель НЕ открывается.
+      if (window.Trips && window.Trips.suppressInfoPanel && window.Trips.suppressInfoPanel()) {
+        return;
+      }
       if (matrixScrollBeforeCard === null) matrixScrollBeforeCard = matrixWrapper.scrollLeft;
       openEditor(empId);
       vacationPanel.classList.add('employee-card-open');
@@ -4052,10 +4061,25 @@
         e.stopPropagation();
         var type = item.dataset.type;
         if (popupTarget) {
+          // «Командировка» opens the Trip entity creation (in-panel form),
+          // NOT the legacy schedule_entry. Pre-fill the participant (the
+          // employee of the selected row/cell) and the date range.
+          if (type === 'trip') {
+            var empId = popupTarget.empId;
+            var startDay = popupTarget.isRange ? popupTarget.startDay : popupTarget.day;
+            var endDay = popupTarget.isRange ? popupTarget.endDay : popupTarget.day;
+            cellPopup.classList.remove('show');
+            popupTarget = null;
+            if (window.Trips && window.Trips.createTripFromSelection) {
+              window.Trips.createTripFromSelection(empId, startDay, endDay);
+            }
+            return;
+          }
+          
           // Warn before placing a vacation-type status on a festive day.
           // Per business rule Q11–Q12, such a day extends the vacation; we
           // only inform the user (actual extension is resolved server-side).
-          if (type && type !== 'work' && type !== 'clear' && type !== 'trip-draft') {
+          if (type && type !== 'work' && type !== 'clear') {
             var day = popupTarget.day;
             var ok = warnIfVacationOnHoliday(popupTarget.empId, currentYear, day, day);
             if (!ok) {
@@ -4063,22 +4087,6 @@
               popupTarget = null;
               return;
             }
-          }
-          
-          // Handle trip-draft option
-          if (type === 'trip-draft') {
-            var empId = popupTarget.empId;
-            var startDay = popupTarget.isRange ? popupTarget.startDay : popupTarget.day;
-            var endDay = popupTarget.isRange ? popupTarget.endDay : popupTarget.day;
-            
-            // Create trip draft from selection
-            if (window.Trips && window.Trips.createDraftFromSelection) {
-              window.Trips.createDraftFromSelection(empId, startDay, endDay);
-            }
-            
-            cellPopup.classList.remove('show');
-            popupTarget = null;
-            return;
           }
           
           setDayVacationType(popupTarget.empId, currentYear, popupTarget.day, type);
@@ -4568,6 +4576,12 @@
 
         el.addEventListener('click', e => {
           e.stopPropagation();
+          // R3 (замечание 10): во время pick Ctrl+клик по карточке НЕ открывает
+          // карточку-редактор (только переключает .employee.selected).
+          // Также не открываем редактор, если suppressed (например, pick активен).
+          if (window.Trips && window.Trips.suppressInfoPanel && window.Trips.suppressInfoPanel()) {
+            return;
+          }
           document.querySelectorAll('.employee.selected').forEach(x => x.classList.remove('selected'));
           el.classList.add('selected');
           openEditor(emp.id);
@@ -5022,6 +5036,80 @@
     }
     window.showToast = showToast; // доступ из других модулей / для отладки
 
+    // =============================================
+    // POPUP → TRIP CREATION (замечания 5-6)
+    // =============================================
+    // Кнопка «Командировка» в popup ячейки создаёт СУЩНОСТЬ Trip через
+    // api/trips.php (window.Trips.createTrip), а НЕ legacy schedule_entry
+    // (setDayVacationType). Участник = сотрудник строки/ячейки, даты —
+    // выделенный диапазон (или один день). Используем тот же DOM-fallback
+    // для сотрудников, что и js/trips.js resolveEmployeesList(): глобал
+    // window.employees в этой сборке не выставляется.
+    function createTripFromSelection(empId, startDay, endDay) {
+      if (!window.Trips || !window.Trips.createTrip) {
+        showToast('Модуль командировок не загружен', 'error');
+        return;
+      }
+      var year = currentYear;
+      var dateFrom = dayOfYearToDate(year, startDay);
+      var dateTo = dayOfYearToDate(year, endDay);
+      var startDate = formatDateStr(year, dateFrom.month, dateFrom.day);
+      var endDate = formatDateStr(year, dateTo.month, dateTo.day);
+
+      // Resolve the selected employee record (numeric ids in the DOM).
+      var wanted = String(empId).replace(/^emp_/, '');
+      var employee = null;
+      if (Array.isArray(window.employees)) {
+        employee = window.employees.find(function(e) {
+          return String(e.id).replace(/^emp_/, '') === wanted;
+        });
+      }
+      if (!employee) {
+        var cell = document.querySelector('.day-cell-data[data-emp="' + wanted + '"]');
+        var row = cell && cell.closest('tr');
+        var label = row && row.querySelector('.employee-name, .emp-name, td:first-child');
+        var name = label ? (label.textContent || '').trim() : '';
+        employee = name ? { id: empId, name: name } : null;
+      }
+      if (!employee) {
+        showToast('Сотрудник не найден', 'error');
+        return;
+      }
+
+      var title = 'Командировка — ' + (employee.name || ('#' + empId));
+      // Normalize to the server id form ('emp_1'), same as
+      // js/trips.js selectTripForEmployee (line ~1379).
+      var normEmpId = /^emp_/.test(String(employee.id)) ? String(employee.id) : 'emp_' + employee.id;
+      var participant = {
+        employeeId: normEmpId,
+        startDate: startDate,
+        endDate: endDate
+      };
+
+      window.Trips.createTrip({
+        title: title,
+        location: '',
+        comment: '',
+        status: 'forecast',
+        participants: [participant]
+      }).then(function(trip) {
+        showToast('Заведена новая командировка', 'success');
+        // Показать вкладку «Командировки» со свежим списком (overlay матрицы
+        // собирается из trips по рендеру, который триггерит switchTab).
+        if (window.Trips.switchTab) {
+          window.Trips.switchTab('trips');
+        }
+      }).catch(function(error) {
+        showToast(error && error.message ? error.message : 'Ошибка создания командировки', 'error');
+      });
+    }
+    window.createTripFromSelection = createTripFromSelection;
+    // Attach to the Trips module namespace — the popup handler calls
+    // window.Trips.createTripFromSelection.
+    if (window.Trips) {
+      window.Trips.createTripFromSelection = createTripFromSelection;
+    }
+
     /**
      * save() — сохраняет в localStorage и на сервер (через StorageAdapter).
      * Возвращает Promise с результатом серверного сохранения
@@ -5095,6 +5183,8 @@
         const serverData = await StorageAdapter.load();
         if (serverData && serverData.employees && serverData.employees.length > 0) {
           employees = serverData.employees;
+          // R4 (D4): mirror for js/trips.js zone resolution (see showApp).
+          window.__serverEmployees = serverData.employees;
           idCounter = serverData.idCounter;
           render();
         }

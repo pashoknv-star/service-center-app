@@ -475,8 +475,9 @@
   function injectStyles() {
     var style = document.createElement('style');
     style.textContent = `
-      /* Trip blue color */
-      .trip-blue { color: #2196F3; }
+      /* Trip blue color — semantic trip marker. The site keeps .trip-blue/.trip dots
+         in trip-blue; this is command-trip semantics, NOT a UI accent. */
+      .trip-blue { color: var(--trip-blue); }
       
       /* Matrix trip overlays — high specificity to win over .day-holiday /
          .day-weekend background rules in the host page.
@@ -502,7 +503,7 @@
          the default cursor, hinting it opens the sick-day flow, not the trip. */
       .matrix-table .day-cell-data.type-sick { cursor: default; }
 
-      /* Trip status indicators */
+      /* Trip status indicators — semantic trip-blue (statuses of a trip) */
       .status-forecast {
         background-color: rgba(33, 150, 243, 0.35);
         background-image: repeating-linear-gradient(
@@ -513,10 +514,11 @@
       }
       
       .status-confirmed {
-        background-color: #2196F3;
+        background-color: var(--trip-blue);
       }
       
-      /* Panel tabs */
+      /* Panel tabs — aligned with site palette: purple accent, divider
+         borders, 8px radius, site hover-tint */
       .panel-tabs {
         display: flex;
         gap: 8px;
@@ -525,27 +527,28 @@
       
       .panel-tab {
         padding: 8px 16px;
-        border: 1px solid #ddd;
+        border: 1px solid var(--divider);
         background: white;
         cursor: pointer;
-        border-radius: 4px;
+        border-radius: 8px;
         transition: all 0.2s;
+        color: var(--text);
       }
       
       .panel-tab:hover {
-        background: #f5f5f5;
+        background: rgba(119, 0, 255, 0.06);
       }
       
       .panel-tab.active {
-        background: #2196F3;
+        background: var(--rt-purple);
         color: white;
-        border-color: #2196F3;
+        border-color: var(--rt-purple);
       }
       
       /* Trip list */
       .trip-list-item {
-        border: 1px solid #ddd;
-        border-radius: 4px;
+        border: 1px solid var(--divider);
+        border-radius: 8px;
         padding: 12px;
         margin-bottom: 8px;
         background: white;
@@ -554,7 +557,7 @@
       }
       
       .trip-list-item:hover {
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.04);
       }
       
       .trip-header {
@@ -574,20 +577,21 @@
       .trip-title {
         font-weight: bold;
         flex: 1;
+        color: var(--text);
       }
       
       .trip-location {
-        color: #666;
+        color: var(--accent);
         font-size: 0.9em;
       }
       
       .trip-dates {
-        color: #888;
+        color: var(--accent);
         font-size: 0.85em;
       }
       
       .trip-participants {
-        color: #555;
+        color: var(--text);
         font-size: 0.9em;
       }
       
@@ -620,12 +624,13 @@
         align-items: center;
         margin-bottom: 20px;
         padding-bottom: 12px;
-        border-bottom: 1px solid #eee;
+        border-bottom: 1px solid var(--divider);
       }
       
       .trip-modal-title {
         font-size: 1.2em;
         font-weight: bold;
+        color: var(--text);
       }
       
       .trip-close {
@@ -639,6 +644,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
+        color: var(--text);
       }
       
       .trip-form {
@@ -655,23 +661,25 @@
       
       .trip-form-label {
         font-weight: bold;
-        color: #333;
+        color: var(--text);
       }
       
       .trip-form-input {
         padding: 8px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
+        border: 1px solid var(--divider);
+        border-radius: 8px;
         font-size: 14px;
+        color: var(--text);
+        background: white;
       }
       
       .trip-form-input:focus {
         outline: none;
-        border-color: #2196F3;
+        border-color: var(--rt-purple);
       }
       
       .trip-form-error {
-        color: #d32f2f;
+        color: var(--sick-red);
         font-size: 0.85em;
         margin-top: 4px;
       }
@@ -681,8 +689,8 @@
         align-items: center;
         gap: 8px;
         padding: 8px;
-        border: 1px solid #eee;
-        border-radius: 4px;
+        border: 1px solid var(--divider);
+        border-radius: 8px;
         margin-bottom: 8px;
       }
       
@@ -703,29 +711,54 @@
       .trip-btn {
         padding: 8px 16px;
         border: none;
-        border-radius: 4px;
+        border-radius: 8px;
         cursor: pointer;
         font-size: 14px;
       }
       
       .trip-btn-primary {
-        background: #2196F3;
+        background: var(--rt-purple);
         color: white;
       }
       
       .trip-btn-secondary {
-        background: #f5f5f5;
-        color: #333;
+        background: rgba(119, 0, 255, 0.06);
+        color: var(--text);
       }
       
       .trip-btn-danger {
-        background: #d32f2f;
+        background: var(--sick-red);
         color: white;
       }
       
       .trip-btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+      }
+      
+      /* R3 (замечание 10): edge-кнопка на видимой кромке уехавшей панели.
+         Панель уезжает на translateX(calc(-100% + 46px)) — её правая кромка
+         стоит на 46px от левого края; кнопка живёт на этой кромке, а НЕ на
+         left:0 экрана (как было с dock). */
+      .trip-pick-edge {
+        position: fixed;
+        left: 46px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 1150;
+        padding: 14px 18px;
+        background: var(--rt-purple);
+        color: white;
+        border: none;
+        border-radius: 0 10px 10px 0;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+        white-space: nowrap;
+      }
+      .trip-pick-edge:hover {
+        background: color-mix(in srgb, var(--rt-purple) 85%, black);
       }
     `;
     document.head.appendChild(style);
@@ -920,14 +953,14 @@
   /**
    * Open existing trip modal
    */
-  function openTripModal(id) {
+  function openTripModal(id, onRendered) {
     var trip = _state.trips.find(function(t) { return t.id === id; });
     if (!trip) return;
     createTripModal();
     // getCurrentUser() may still be resolving the session asynchronously on a
     // fresh page load (_currentUser === null for one tick). Resolve first, then
     // render — showTripModal reads user.isAdmin synchronously.
-    var render = function() { showTripModal(trip); };
+    var render = function() { showTripModal(trip); if (typeof onRendered === 'function') onRendered(trip); };
     if (_currentUser) { render(); return; }
     api('GET', 'api/session.php').then(function(response) {
       if (response.ok && response.data && response.data.authenticated) {
@@ -951,7 +984,7 @@
     
     if (trip) {
       var title = 'Редактирование командировки';
-      var canConfirm = (user && user.isAdmin || isSupervisor()) && trip.status === TRIP_STATUS.FORECAST;
+      var canConfirm = canConfirmTrip(trip, user) && trip.status === TRIP_STATUS.FORECAST;
       var canDelete = user && canDeleteTrip(trip, user);
       
       form.innerHTML = `
@@ -1377,9 +1410,6 @@
 
     if (trip) {
       var normEmpId = /^emp_/.test(String(employeeId)) ? String(employeeId) : 'emp_' + employeeId;
-      // Open the trip modal for editing
-      openTripModal(tripId);
-
       var addRow = function() {
         var participantsContainer = document.getElementById('tripParticipants');
         if (!participantsContainer) return;
@@ -1398,9 +1428,9 @@
         }, participantsContainer.children.length, false);
       };
 
-      // openTripModal resolves the session asynchronously before rendering;
-      // the participant row must be added AFTER the form exists.
-      setTimeout(addRow, _currentUser ? 0 : 350);
+      // R3 (замечание 11): убрана setTimeout-гонка. Строка участника рендерится
+      // ДЕТЕРМИНИРОВАННО после resolve сессии/рендера формы через onRendered.
+      openTripModal(tripId, addRow);
     }
   }
 
@@ -1482,6 +1512,10 @@
    * getEmployeeName uses).
    */
   function resolveEmployeesList() {
+    // R4 (D4): host mirror with zone data (set by index.html from the server
+    // response, see __serverEmployees). Prefer it over the DOM fallback so
+    // canDeleteTrip/canConfirmTrip can resolve participant zones.
+    if (Array.isArray(window.__serverEmployees)) return window.__serverEmployees;
     if (Array.isArray(window.employees)) return window.employees;
     var empById = {};
     document.querySelectorAll('.day-cell-data[data-emp]').forEach(function(cell) {
@@ -1496,18 +1530,61 @@
   }
 
   /**
-   * Check if user can delete trip
+   * Zone-string of an employee record. Records carry the zone either as
+   * server-style 'g0'/'g1' (load.php employees[].groupId) or as the legacy
+   * numeric dept (0/1) after serverToLegacy(). Normalise both to 'g<n>'
+   * so a zone comparison never depends on the representation the host
+   * happens to expose.
+   */
+  function employeeZone(emp) {
+    if (!emp) return null;
+    var raw = emp.groupId != null ? emp.groupId : emp.dept;
+    if (raw === undefined || raw === null || raw === '') return null;
+    var s = String(raw).trim();
+    if (/^g\d+$/i.test(s)) return s.toLowerCase();
+    var n = parseInt(s, 10);
+    return (Number.isInteger(n) && String(n) === s) ? ('g' + n) : null;
+  }
+
+  /**
+   * Check if user can delete trip (role AND zone, per ТЗ §6).
+   * Admin: any trip. Supervisor: only own-zone forecast trips. Viewer: none.
+   * The zone is resolved from the participant employees (employeeZone); when
+   * no participant zone can be resolved we FAIL CLOSED (no delete button) —
+   * the server enforces zone_forbidden anyway, so hiding the button is a UX
+   * improvement, never a security boundary.
    */
   function canDeleteTrip(trip, user) {
+    if (!user) return false;
     if (user.isAdmin) return true;
-    
-    if (trip.status === TRIP_STATUS.FORECAST && isSupervisor()) {
-      // Supervisor can delete forecast trips for their zone
-      // This is simplified - in real implementation would check zone
-      return true;
+
+    if (trip.status === TRIP_STATUS.FORECAST && user.role === 'supervisor') {
+      var scope = user.scopeGroupId;
+      if (!scope) return false;
+      var participants = (trip.participants || []).filter(function(p) { return p && p.employeeId; });
+      if (participants.length === 0) return false;
+      var scopeNorm = String(scope).toLowerCase();
+      return participants.every(function(p) {
+        var emp = resolveEmployeesList().find(function(e) { return String(e.id) === String(p.employeeId); });
+        var zone = employeeZone(emp);
+        return zone !== null && zone === scopeNorm;
+      });
     }
-    
+
     return false;
+  }
+
+  /**
+   * Zone-aware confirm guard (ТЗ §6) — mirrors canDeleteTrip for admin vs
+   * supervisor. Only used to decide whether to RENDER the «Подтвердить»
+   * button; the server is the actual enforcement point.
+   */
+  function canConfirmTrip(trip, user) {
+    if (!user) return false;
+    if (user.isAdmin) return true;
+    if (trip.status !== TRIP_STATUS.FORECAST) return false;
+    if (user.role !== 'supervisor') return false;
+    return canDeleteTrip(trip, user);
   }
 
   /**
@@ -1712,6 +1789,9 @@
     canEdit: canEdit,
     isAdmin: isAdmin,
     isSupervisor: isSupervisor,
+    canDeleteTrip: canDeleteTrip,
+    canConfirmTrip: canConfirmTrip,
+    employeeZone: employeeZone,
     
     // Matrix integration
     overlay: overlay,
@@ -1763,16 +1843,39 @@
       var empId = participant.employeeId;
       var startDate = new Date(participant.startDate);
       var endDate = new Date(participant.endDate);
-      
+
+      // D2: getDayVacationType is a host-page function (inline script of
+      // index.html), not part of trips.js. If it is unavailable (page not
+      // fully loaded, host changed, unit test), skip the conflict check with
+      // a warning instead of throwing a TypeError and blocking the draft.
+      if (typeof getDayVacationType !== 'function') {
+        console.warn(LOG_PREFIX, 'getDayVacationType unavailable — skipping vacation-conflict check for', empId);
+        return;
+      }
+
+      // D5: validate dates BEFORE iterating. `new Date('2026-13-40')` or
+      // empty/undefined strings produce Invalid Date whose getFullYear etc.
+      // return NaN; the day-of-year loop would then run forever or push
+      // garbage into conflictDays. Invalid records are skipped (the server
+      // re-validates on POST anyway).
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        console.warn(LOG_PREFIX, 'openDraft: skipping participant with invalid date range:', participant);
+        return;
+      }
+      if (startDate.getTime() > endDate.getTime()) {
+        console.warn(LOG_PREFIX, 'openDraft: skipping participant with startDate > endDate:', participant);
+        return;
+      }
+
       // Check for vacation entries during this period
       var hasConflict = false;
       var conflictDays = [];
-      
+
       // Convert dates to day of year and check against vacation data
       for (var d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
         var doy = Math.ceil((d - new Date(d.getFullYear(), 0, 1)) / (1000 * 60 * 60 * 24)) + 1;
         var vtype = getDayVacationType(empId, d.getFullYear(), doy);
-        
+
         if (vtype && vtype !== 'work') {
           conflictDays.push(formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()));
           hasConflict = true;
@@ -1805,22 +1908,22 @@
     var modalContent = `
       <div style="max-width: 500px; padding: 20px;">
         <h3>Предупреждение: пересечение с отпуском/отгулом</h3>
-        <p style="color: #d32f2f; margin: 10px 0;">
+        <p style="color: var(--sick-red); margin: 10px 0;">
           ФИО: ${conflicts.map(c => c.employeeName).join(', ')}
         </p>
-        <p style="margin: 10px 0;">
+        <p style="margin: 10px 0; color: var(--text);">
           Даты с конфликтами:
         </p>
-        <div style="background: #fff3cd; padding: 10px; border-radius: 4px; margin: 10px 0;">
+        <div style="background: rgba(119,0,255,0.06); padding: 10px; border-radius: 8px; margin: 10px 0; color: var(--text);">
           ${conflictText}
         </div>
         <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
           <button onclick="this.closest('.conflict-modal').remove(); Trips.selection.clear();" 
-                  style="padding: 8px 16px; border: 1px solid #ccc; background: white; cursor: pointer; border-radius: 4px;">
+                  style="padding: 8px 16px; border: 1px solid var(--divider); background: white; cursor: pointer; border-radius: 8px; color: var(--text);">
             Отмена
           </button>
           <button onclick="this.closest('.conflict-modal').remove(); openDraftModal(${JSON.stringify(participants).replace(/"/g, '&quot;')});" 
-                  style="padding: 8px 16px; background: #2196F3; color: white; cursor: pointer; border-radius: 4px;">
+                  style="padding: 8px 16px; background: var(--rt-purple); color: white; cursor: pointer; border-radius: 8px; border: none;">
             Создать командировку
           </button>
         </div>
@@ -1848,26 +1951,26 @@
             <div class="trip-form">
               <div class="trip-form-row">
                 <label>Название:</label>
-                <input type="text" id="draft-title" placeholder="Название командировки" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                <input type="text" id="draft-title" placeholder="Название командировки" style="width: 100%; padding: 8px; border: 1px solid var(--divider); border-radius: 8px; color: var(--text); background: white;">
               </div>
               <div class="trip-form-row">
                 <label>Место:</label>
-                <input type="text" id="draft-location" placeholder="Место командировки" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                <input type="text" id="draft-location" placeholder="Место командировки" style="width: 100%; padding: 8px; border: 1px solid var(--divider); border-radius: 8px; color: var(--text); background: white;">
               </div>
               <div class="trip-form-row">
                 <label>Комментарий:</label>
-                <textarea id="draft-comment" placeholder="Комментарий" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; height: 80px;"></textarea>
+                <textarea id="draft-comment" placeholder="Комментарий" style="width: 100%; padding: 8px; border: 1px solid var(--divider); border-radius: 8px; height: 80px; color: var(--text); background: white;"></textarea>
               </div>
               <div class="trip-form-row">
                 <label>Статус:</label>
-                <select id="draft-status" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                <select id="draft-status" style="width: 100%; padding: 8px; border: 1px solid var(--divider); border-radius: 8px; color: var(--text); background: white;">
                   <option value="forecast">Прогноз</option>
                   <option value="confirmed">Подтверждена</option>
                 </select>
               </div>
               <div class="trip-form-row">
                 <label>Участники:</label>
-                <div style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px;">
+                <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--divider); border-radius: 8px; padding: 8px; color: var(--text);">
                   ${participants.map(p => `
                     <div style="padding: 4px 0;">
                       ${getEmployeeName(p.employeeId)}: ${formatDateStr(new Date(p.startDate).getFullYear(), new Date(p.startDate).getMonth(), new Date(p.startDate).getDate())} - 
@@ -1879,8 +1982,8 @@
             </div>
           </div>
           <div class="trip-modal-footer" style="display: flex; gap: 10px; justify-content: flex-end; padding: 16px;">
-            <button class="trip-modal-btn-secondary" onclick="this.closest('.trip-modal-overlay').remove(); Trips.selection.clear();">Отмена</button>
-            <button class="trip-modal-btn-primary" onclick="saveDraftTrip(${JSON.stringify(participants).replace(/"/g, '&quot;')});">Создать</button>
+            <button class="trip-modal-btn-secondary" onclick="this.closest('.trip-modal-overlay').remove(); Trips.selection.clear();" style="padding: 8px 16px; border: 1px solid var(--divider); background: white; cursor: pointer; border-radius: 8px; color: var(--text);">Отмена</button>
+            <button class="trip-modal-btn-primary" onclick="saveDraftTrip(${JSON.stringify(participants).replace(/"/g, '&quot;')});" style="padding: 8px 16px; border: none; background: var(--rt-purple); color: white; cursor: pointer; border-radius: 8px;">Создать</button>
           </div>
         </div>
       </div>
@@ -1964,12 +2067,24 @@
     switchTab('trips');
     
     // Set up pick mode handler for mouseup events
+    // D3: never leak the patch — capture the original and restore it on every
+    // completion path (picked a cell OR cancelled). The original lives in the
+    // host page closure and is NOT a global, so on pages where it was never
+    // exposed as window.handleCellMouseUp the restore leaves the window slot
+    // at whatever it was before (no-op on this build).
     var origHandleCellMouseUp = window.handleCellMouseUp;
+    var restoreCellMouseUp = function() {
+      if (origHandleCellMouseUp) {
+        window.handleCellMouseUp = origHandleCellMouseUp;
+      } else {
+        delete window.handleCellMouseUp;
+      }
+    };
     window.handleCellMouseUp = function(event) {
       // If we're in pick mode, handle the pick
       if (window._calendarPickContext) {
         console.log(LOG_PREFIX, 'Calendar pick handling cell mouse up');
-        
+
         // Find the day cell that was clicked
         var dayCell = event.target.closest('.day-cell-data');
         if (dayCell) {
@@ -1980,11 +2095,12 @@
             if (participantIndex !== undefined && _state.draft && _state.draft.participants && _state.draft.participants[participantIndex]) {
               _state.draft.participants[participantIndex].startDate = formatDateStr(window.currentYear, 0, day);
               _state.draft.participants[participantIndex].endDate = formatDateStr(window.currentYear, 0, day);
-              
+
               // Update display and close pick mode
               console.log(LOG_PREFIX, 'Calendar pick completed:', _state.draft.participants[participantIndex]);
               window._calendarPickContext = null;
-              
+              restoreCellMouseUp();
+
               // Switch back to trips tab and refresh
               switchTab('trips');
               return;
@@ -1992,198 +2108,248 @@
           }
         }
       }
-      
+
       // Call original handler if not in pick mode or no valid cell
       if (origHandleCellMouseUp) {
         origHandleCellMouseUp(event);
       }
     };
-    
+
+    // D3: Escape cancels pick mode AND restores the original handler, so the
+    // calendar mode never survives after the user backs out.
+    var escHandler = function(e) {
+      if (e.key === 'Escape' && window._calendarPickContext) {
+        console.log(LOG_PREFIX, 'Calendar pick cancelled (ESC)');
+        window._calendarPickContext = null;
+        restoreCellMouseUp();
+        document.removeEventListener('keydown', escHandler, true);
+      }
+    };
+    document.addEventListener('keydown', escHandler, true);
+
     console.log(LOG_PREFIX, 'Calendar pick mode activated. Press ESC to cancel.');
   }
 
-  // T5-DEFECT-5: Employee pick slide panel
-  function startEmployeePick(draft) {
-    console.log(LOG_PREFIX, 'Starting employee pick for draft:', draft);
-    
-    // Store draft context and suppress info panel
-    window._employeePickContext = draft;
-    Trips.suppressInfoPanel = function() { return true; };
-    
-    // Slide the vacation panel
-    var vacationPanel = document.querySelector('.vacation-panel');
-    if (vacationPanel) {
-      vacationPanel.classList.add('trip-panel-slided');
-      vacationPanel.style.position = 'sticky';
-    }
-    
-    // Create employee pick dock
-    var dockHtml = `
-      <div class="trip-pick-dock">
-        <div class="dock-header">
-          <span class="dock-title">Добавить сотрудника</span>
-          <button class="dock-close" onclick="Trips.endEmployeePick()">×</button>
-        </div>
-        <div class="dock-content">
-          <div class="dock-search">
-            <input type="text" id="employeeSearch" placeholder="Поиск сотрудника..." />
-          </div>
-          <div class="dock-employees" id="employeeList">
-            <!-- Employee list will be populated here -->
-          </div>
-        </div>
-        <div class="dock-footer">
-          <button class="dock-btn dock-btn-primary" onclick="Trips.confirmEmployeePick()">Добавить</button>
-          <button class="dock-btn dock-btn-secondary" onclick="Trips.endEmployeePick()">Отмена</button>
-        </div>
-      </div>
-    `;
-    
-    var existingDock = document.querySelector('.trip-pick-dock');
-    if (existingDock) {
-      existingDock.remove();
-    }
-    
-    document.body.insertAdjacentHTML('beforeend', dockHtml);
-    
-    // Populate employee list
-    populateEmployeePickList();
-    
-    // Position the dock
-    positionEmployeePickDock();
-  }
-  
-  function populateEmployeePickList() {
-    var employeeList = document.getElementById('employeeList');
-    if (!employeeList) return;
-    
-    var employees = getEmployeesForPick();
-    var html = '';
-    
-    employees.forEach(function(emp) {
-      var isSelected = window.Trips.pickedEmployees && window.Trips.pickedEmployees.has(emp.id);
-      html += `
-        <div class="dock-employee-item ${isSelected ? 'selected' : ''}" data-id="${emp.id}">
-          <div class="employee-info">
-            <div class="employee-name">${emp.name}</div>
-            <div class="employee-dept">${emp.dept}</div>
-          </div>
-          <div class="employee-checkbox">
-            ${isSelected ? '✓' : ''}
-          </div>
-        </div>
-      `;
-    });
-    
-    employeeList.innerHTML = html;
-    
-    // Add click handlers
-    employeeList.querySelectorAll('.dock-employee-item').forEach(function(item) {
-      item.addEventListener('click', function() {
-        toggleEmployeePickSelection(this);
+  // R3 (замечание 10): Employee pick — панель уезжает, сотрудники выбираются
+    // Ctrl+кликом ПО КАРТОЧКАМ на странице. Dock-список с чекбоксами УДАЛЁН.
+    function startEmployeePick(draft) {
+      console.log(LOG_PREFIX, 'Starting employee pick for draft:', draft);
+
+      // Store draft context and suppress info panel (клик по карточке НЕ
+      // открывает «Карточку сотрудника» — см. guard в openMatrixEmployeeCard).
+      window._employeePickContext = draft || null;
+      if (window._employeePickContext && !window._employeePickContext.participants) {
+        window._employeePickContext.participants = [];
+      }
+      Trips.suppressInfoPanel = function() { return true; };
+      window._employeePickActive = true;
+
+      // Slide the vacation panel so only its right edge (with the button) stays.
+      var vacationPanel = document.querySelector('.vacation-panel');
+      if (vacationPanel) {
+        vacationPanel.classList.add('trip-panel-slided');
+        vacationPanel.style.position = 'sticky';
+      }
+
+      // Edge button on the VISIBLE edge of the slid panel (left:46px — the
+      // panel's right edge after translateX(calc(-100% + 46px)), NOT left:0).
+      // Повторное нажатие = подтвердить добавление выбранных.
+      var existingEdge = document.querySelector('.trip-pick-edge');
+      if (existingEdge) existingEdge.remove();
+      var edge = document.createElement('button');
+      edge.className = 'trip-pick-edge';
+      edge.type = 'button';
+      edge.textContent = '✓ Добавить сотрудников';
+      edge.addEventListener('click', function() {
+        confirmEmployeePick();
       });
-    });
-  }
-  
-  function toggleEmployeePickSelection(item) {
-    var empId = String(item.getAttribute('data-id') || '').replace(/^emp_/, '');
-    item.classList.toggle('selected');
-    
-    if (!window.Trips.pickedEmployees) {
-      window.Trips.pickedEmployees = new Set();
+      document.body.appendChild(edge);
+
+      // Ctrl+click по карточкам сотрудников на странице (ТЗ: пользователь
+      // УДЕРЖИВАЕТ CTRL и кликает). Листенер вешается на document (capture),
+      // чтобы перехватывать Ctrl+клик по .employee ДО того, как host-обработчик
+      // откроет карточку. Клики без Ctrl проходят как обычно (карточка/редактор).
+      // Используем ТОЛЬКО штатный класс .employee.selected — новых подсветок нет.
+      var clickHandler = function(event) {
+        if (!window._employeePickActive) return;
+        // Only Ctrl/Cmd+click picks on the page; other clicks behave normally.
+        if (!(event.ctrlKey || event.metaKey)) return;
+        var card = event.target && event.target.closest ? event.target.closest('.employee') : null;
+        if (!card) return;
+        // Не перехватываем клики по элементам управления внутри карточки.
+        if (event.target.closest('button, input, a')) return;
+        var empId = card.getAttribute('data-id');
+        if (!empId) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        toggleEmployeePickSelection(card, empId);
+      };
+      document.addEventListener('click', clickHandler, true);
+      window._employeePickClickHandler = clickHandler;
+
+      console.log(LOG_PREFIX, 'Employee pick active — Ctrl+click employee cards on the page');
     }
-    
-    if (item.classList.contains('selected')) {
-      window.Trips.pickedEmployees.add(empId);
-    } else {
-      window.Trips.pickedEmployees.delete(empId);
+
+    // Dock-list функции больше не используются (dock удалён), но остаются
+    // экспортированными для обратной совместимости (R1 Fix-2 экспортировал их;
+    // R4 harness не вызывает их). populateEmployeePickList больше не нужен.
+    function populateEmployeePickList() {
+      // no-op: dock-list удалён в R3, список заменён выбором по карточкам.
     }
-    
-    console.log(LOG_PREFIX, 'Employee selection toggled:', empId, 'selected:', window.Trips.pickedEmployees.has(empId));
-  }
-  
-  function positionEmployeePickDock() {
-    var dock = document.querySelector('.trip-pick-dock');
-    if (dock) {
-      dock.style.position = 'fixed';
-      dock.style.left = '0px';
-      dock.style.top = '50%';
-      dock.style.transform = 'translateY(-50%)';
-      dock.style.transition = 'left 0.25s ease';
+
+    /**
+     * Toggle an employee card's pick state. `card` is the .employee DOM node,
+     * `empId` — its data-id (string/number). Uses ONLY the standard .employee.selected
+     * highlight (same as normal multi-select on the page) — no new highlight style.
+     */
+    function toggleEmployeePickSelection(card, empId) {
+      if (!card) return;
+      var normId = String(empId == null ? (card.getAttribute('data-id') || '') : empId).replace(/^emp_/, '');
+      if (!normId) return;
+
+      if (!window.Trips.pickedEmployees) {
+        window.Trips.pickedEmployees = new Set();
+      }
+
+      // Normalise key to bare id ('1'), but keep the DOM card keyed the same way.
+      if (window.Trips.pickedEmployees.has(normId)) {
+        window.Trips.pickedEmployees.delete(normId);
+        card.classList.remove('selected');
+      } else {
+        window.Trips.pickedEmployees.add(normId);
+        card.classList.add('selected');
+      }
+
+      console.log(LOG_PREFIX, 'Employee selection toggled:', normId, 'selected:', window.Trips.pickedEmployees.has(normId));
     }
-  }
-  
-  function endEmployeePick() {
-    // Restore normal state
-    Trips.suppressInfoPanel = function() { return false; };
-    
-    var vacationPanel = document.querySelector('.vacation-panel');
-    if (vacationPanel) {
-      vacationPanel.classList.remove('trip-panel-slided');
-      vacationPanel.style.position = '';
+
+    function positionEmployeePickDock() {
+      // no-op: dock удалён в R3; панель уезжает, кромка с кнопкой остаётся.
     }
-    
-    var dock = document.querySelector('.trip-pick-dock');
-    if (dock) {
-      dock.remove();
+
+    function endEmployeePick() {
+      // Restore normal state
+      Trips.suppressInfoPanel = function() { return false; };
+      window._employeePickActive = false;
+
+      var vacationPanel = document.querySelector('.vacation-panel');
+      // D7: panel may be gone (logout race / panel closed during pick). Guard
+      // before touching classList to avoid a TypeError on null.
+      if (vacationPanel) {
+        vacationPanel.classList.remove('trip-panel-slided');
+        vacationPanel.style.position = '';
+      }
+
+      var edge = document.querySelector('.trip-pick-edge');
+      if (edge) {
+        edge.remove();
+      }
+
+      var clickHandler = window._employeePickClickHandler;
+      if (clickHandler) {
+        document.removeEventListener('click', clickHandler, true);
+        window._employeePickClickHandler = null;
+      }
+
+      window._employeePickContext = null;
+      window.Trips.pickedEmployees = null;
+
+      console.log(LOG_PREFIX, 'Employee pick ended');
     }
-    
-    window._employeePickContext = null;
-    window.Trips.pickedEmployees = null;
-    
-    console.log(LOG_PREFIX, 'Employee pick ended');
-  }
-  
-  function confirmEmployeePick() {
-    if (!window.Trips.pickedEmployees || window.Trips.pickedEmployees.size === 0) {
-      alert('Выберите хотя бы одного сотрудника');
-      return;
+
+    function confirmEmployeePick() {
+      if (!window.Trips.pickedEmployees || window.Trips.pickedEmployees.size === 0) {
+        alert('Выберите хотя бы одного сотрудника');
+        return;
+      }
+
+      var selectedEmployees = Array.from(window.Trips.pickedEmployees);
+      var draft = window._employeePickContext;
+
+      // Resolve records through the same path other pickers use. Employee ids are
+      // strings like 'emp_1' (server) or numbers (host closure); normalise both.
+      var norm = function(v) { return String(v).replace(/^emp_/, ''); };
+      var employees = resolveEmployeesList();
+
+      if (draft && draft.participants) {
+        selectedEmployees.forEach(function(empId) {
+          var wanted = norm(empId);
+          var employee = employees.find(function(e) { return norm(e.id) === wanted; });
+          if (employee) {
+            draft.participants.push({
+              employeeId: employee.id,
+              name: employee.name || employee.fullName || ''
+            });
+          }
+        });
+
+        console.log(LOG_PREFIX, 'Employees added to draft:', selectedEmployees);
+      }
+
+      // Sync the picked employees into the trip form's participant rows (R2 form).
+      syncPickedEmployeesToForm(selectedEmployees);
+
+      endEmployeePick();
     }
-    
-    var selectedEmployees = Array.from(window.Trips.pickedEmployees);
-    var draft = window._employeePickContext;
-    
-    // Resolve records through the same path other pickers use. Employee ids are
-    // strings like 'emp_1' (server) or numbers (host closure); normalise both.
-    var norm = function(v) { return String(v).replace(/^emp_/, ''); };
-    var employees = resolveEmployeesList();
-    
-    if (draft && draft.participants) {
+
+    /**
+     * R3 (замечание 10/5): после подтверждения выбранные сотрудники появляются
+     * строками в форме командировки (общий #tripParticipants у реальной формы
+     * нового/редактируемого трипа; R2 in-panel форма — report-only, см. отчёт).
+     */
+    function syncPickedEmployeesToForm(selectedEmployees) {
+      var container = document.getElementById('tripParticipants');
+      if (!container) return;
+      var norm = function(v) { return String(v).replace(/^emp_/, ''); };
+      var employees = resolveEmployeesList();
+      var rowData = collectParticipantRowData();
+      var existing = new Set();
+      rowData = rowData.map(function(r) {
+        // Resolve real id for name-only rows (from collect). renderParticipantRow
+        // derives the name from employeeId, so tag it back on to survive re-render.
+        var emp = employees.find(function(e) { return e.name === r.name; });
+        if (emp && !r.employeeId) r.employeeId = emp.id;
+        if (emp) existing.add(norm(emp.id));
+        return r;
+      });
+
       selectedEmployees.forEach(function(empId) {
         var wanted = norm(empId);
         var employee = employees.find(function(e) { return norm(e.id) === wanted; });
-        if (employee) {
-          draft.participants.push({
-            employeeId: employee.id,
-            name: employee.name || employee.fullName || ''
-          });
-        }
+        if (!employee) return;
+        if (existing.has(wanted)) return; // уже есть строка
+        existing.add(wanted);
+        rowData.push({
+          employeeId: employee.id, // renderParticipantRow resolves name from employeeId
+          name: employee.name || employee.fullName || '',
+          startDate: '',
+          endDate: '',
+          disabled: false
+        });
       });
-      
-      console.log(LOG_PREFIX, 'Employees added to draft:', selectedEmployees);
+      rerenderParticipantRows(rowData);
     }
-    
-    endEmployeePick();
-  }
-  
-  function getEmployeesForPick() {
-    // Get all active employees excluding those already in the draft
-    var norm = function(v) { return String(v).replace(/^emp_/, ''); };
-    var draftEmployees = new Set();
-    if (window._employeePickContext && window._employeePickContext.participants) {
-      window._employeePickContext.participants.forEach(function(p) {
-        draftEmployees.add(norm(p.employeeId));
+
+    function getEmployeesForPick() {
+      // Get all active employees excluding those already in the draft
+      var norm = function(v) { return String(v).replace(/^emp_/, ''); };
+      var draftEmployees = new Set();
+      if (window._employeePickContext && window._employeePickContext.participants) {
+        window._employeePickContext.participants.forEach(function(p) {
+          draftEmployees.add(norm(p.employeeId));
+        });
+      }
+
+      return resolveEmployeesList().filter(function(emp) {
+        return emp.name && emp.name !== 'Ставка' && !emp.name.startsWith('Ставка') &&
+               !draftEmployees.has(norm(emp.id));
+      }).sort(function(a, b) {
+        if (a.dept !== b.dept) return a.dept - b.dept;
+        return (a.slot || 0) - (b.slot || 0);
       });
     }
-    
-    return resolveEmployeesList().filter(function(emp) {
-      return emp.name && emp.name !== 'Ставка' && !emp.name.startsWith('Ставка') && 
-             !draftEmployees.has(norm(emp.id));
-    }).sort(function(a, b) {
-      if (a.dept !== b.dept) return a.dept - b.dept;
-      return (a.slot || 0) - (b.slot || 0);
-    });
-  }
 
   // T5-DEFECT-2: Create draft from multi-row selection
   function createDraftFromSelection(empId, startDay, endDay) {
