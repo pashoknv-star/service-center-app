@@ -1091,9 +1091,14 @@
    * Close trip form in panel and show trips list
    */
   function closeTripForm() {
+    // V2-B fix (coordinator): mid-pick close must restore the panel first —
+    // otherwise the panel stays slid off-screen with a dead edge button.
+    if (window._employeePickActive) {
+      try { endEmployeePick(); } catch (e) { console.warn(LOG_PREFIX, e); }
+    }
     var tripsListView = document.getElementById('tripsListView');
     if (!tripsListView) return;
-    
+
     // Re-render the trips list
     renderTripsList();
   }
@@ -1455,35 +1460,23 @@
       return;
     }
 
-    // Spec §11 СЛУЧАЙ Б: offer ALL forecast trips (not only ones the employee
-    // is already in — the employee may be ADDED to any forecast trip).
-    // Confirmed trips are deliberately NOT offered (spec §11).
-    var normId = String(currentEditingId).replace(/^emp_/, '');
-    var forecastTrips = _state.trips.filter(function(trip) {
-      return trip.status === TRIP_STATUS.FORECAST &&
-             !trip.participants.some(function(p) {
-               return String(p.employeeId).replace(/^emp_/, '') === normId;
-             });
-    });
+    // Create a draft context for employee pick flow (П14)
+    var draft = {
+      employeeId: currentEditingId,
+      name: getEmployeeName(currentEditingId),
+      participants: [{
+        employeeId: currentEditingId,
+        name: getEmployeeName(currentEditingId),
+        startDate: '', // Empty date as per П13 requirement
+        endDate: ''     // Empty date as per П13 requirement
+      }]
+    };
 
-    if (forecastTrips.length === 0) {
-      // Spec §11 СЛУЧАЙ А: no forecast trips exist -> create a new draft
-      // with this employee as the first participant.
-      openNewTripModal();
-      var container = document.getElementById('tripParticipants');
-      if (container) {
-        container.innerHTML = renderParticipantRow({
-          employeeId: currentEditingId,
-          startDate: '',
-          endDate: ''
-        }, 0, false);
-      }
-      if (typeof window.showToast === 'function') {
-        window.showToast('Новая командировка: ' + getEmployeeName(currentEditingId), 'info');
-      }
-    } else {
-      // Show selection modal (spec §11 СЛУЧАЙ Б)
-      showTripSelectionModal(forecastTrips, currentEditingId);
+    // Start employee pick flow with the pre-filled draft
+    startEmployeePick(draft);
+    
+    if (typeof window.showToast === 'function') {
+      window.showToast('Выберите участников командировки: Ctrl+click по карточкам', 'info');
     }
   }
 
@@ -1945,6 +1938,7 @@
     handleConfirmTripClick: handleConfirmTripClick,
     handleDeleteTripClick: handleDeleteTripClick,
     renderTripFormInPanel: renderTripFormInPanel,
+    closeTripForm: closeTripForm,
     
     // Utilities
     getCurrentUser: getCurrentUser,
@@ -1957,6 +1951,32 @@
     
     // Matrix integration
     overlay: overlay,
+    
+    // V2-C Fix-4: helper to get selected employee IDs from matrix
+    getSelectedEmployeeIds: function() {
+      var selectedRows = document.querySelectorAll('.trip-row-selected');
+      var empIds = [];
+      selectedRows.forEach(function(row) {
+        var nameCell = row.querySelector('.name-col[data-emp-id]');
+        if (nameCell) {
+          var empId = parseInt(nameCell.dataset.empId);
+          if (!isNaN(empId)) {
+            empIds.push(empId);
+          }
+        }
+      });
+      return empIds;
+    },
+    
+    // V2-C Fix-4: helper to reset matrix selection (clear selected rows)
+    resetMatrixSelection: function() {
+      var selectedRows = document.querySelectorAll('.trip-row-selected');
+      selectedRows.forEach(function(row) {
+        row.classList.remove('trip-row-selected');
+        row.classList.remove('trip-row-dimmed');
+      });
+      document.body.classList.remove('trip-rows-selected');
+    },
     
     // Selection management - simple implementation for T5
     selection: {
@@ -2320,7 +2340,7 @@
 
       // Edge button on the VISIBLE edge of the slid panel (left:46px — the
       // panel's right edge after translateX(calc(-100% + 46px)), NOT left:0).
-      // Повторное нажатие = подтвердить добавление выбранных.
+      // Повторное нажатие = подтвердить добавление выбранных / возврат в режим формы.
       var existingEdge = document.querySelector('.trip-pick-edge');
       if (existingEdge) existingEdge.remove();
       var edge = document.createElement('button');
@@ -2328,7 +2348,13 @@
       edge.type = 'button';
       edge.textContent = '✓ Добавить сотрудников';
       edge.addEventListener('click', function() {
-        confirmEmployeePick();
+        if (window._employeePickConfirmMode) {
+          // Click again to return to form mode
+          endEmployeePick();
+        } else {
+          // First click to confirm selection
+          confirmEmployeePick();
+        }
       });
       document.body.appendChild(edge);
 
@@ -2400,6 +2426,7 @@
       // Restore normal state
       Trips.suppressInfoPanel = function() { return false; };
       window._employeePickActive = false;
+      window._employeePickConfirmMode = false; // Reset confirm mode
 
       var vacationPanel = document.querySelector('.vacation-panel');
       // D7: panel may be gone (logout race / panel closed during pick). Guard
@@ -2447,7 +2474,9 @@
           if (employee) {
             draft.participants.push({
               employeeId: employee.id,
-              name: employee.name || employee.fullName || ''
+              name: employee.name || employee.fullName || '',
+              startDate: '', // Empty date as per П13 requirement
+              endDate: ''     // Empty date as per П13 requirement
             });
           }
         });
@@ -2455,10 +2484,17 @@
         console.log(LOG_PREFIX, 'Employees added to draft:', selectedEmployees);
       }
 
+      // Set confirm mode for toggle behavior
+      window._employeePickConfirmMode = true;
+      
+      // Update edge button text to indicate return mode
+      var edge = document.querySelector('.trip-pick-edge');
+      if (edge) {
+        edge.textContent = '← Вернуть';
+      }
+
       // Sync the picked employees into the trip form's participant rows (R2 form).
       syncPickedEmployeesToForm(selectedEmployees);
-
-      endEmployeePick();
     }
 
     /**

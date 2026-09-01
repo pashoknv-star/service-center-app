@@ -1100,11 +1100,12 @@
       color: var(--rt-purple);
     }
     
-    /* Замечание 4: выбранные Ctrl-кликом строки сохраняют default-вид
-       (белый-на-фиолетовом убран); невыбранные затемняются целиком —
-       ФИО-колонка и календарные ячейки. Класс вешается на <tr>. */
-    .matrix-table .trip-row-dimmed {
-      opacity: 0.4;
+    /* V2-C Fix-1: светло-серый фон для невыбранных строк при Ctrl-выборе,
+       текст ФИО полностью читаемый, без opacity-затемнения.
+       Выбранные строки (.trip-row-selected) сохраняют default-вид. */
+    .matrix-table .trip-row-dimmed .name-col,
+    .matrix-table .trip-row-dimmed .day-cell-data {
+      background-color: #f5f5f5;
     }
 
     /* Group separators reproduce staff zones 0–6 in the matrix. */
@@ -1548,6 +1549,17 @@
     body.role-supervisor #cellPopup .popup-item[data-type="work"],
     body.role-supervisor #cellPopup .popup-item[data-type="vacation"],
     body.role-supervisor #cellPopup .popup-item[data-type="sick"] { display: none !important; }
+
+    /* V2-C Fix-3: при выбранных строках (.trip-row-selected существует)
+       popup показывает только "Командировка" и "Отгул",
+       скрываем work/vacation/sick/clear для supervisor */
+    body.trip-rows-selected #cellPopup .popup-item[data-type="work"],
+    body.trip-rows-selected #cellPopup .popup-item[data-type="vacation"],
+    body.trip-rows-selected #cellPopup .popup-item[data-type="sick"],
+    body.trip-rows-selected #cellPopup .popup-item[data-type="clear"] { display: none !important; }
+    body.role-supervisor.trip-rows-selected #cellPopup .popup-item[data-type="work"],
+    body.role-supervisor.trip-rows-selected #cellPopup .popup-item[data-type="vacation"],
+    body.role-supervisor.trip-rows-selected #cellPopup .popup-item[data-type="sick"] { display: none !important; }
 
     .btn:disabled { opacity: 0.6; cursor: default; transform: none; box-shadow: none; }
 
@@ -3655,19 +3667,32 @@
             var row = cell.parentElement;
             row.classList.toggle('trip-row-selected');
             
-            // Замечание 4: невыбранные строки затемнены, выбранные — default.
+            // V2-C Fix-2: закрыть открытую карточку сотрудника при Ctrl+клике,
+            // т.к. выбор идёт по нескольким строкам и матрица должна быть полноразмерной.
+            if (vacationPanel.classList.contains('employee-card-open')) {
+              resetMatrixEmployeeCard();
+            }
+            
+            // V2-C Fix-1: невыбранные строки получают светло-серый фон, выбранные — default.
             // Пересчёт при каждом клике (в т.ч. при снятии выделения):
-            // побочного правила "otherRow !== row" больше нет — после toggle
-            // состояние строки уже финальное.
             var allRows = matrixBody.querySelectorAll('.name-col[data-emp-id]');
+            var hasSelection = false;
             allRows.forEach(function(otherCell) {
               var otherRow = otherCell.parentElement;
               if (otherRow.classList.contains('trip-row-selected')) {
                 otherRow.classList.remove('trip-row-dimmed');
+                hasSelection = true;
               } else {
                 otherRow.classList.add('trip-row-dimmed');
               }
             });
+            
+            // V2-C Fix-3: добавляем/убираем класс на body для CSS-фильтрации popup
+            if (hasSelection) {
+              document.body.classList.add('trip-rows-selected');
+            } else {
+              document.body.classList.remove('trip-rows-selected');
+            }
           } else {
             // Regular click - open employee card
             openMatrixEmployeeCard(empId);
@@ -3869,6 +3894,15 @@
       var cell = e.currentTarget;
       var empId = parseInt(cell.dataset.emp);
       if (!canEditVacationEmployee(empId)) return;
+      
+      // V2-C Fix-3: если есть выбранные строки, разрешаем drag только по выбранным
+      if (hasSelectedRows()) {
+        var row = cell.closest('tr');
+        if (!isRowSelected(row)) {
+          return;
+        }
+      }
+      
       // Only start range drag on primary button.
       if (e.button !== undefined && e.button !== 0) return;
       var cell = e.currentTarget;
@@ -3948,6 +3982,16 @@
       cellPopup.classList.add('show');
     }
 
+    // V2-C Fix-3: проверка наличия выбранных строк при Ctrl-выборе
+    function hasSelectedRows() {
+      return matrixBody && matrixBody.querySelector('.trip-row-selected') !== null;
+    }
+
+    // V2-C Fix-3: проверка, выбрана ли текущая строка
+    function isRowSelected(row) {
+      return row && row.classList.contains('trip-row-selected');
+    }
+
     function showCommentRow(type) {
       popupCommentInput.placeholder = (type === 'trip') ? 'Город' : 'Причина';
       popupCommentInput.value = '';
@@ -3985,6 +4029,15 @@
       var empId = parseInt(cell.dataset.emp);
       if (!canEditVacationEmployee(empId)) return;
       e.stopPropagation();
+      
+      // V2-C Fix-3: если есть выбранные строки, блокируем popup для невыбранных
+      if (hasSelectedRows()) {
+        var row = cell.closest('tr');
+        if (!isRowSelected(row)) {
+          return; // Запрет открытия popup у невыбранного сотрудника
+        }
+      }
+      
       var day = parseInt(cell.dataset.day);
       popupTarget = { empId: empId, day: day, isRange: false };
 
@@ -4075,8 +4128,36 @@
             var endDay = popupTarget.isRange ? popupTarget.endDay : popupTarget.day;
             cellPopup.classList.remove('show');
             popupTarget = null;
-            if (window.Trips && window.Trips.createTripFromSelection) {
-              window.Trips.createTripFromSelection(empId, startDay, endDay);
+            
+            // V2-C Fix-4: автооткрытие формы со ВСЕМИ выбранными сотрудниками
+            if (window.Trips) {
+              var selectedEmpIds = window.Trips.getSelectedEmployeeIds();
+              var hasSelection = selectedEmpIds.length > 0;
+              
+              // Если есть выбранные строки, используем все выбранные
+              // Иначе используем только текущего сотрудника
+              var participantEmpIds = hasSelection ? selectedEmpIds : [empId];
+              
+              // Сбрасываем выбор в матрице
+              if (hasSelection) {
+                window.Trips.resetMatrixSelection();
+              }
+              
+              // Формируем массив участников с датами
+              var startDate = dayOfYearToDate(currentYear, startDay);
+              var endDate = dayOfYearToDate(currentYear, endDay);
+              var participants = participantEmpIds.map(function(pid) {
+                return {
+                  employeeId: pid,
+                  startDate: startDate,
+                  endDate: endDate
+                };
+              });
+              
+              // Открываем форму командировки
+              if (window.Trips.openDraft) {
+                window.Trips.openDraft(participants);
+              }
             }
             return;
           }
