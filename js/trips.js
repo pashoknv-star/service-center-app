@@ -1011,6 +1011,12 @@
    * Render trips list
    */
   function renderTripsList() {
+    // Err3 fix: innerHTML-замены tripsListView (форма в панели) отсоединяют
+    // закэшированный _dom.tripsList — перепривязываем при каждом рендере.
+    var liveList = document.getElementById('tripsList');
+    if (liveList && _dom.tripsList !== liveList) {
+      _dom.tripsList = liveList;
+    }
     if (!_dom.tripsList) return;
     
     var trips = _state.trips;
@@ -1075,8 +1081,20 @@
   function renderTripFormInPanel(trip) {
     var tripsListView = document.getElementById('tripsListView');
     if (!tripsListView) return;
-    
+
     var user = getCurrentUser();
+    // Err3 fix: если сессия ещё не резолвилась (новая вкладка/страница),
+    // подтянуть пользователя сейчас и перерендерить форму после — иначе
+    // кнопки «Удалить»/«Подтвердить» пропадают из разметки (user=null).
+    if (!user) {
+      api('GET', 'api/session.php').then(function(response) {
+        if (response.ok && response.data && response.data.authenticated) {
+          _currentUser = response.data.user;
+          renderTripFormInPanel(trip);
+        }
+      }).catch(function() { /* stay anonymous: viewer-like form */ });
+      return;
+    }
     var isViewer = user && !user.canEdit;
     var isEdit = trip && trip.id;
     
@@ -1143,6 +1161,33 @@
     var tripsListView = document.getElementById('tripsListView');
     if (!tripsListView) return;
 
+    // Err3 fix: во время показа формы каркас списка (#tripsList и кнопка
+    // «+ Новая командировка») полностью заменён innerHTML-формой —
+    // восстанавливаем исходную разметку списка перед рендером.
+    if (!document.getElementById('tripsList')) {
+      tripsListView.innerHTML = '<h3>Командировки</h3>' +
+        '<button type="button" class="btn" id="newTripBtn">+ Новая командировка</button>' +
+        '<div id="tripsList"></div>';
+      var newBtn = tripsListView.querySelector('#newTripBtn');
+      if (newBtn) {
+        (function(btn){
+          btn.addEventListener('click', function() {
+            try { renderTripFormInPanel(null); } catch (e) { console.warn(LOG_PREFIX, e); }
+          });
+        })(newBtn);
+      }
+      _dom.newTripBtn = newBtn;
+    }
+
+    // Err3 fix: renderTripFormInPanel заменяет innerHTML tripsListView,
+    // после чего закэшированный _dom.tripsList указывает на отсоединённый
+    // узел и renderTripsList() молча пишет в никуда (список «не обновлялся»
+    // после удаления/сохранения). Перепривязываем кэш к живому DOM.
+    var liveList = document.getElementById('tripsList');
+    if (liveList && _dom.tripsList !== liveList) {
+      _dom.tripsList = liveList;
+    }
+
     // Re-render the trips list
     renderTripsList();
   }
@@ -1153,26 +1198,25 @@
   function openTripModal(id, onRendered) {
     var trip = _state.trips.find(function(t) { return t.id === id; });
     if (!trip) return;
-    
+
     // Switch to trips tab
     switchTab('trips');
-    
-    // Render trip form in panel
-    renderTripFormInPanel(trip);
-    
-    // getCurrentUser() may still be resolving the session asynchronously on a
-    // fresh page load (_currentUser === null for one tick). Resolve first, then
-    // trigger callback if provided
-    var render = function() { 
-      if (typeof onRendered === 'function') onRendered(trip); 
+
+    // Err3 fix: рендерить форму ТОЛЬКО после resolve сессии. Раньше форма
+    // рендерилась сразу — getCurrentUser() возвращал null на свежей
+    // странице, и кнопки «Удалить»/«Подтвердить» (гейт `trip && user &&`)
+    // просто не попадали в разметку.
+    var renderForm = function() {
+      renderTripFormInPanel(trip);
+      if (typeof onRendered === 'function') onRendered(trip);
     };
-    if (_currentUser) { render(); return; }
+    if (getCurrentUser()) { renderForm(); return; }
     api('GET', 'api/session.php').then(function(response) {
       if (response.ok && response.data && response.data.authenticated) {
         _currentUser = response.data.user;
       }
-      render();
-    }).catch(function() { render(); });
+      renderForm();
+    }).catch(function() { renderForm(); });
   }
 
   /**
@@ -1455,17 +1499,44 @@
     if (!confirm('Удалить командировку?')) {
       return;
     }
-    
-    deleteTrip(id)
-      .then(function() {
-        closeTripModal();
-        if (_currentTab === 'trips') {
-          renderTripsList();
+
+    // Err3 fix: deleteTrip кидает СИНХРОННОЕ исключение ('Командировка не
+    // найдена'), когда id отсутствует в client-state (протухшая форма,
+    // трип удалён в другой сессии и т.п.) — throw улетал мимо .catch
+    // хендлера, клик «ничего не делал». Оборачиваем и лечим перезагрузкой.
+    try {
+      deleteTrip(id)
+        .then(function() {
+          closeTripForm();          // Err3: форма в панели, а не модалка
+          if (_currentTab === 'trips') {
+            renderTripsList();
+          }
+        })
+        .catch(function(error) {
+          if (/не найдена/.test(String(error && error.message))) {
+            // Трип уже нет на сервере/в state — освежаем state, закрываем
+            // протухшую форму и показываем список.
+            loadTrips().then(function() {
+              closeTripForm();
+              renderTripsList();
+              if (typeof window.showToast === 'function') {
+                window.showToast('Командировка уже удалена — список обновлён', 'info');
+              }
+            });
+            return;
+          }
+          showError(null, error.message);
+        });
+    } catch (e) {
+      // Синхронный throw из deleteTrip (трип не в state).
+      loadTrips().then(function() {
+        closeTripForm();
+        renderTripsList();
+        if (typeof window.showToast === 'function') {
+          window.showToast('Командировка не найдена — список обновлён', 'info');
         }
-      })
-      .catch(function(error) {
-        showError(null, error.message);
       });
+    }
   }
 
   /**
