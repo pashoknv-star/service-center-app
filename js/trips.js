@@ -663,6 +663,45 @@
         padding: 20px;
         background: white;
         border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+      }
+      /* Err2 fix: двухколоночный лейаут — Название/Место/Комментарий/Статус
+         слева, участники (ФИО + даты + кнопки) справа. Кнопки действий
+         прижаты к низу и всегда видны внутри панели. */
+      .trip-form-columns {
+        display: flex;
+        gap: 20px;
+        flex: 1 1 auto;
+        min-height: 0;
+        align-items: stretch;
+      }
+      .trip-form-left {
+        flex: 0 0 34%;
+        min-width: 220px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .trip-form-right {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow-y: auto;
+        max-height: 100%;
+      }
+      .trip-panel-actions {
+        position: sticky;
+        bottom: 0;
+        background: white;
+        padding-top: 10px;
+        margin-top: auto;
+        border-top: 1px solid var(--divider);
+        z-index: 2;
       }
       
       .trip-panel-header {
@@ -1047,36 +1086,41 @@
           <h2>${isEdit ? 'Редактирование командировки' : 'Новая командировка'}</h2>
           <button class="trip-panel-close" onclick="window.Trips.closeTripForm()">×</button>
         </div>
-        <div class="trip-form">
-          <div class="trip-form-row">
-            <label class="trip-form-label">Название</label>
-            <input type="text" class="trip-form-input" id="tripTitle" value="${trip ? escapeHtml(trip.title) : ''}" ${isViewer ? 'disabled' : ''}>
-          </div>
-          <div class="trip-form-row">
-            <label class="trip-form-label">Место</label>
-            <input type="text" class="trip-form-input" id="tripLocation" value="${trip ? escapeHtml(trip.location || '') : ''}" ${isViewer ? 'disabled' : ''}>
-          </div>
-          <div class="trip-form-row">
-            <label class="trip-form-label">Комментарий</label>
-            <textarea class="trip-form-input" id="tripComment" rows="3" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.comment || '') : ''}</textarea>
-          </div>
-          <div class="trip-form-row">
-            <label class="trip-form-label">Статус</label>
-            <select class="trip-form-input" id="tripStatus" ${isViewer || (trip && trip.status === TRIP_STATUS.CONFIRMED && !user.isAdmin) ? 'disabled' : ''}>
-              <option value="${TRIP_STATUS.FORECAST}" ${trip && trip.status === TRIP_STATUS.FORECAST ? 'selected' : ''}>Прогнозируемая</option>
-              <option value="${TRIP_STATUS.CONFIRMED}" ${trip && trip.status === TRIP_STATUS.CONFIRMED ? 'selected' : ''}>Подтверждённая</option>
-            </select>
-          </div>
-          <div class="trip-form-row">
-            ${trip && trip.participants && trip.participants.length > 0 ? '<label class="trip-form-label">Участники</label>' : ''}
-            <div id="tripParticipants">
-              ${trip && trip.participants ? trip.participants.map(function(p, i) {
-                return renderParticipantRow(p, i, isViewer);
-              }).join('') : ''}
+        <div class="trip-form-columns">
+          <div class="trip-form-left">
+            <div class="trip-form-row">
+              <label class="trip-form-label">Название</label>
+              <input type="text" class="trip-form-input" id="tripTitle" value="${trip ? escapeHtml(trip.title) : ''}" ${isViewer ? 'disabled' : ''}>
             </div>
-            <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
+            <div class="trip-form-row">
+              <label class="trip-form-label">Место</label>
+              <input type="text" class="trip-form-input" id="tripLocation" value="${trip ? escapeHtml(trip.location || '') : ''}" ${isViewer ? 'disabled' : ''}>
+            </div>
+            <div class="trip-form-row">
+              <label class="trip-form-label">Комментарий</label>
+              <textarea class="trip-form-input" id="tripComment" rows="3" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.comment || '') : ''}</textarea>
+            </div>
+            <div class="trip-form-row">
+              <label class="trip-form-label">Статус</label>
+              <select class="trip-form-input" id="tripStatus" ${isViewer || (trip && trip.status === TRIP_STATUS.CONFIRMED && !user.isAdmin) ? 'disabled' : ''}>
+                <option value="${TRIP_STATUS.FORECAST}" ${trip && trip.status === TRIP_STATUS.FORECAST ? 'selected' : ''}>Прогнозируемая</option>
+                <option value="${TRIP_STATUS.CONFIRMED}" ${trip && trip.status === TRIP_STATUS.CONFIRMED ? 'selected' : ''}>Подтверждённая</option>
+              </select>
+            </div>
           </div>
-          <div class="trip-panel-actions">
+          <div class="trip-form-right">
+            <div class="trip-form-row">
+              ${trip && trip.participants && trip.participants.length > 0 ? '<label class="trip-form-label">Участники</label>' : ''}
+              <div id="tripParticipants">
+                ${trip && trip.participants ? trip.participants.map(function(p, i) {
+                  return renderParticipantRow(p, i, isViewer);
+                }).join('') : ''}
+              </div>
+              <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
+            </div>
+          </div>
+        </div>
+        <div class="trip-panel-actions">
             <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
             <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
             ${trip && canConfirmTrip(trip, user) && trip.status === TRIP_STATUS.FORECAST ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick('${trip.id}')">Подтвердить</button>` : ''}
@@ -1224,10 +1268,10 @@
    * Render participant row
    */
   function renderParticipantRow(participant, index, isViewer) {
-    var participantName = participant.employeeId ? getEmployeeName(participant.employeeId) : '';
+    var participantName = participant.employeeId ? (getEmployeeName(participant.employeeId) || participant.name || '') : (participant.name || '');
     
     return `
-      <div class="trip-participant-row">
+      <div class="trip-participant-row" data-emp-id="${participant.employeeId || ''}">
         <input type="text" class="trip-form-input trip-participant-name" value="${escapeHtml(participantName)}" ${isViewer ? 'disabled' : ''} placeholder="ФИО">
         <input type="date" class="trip-form-input trip-participant-date" value="${participant.startDate || ''}" ${isViewer ? 'disabled' : ''}>
         <input type="date" class="trip-form-input trip-participant-date" value="${participant.endDate || ''}" ${isViewer ? 'disabled' : ''}>
@@ -1248,6 +1292,10 @@
       var nameInput = row.querySelector('.trip-participant-name');
       return {
         name: nameInput.value,
+        // Err2 fix: сохраняем employeeId — rerenderParticipantRows рендерит
+        // ФИО именно по employeeId (renderParticipantRow). Без этого после
+        // удаления одной строки остальные теряли ФИО (пустые поля).
+        employeeId: row.getAttribute('data-emp-id') || null,
         startDate: row.querySelector('.trip-participant-date').value,
         endDate: row.querySelectorAll('.trip-participant-date')[1].value,
         disabled: nameInput.disabled
@@ -1269,6 +1317,13 @@
     participantsContainer.innerHTML = rowData.map(function(data, i) {
       return renderParticipantRow(data, i, !!data.disabled);
     }).join('');
+    // Err2 fix: лейбл «Участники» скрывается и при удалении последнего
+    // участника, не только при первичном рендере формы.
+    var rowsWrap = participantsContainer.closest('.trip-form-row');
+    if (rowsWrap) {
+      var label = rowsWrap.querySelector('.trip-form-label');
+      if (label) label.style.display = rowData.length > 0 ? '' : 'none';
+    }
   }
 
   /**
