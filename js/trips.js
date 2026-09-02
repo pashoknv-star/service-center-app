@@ -1266,7 +1266,7 @@
           <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
         </div>
         <div class="trip-actions">
-          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripModal()">Отмена</button>
+          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
           <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip.id}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
           ${canConfirm ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick('${trip.id}')">Подтвердить</button>` : ''}
           ${canDelete ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
@@ -1301,7 +1301,7 @@
           <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
         </div>
         <div class="trip-actions">
-          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripModal()">Отмена</button>
+          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
           <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip()">Сохранить</button>
         </div>
       `;
@@ -2612,12 +2612,11 @@
 
       // Set confirm mode for toggle behavior
       window._employeePickConfirmMode = true;
-      
-      // Update edge button text to indicate return mode
-      var edge = document.querySelector('.trip-pick-edge');
-      if (edge) {
-        edge.textContent = '← Вернуть';
-      }
+
+      // Err4 fix: по ТЗ один клик по edge-кнопке «✓ Добавить сотрудников»
+      // должен и добавить участников, и вернуть панель в полный режим —
+      // не оставлять её уехавшей с кнопкой «← Вернуть».
+      endEmployeePick();
 
       // Sync the picked employees into the trip form's participant rows (R2 form).
       syncPickedEmployeesToForm(selectedEmployees);

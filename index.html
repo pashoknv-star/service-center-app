@@ -1809,8 +1809,10 @@
     }
     
     /* T5-DEFECT-5: Employee pick dock */
-    .trip-panel-slided {
-      transform: translateX(calc(-100% + 46px));
+    /* Err4 fix: специфичность 0,1,0 проигрывала .vacation-panel.open (0,2,0)
+       → translateX(0) побеждал, панель не уезжала. Квалифицируем по id. */
+    aside.vacation-panel.trip-panel-slided {
+      transform: translateX(calc(-100% + 46px)) !important;
       transition: transform 0.25s ease;
     }
     
@@ -4224,11 +4226,17 @@
 
       if (!isVacationOpen && !isEditorOpen) return;
 
+      // Err4 fix: inline onclick (× участника, «Отмена», перерисовка формы)
+      // перестраивает DOM ПРЯМО ВО ВРЕМЯ всплытия клика — event.target уже
+      // отсоединён от документа, contains() ложно даёт false и панель
+      // ошибочно закрывалась. Отсоединённый target = внутренний клик.
+      if (event.target && event.target.isConnected === false) return;
+
       const inVacation = vacationPanel.contains(event.target);
       const inEditor = editor.contains(event.target);
       const inTrigger = vacationTrigger.contains(event.target);
       const inEmployeeCard = event.target.closest('.employee');
-      const inBtn = event.target.closest('.btn');
+      const inBtn = event.target.closest('.btn, .trip-btn, .trip-pick-edge');
 
       // Клик вне обеих панелей и их элементов управления -> закрываем обе
       if (!inVacation && !inEditor && !inTrigger && !inEmployeeCard && !inBtn) {
