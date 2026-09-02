@@ -3694,7 +3694,23 @@
               document.body.classList.remove('trip-rows-selected');
             }
           } else {
-            // Regular click - open employee card
+            // Regular click - open employee card.
+            // Err1 fix: обычный клик = ВЫБОР первого сотрудника — строка
+            // помечается выбранной, чтобы при последующих ctrl+кликах она
+            // не затемнялась и попадала в автоформу командировки.
+            // Режим мультивыбора (body.trip-rows-selected) при этом НЕ
+            // включается — popup-фильтрация стартует только с ctrl+клика.
+            var allNameCells = matrixBody.querySelectorAll('.name-col[data-emp-id]');
+            allNameCells.forEach(function(otherCell) {
+              var otherRow = otherCell.parentElement;
+              if (otherRow === cell.parentElement) {
+                otherRow.classList.add('trip-row-selected');
+                otherRow.classList.remove('trip-row-dimmed');
+              } else {
+                otherRow.classList.remove('trip-row-selected');
+                otherRow.classList.remove('trip-row-dimmed');
+              }
+            });
             openMatrixEmployeeCard(empId);
           }
         });
@@ -4143,19 +4159,35 @@
                 window.Trips.resetMatrixSelection();
               }
               
-              // Формируем массив участников с датами
-              var startDate = dayOfYearToDate(currentYear, startDay);
-              var endDate = dayOfYearToDate(currentYear, endDay);
+              // Формируем массив участников с датами.
+              // Err1 fix: dayOfYearToDate() возвращает {month, day} — объект,
+              // а не строку 'YYYY-MM-DD'. Формируем строку вручную через
+              // formatDateStr, как это делает createTripFromSelection.
+              var sd = dayOfYearToDate(currentYear, startDay);
+              var ed = dayOfYearToDate(currentYear, endDay);
+              var startDateStr = formatDateStr(currentYear, sd.month, sd.day);
+              var endDateStr = formatDateStr(currentYear, ed.month, ed.day);
               var participants = participantEmpIds.map(function(pid) {
                 return {
                   employeeId: pid,
-                  startDate: startDate,
-                  endDate: endDate
+                  startDate: startDateStr,
+                  endDate: endDateStr
                 };
               });
-              
-              // Открываем форму командировки
-              if (window.Trips.openDraft) {
+
+              // Err1 fix: открываем ФОРМУ В ПАНЕЛИ (V2-A/V2-B), а не старую
+              // draft-модалку openDraft. Также переключаем вкладку на
+              // «Командировки», чтобы форма была видна сразу.
+              if (window.Trips && window.Trips.renderTripFormInPanel) {
+                window.Trips.switchTab('trips');
+                window.Trips.renderTripFormInPanel({
+                  title: 'Командировка',
+                  location: '',
+                  comment: '',
+                  status: 'forecast',
+                  participants: participants
+                });
+              } else if (window.Trips && window.Trips.openDraft) {
                 window.Trips.openDraft(participants);
               }
             }
