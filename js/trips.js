@@ -864,15 +864,20 @@
       }
       .trip-pick-edge-btn {
         display: block;
-        width: 100%;
+        width: 40px;
+        height: 120px;
         padding: 8px 4px;
         border: none;
         border-radius: 6px;
         cursor: pointer;
         font-size: 12px;
         font-weight: 600;
-        white-space: normal;
-        word-wrap: break-word;
+        white-space: nowrap;
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
       .trip-pick-edge-btn-primary {
         background: var(--rt-purple);
@@ -1163,8 +1168,8 @@
         </div>
         <div class="trip-panel-actions">
             <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отменить</button>
-            <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
-            ${trip && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
+            <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip && trip.id ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
+            ${/* Err6 fix: "Удалить" только при редактировании (trip.id); из матрицы приходит псевдо-trip без id */ trip && trip.id && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
           </div>
         </div>
       </div>
@@ -1429,8 +1434,10 @@
    * Save trip (create or update)
    */
   function saveTrip(id) {
-    // Handle 'null' string as falsy (null for create)
-    if (id === 'null') id = null;
+    // E6-T1 fix: строки 'undefined'/'null'/пустая — это «создание», а не
+    // редактирование. Раньше saveTrip('undefined') проходил проверку truthy,
+    // updateTrip бросал синхронное «Командировка не найдена» мимо .catch.
+    if (id === 'null' || id === 'undefined' || id === '') id = null;
     
     var title = document.getElementById('tripTitle').value.trim();
     var location = document.getElementById('tripLocation').value.trim();
@@ -1444,30 +1451,82 @@
     
     var participants = [];
     var participantRows = document.querySelectorAll('#tripParticipants .trip-participant-row');
+    var hasMissingDates = false;
     
     participantRows.forEach(function(row) {
       var name = row.querySelector('.trip-participant-name').value.trim();
+      var attrEmpId = row.getAttribute('data-emp-id');
       var startDate = row.querySelector('.trip-participant-date').value;
       var endDate = row.querySelectorAll('.trip-participant-date')[1].value;
       
-      if (name && startDate && endDate) {
-        // Find employee by name (simplified)
-        var employeeId = findEmployeeIdByName(name);
-        if (!employeeId) {
-          showError(row.querySelector('.trip-participant-name'), 'Сотрудник не найден');
-          return;
-        }
-        
-        participants.push({
-          employeeId: employeeId,
-          startDate: startDate,
-          endDate: endDate
-        });
+      // E6-T1: пропустить строку можно только если она ПОЛНОСТЬЮ пуста —
+      // нет ни имени, ни data-emp-id.
+      if (!name && !attrEmpId) {
+        return;
       }
+      
+      // E6-T1 fix: непустая строка без дат — ошибка валидации формы, а не
+      // «молчаливый пропуск»: раньше такие строки выбрасывались, список
+      // участников оставался пустым и пользователь получал неверное
+      // «Добавьте хотя бы одного участника».
+      if (!startDate || !endDate) {
+        hasMissingDates = true;
+        return;
+      }
+      
+      // E6-T1 fix: employeeId берём ПЕРВИЧНО из data-emp-id строки
+      // (renderParticipantRow/syncPickedEmployeesToForm кладут туда готовый
+      // id выбора). Нормализуем через resolveEmployeesList() к точному id
+      // серверной записи — сравнение с norm() без префикса emp_, как в
+      // confirmEmployeePick; сервер принимает только полные id 'emp_<n>'
+      // (api/trips.php participant_not_found). window.employees хост не
+      // выставляет (IIFE-замыкание index.html), поэтому старый путь
+      // findEmployeeIdByName всегда давал null и строку отбрасывало с
+      // «Сотрудник не найден». Поиск по имени — только fallback для строк
+      // без data-emp-id.
+      var employeeId = null;
+      if (attrEmpId) {
+        var norm = function(v) { return String(v).replace(/^emp_/, ''); };
+        var wanted = norm(attrEmpId);
+        var employee = resolveEmployeesList().find(function(e) { return norm(e.id) === wanted; });
+        employeeId = employee ? employee.id : null;
+      } else {
+        employeeId = findEmployeeIdByName(name);
+      }
+      if (!employeeId) {
+        showError(row.querySelector('.trip-participant-name'), 'Сотрудник не найден');
+        return;
+      }
+      // Канонический формат id для API — 'emp_<n>' (та же нормализация, что
+      // в selectTripForEmployee): __serverEmployees отдаёт legacy-числовые
+      // id, а api/trips.php ищет участника по полному 'emp_<n>'.
+      employeeId = /^emp_/.test(String(employeeId)) ? String(employeeId) : 'emp_' + employeeId;
+      
+      
+      participants.push({
+        employeeId: employeeId,
+        startDate: startDate,
+        endDate: endDate
+      });
     });
     
-    if (participants.length === 0) {
+    // E6-T1 fix: даты обязательны — ровно это сообщение и никаких
+    // запросов к серверу.
+    if (hasMissingDates) {
+      showError(null, 'Укажите даты командировки');
+      return;
+    }
+    
+    // «Добавьте хотя бы одного участника» — только когда строк участников
+    // нет вообще (пустой #tripParticipants), а не когда строки без дат.
+    if (participants.length === 0 && participantRows.length === 0) {
       showError(null, 'Добавьте хотя бы одного участника');
+      return;
+    }
+    if (participants.length === 0) {
+      // Строки были, но ни одна не собралась: ошибка уже показана на строке
+      // («Сотрудник не найден») либо все строки полностью пусты — сервер
+      // не дёргаем.
       return;
     }
     
@@ -1789,16 +1848,25 @@
   }
 
   /**
-   * Find employee ID by name (simplified)
+   * Find employee ID by name (fallback for rows without data-emp-id).
+   *
+   * E6-T1 fix: раньше читали только window.employees, который хост-страница
+   * НЕ выставляет (employees — closure `let` в IIFE index.html), поэтому
+   * функция всегда возвращала null и saveTrip отбрасывал строку с
+   * «Сотрудник не найден». Теперь источник — resolveEmployeesList()
+   * (server-mirror __serverEmployees → window.employees → DOM-матрица),
+   * сравнение по name/fullName без регистра. window.employees оставлен
+   * первым источником на случай, если хост вдруг выставит его.
    */
   function findEmployeeIdByName(name) {
-    if (typeof window.employees !== 'undefined') {
-      var employee = window.employees.find(function(e) { 
-        return e.name.toLowerCase() === name.toLowerCase(); 
-      });
-      return employee ? employee.id : null;
-    }
-    return null;
+    if (!name) return null;
+    var wanted = String(name).trim().toLowerCase();
+    var employees = resolveEmployeesList();
+    var employee = employees.find(function(e) {
+      var n = e.name || e.fullName || '';
+      return String(n).trim().toLowerCase() === wanted;
+    });
+    return employee ? employee.id : null;
   }
 
   /**

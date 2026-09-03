@@ -185,8 +185,10 @@ if (pickEdgeCss) {
     /position:\s*fixed/.test(r) && /left:\s*0/.test(r) && /top:\s*50%/.test(r) && /translateY\(-50%\)/.test(r));
   const w = r.match(/width:\s*(\d+)px/);
   check('css: container width ~50px (50-64 range)', !!w && +w[1] >= 50 && +w[1] <= 64, w && w[1]);
-  check('css: no text rotation (no rotate anywhere in edge rules)',
-    !/rotate/.test(css.split('/* E5-1')[1] || ''));
+  // E6-T3 (владелец, «Ошибки 6»): требование 0° ОТМЕНЕНО — текст ярлыка теперь
+  // ОБЯЗАН быть повёрнут (90°, чтение снизу вверх). Ассерт E5 заменён:
+  check('css: vertical text (writing-mode + rotate for bottom-up reading)',
+    /writing-mode:\s*vertical-rl/.test(css) && /rotate\(180deg\)/.test(css));
 }
 check('css: primary button styled with --rt-purple',
   /\.trip-pick-edge-btn-primary\s*\{[^}]*--rt-purple/.test(css));
