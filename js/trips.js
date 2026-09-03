@@ -841,29 +841,52 @@
         cursor: not-allowed;
       }
       
-      /* R3 (замечание 10): edge-кнопка на видимой кромке уехавшей панели.
-         Панель уезжает на translateX(calc(-100% + 46px)) — её правая кромка
-         стоит на 46px от левого края; кнопка живёт на этой кромке, а НЕ на
-         left:0 экрана (как было с dock). */
+      /* E5-1: вертикальный контейнер-ярлык pick-режима «Добавить сотрудника».
+         Панель уезжает за левый край ПОЛНОСТЬЮ (translateX(-100%), left:0),
+         поэтому ярлык живёт отдельно, fixed у левого края экрана (append в
+         body), НЕ на кромке панели. Две кнопки столбиком, текст 0°. */
       .trip-pick-edge {
         position: fixed;
-        left: 46px;
+        left: 0;
         top: 50%;
         transform: translateY(-50%);
+        width: 56px;
         z-index: 1150;
-        padding: 14px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 6px;
+        box-sizing: border-box;
+        background: #fff;
+        border: 1px solid var(--divider);
+        border-radius: 0 10px 10px 0;
+        box-shadow: 4px 0 16px rgba(0, 0, 0, 0.18);
+      }
+      .trip-pick-edge-btn {
+        display: block;
+        width: 100%;
+        padding: 8px 4px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: normal;
+        word-wrap: break-word;
+      }
+      .trip-pick-edge-btn-primary {
         background: var(--rt-purple);
         color: white;
-        border: none;
-        border-radius: 0 10px 10px 0;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: 600;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-        white-space: nowrap;
       }
-      .trip-pick-edge:hover {
+      .trip-pick-edge-btn-primary:hover {
         background: color-mix(in srgb, var(--rt-purple) 85%, black);
+      }
+      .trip-pick-edge-btn-secondary {
+        background: rgba(119, 0, 255, 0.06);
+        color: var(--text);
+      }
+      .trip-pick-edge-btn-secondary:hover {
+        background: rgba(119, 0, 255, 0.12);
       }
     `;
     document.head.appendChild(style);
@@ -1139,9 +1162,8 @@
           </div>
         </div>
         <div class="trip-panel-actions">
-            <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
+            <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отменить</button>
             <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
-            ${trip && canConfirmTrip(trip, user) && trip.status === TRIP_STATUS.FORECAST ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick('${trip.id}')">Подтвердить</button>` : ''}
             ${trip && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
           </div>
         </div>
@@ -1266,9 +1288,8 @@
           <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
         </div>
         <div class="trip-actions">
-          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
+          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отменить</button>
           <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip.id}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
-          ${canConfirm ? `<button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.handleConfirmTripClick('${trip.id}')">Подтвердить</button>` : ''}
           ${canDelete ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
         </div>
       `;
@@ -1301,7 +1322,7 @@
           <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
         </div>
         <div class="trip-actions">
-          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
+          <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отменить</button>
           <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip()">Сохранить</button>
         </div>
       `;
@@ -2135,6 +2156,7 @@
     startCalendarPick: startCalendarPick,
     startEmployeePick: startEmployeePick,
     confirmEmployeePick: confirmEmployeePick,
+    cancelEmployeePick: cancelEmployeePick,
     endEmployeePick: endEmployeePick
   };
 
@@ -2457,42 +2479,53 @@
       Trips.suppressInfoPanel = function() { return true; };
       window._employeePickActive = true;
 
-      // Slide the vacation panel so only its right edge (with the button) stays.
+      // E5-1: панель уезжает за левый край ПОЛНОСТЬЮ — только классом. Панель
+      // ОСТАЁТСЯ position:fixed (никаких sticky): layout страницы не
+      // пересчитывается, основное поле не сдвигается.
       var vacationPanel = document.querySelector('.vacation-panel');
       if (vacationPanel) {
         vacationPanel.classList.add('trip-panel-slided');
-        vacationPanel.style.position = 'sticky';
       }
 
-      // Edge button on the VISIBLE edge of the slid panel (left:46px — the
-      // panel's right edge after translateX(calc(-100% + 46px)), NOT left:0).
-      // Повторное нажатие = подтвердить добавление выбранных / возврат в режим формы.
+      // E5-1: вертикальный контейнер-ярлык у левого края экрана
+      // (position:fixed, append в body — НЕ внутрь панели, панель полностью
+      // уехала). Две кнопки столбиком, текст горизонтальный (0°):
+      // «Подтвердить» → confirmEmployeePick(), «Отменить» → cancelEmployeePick().
       var existingEdge = document.querySelector('.trip-pick-edge');
       if (existingEdge) existingEdge.remove();
-      var edge = document.createElement('button');
+      var edge = document.createElement('div');
       edge.className = 'trip-pick-edge';
-      edge.type = 'button';
-      edge.textContent = '✓ Добавить сотрудников';
-      edge.addEventListener('click', function() {
-        if (window._employeePickConfirmMode) {
-          // Click again to return to form mode
-          endEmployeePick();
-        } else {
-          // First click to confirm selection
-          confirmEmployeePick();
-        }
+
+      var btnConfirm = document.createElement('button');
+      btnConfirm.type = 'button';
+      btnConfirm.className = 'trip-pick-edge-btn trip-pick-edge-btn-primary';
+      btnConfirm.textContent = 'Подтвердить';
+      btnConfirm.addEventListener('click', function() {
+        confirmEmployeePick();
       });
+
+      var btnCancel = document.createElement('button');
+      btnCancel.type = 'button';
+      btnCancel.className = 'trip-pick-edge-btn trip-pick-edge-btn-secondary';
+      btnCancel.textContent = 'Отменить';
+      btnCancel.addEventListener('click', function() {
+        cancelEmployeePick();
+      });
+
+      edge.appendChild(btnConfirm);
+      edge.appendChild(btnCancel);
       document.body.appendChild(edge);
 
-      // Ctrl+click по карточкам сотрудников на странице (ТЗ: пользователь
-      // УДЕРЖИВАЕТ CTRL и кликает). Листенер вешается на document (capture),
-      // чтобы перехватывать Ctrl+клик по .employee ДО того, как host-обработчик
-      // откроет карточку. Клики без Ctrl проходят как обычно (карточка/редактор).
-      // Используем ТОЛЬКО штатный класс .employee.selected — новых подсветок нет.
+      // E5-2: клики по карточкам сотрудников на странице в пик-режиме.
+      // Листенер вешается на document (capture), чтобы перехватывать клик по
+      // .employee ДО того, как host-обработчик откроет карточку. ЛЮБОЙ клик
+      // по карточке (с Ctrl и без) перехватывается: preventDefault +
+      // stopPropagation — «Карточка сотрудника» НЕ выезжает. Обычный клик =
+      // одиночный выбор (замещает прежний), Ctrl/Cmd+клик = toggle
+      // (мультивыбор). Используем ТОЛЬКО штатный класс .employee.selected —
+      // новых подсветок нет.
       var clickHandler = function(event) {
         if (!window._employeePickActive) return;
-        // Only Ctrl/Cmd+click picks on the page; other clicks behave normally.
-        if (!(event.ctrlKey || event.metaKey)) return;
         var card = event.target && event.target.closest ? event.target.closest('.employee') : null;
         if (!card) return;
         // Не перехватываем клики по элементам управления внутри карточки.
@@ -2500,10 +2533,18 @@
         var empId = card.getAttribute('data-id');
         if (!empId) return;
 
+        // E5-2: любой клик по карточке в пик-режиме не доходит до
+        // host-обработчика карточки.
         event.preventDefault();
         event.stopPropagation();
 
-        toggleEmployeePickSelection(card, empId);
+        if (event.ctrlKey || event.metaKey) {
+          // Ctrl/Cmd+клик — добавить к выбору (или снять, если уже выбрана).
+          toggleEmployeePickSelection(card, empId);
+        } else {
+          // Обычный клик — выбрать эту карточку, прежний выбор сбросить.
+          selectSingleEmployeePick(card, empId);
+        }
       };
       document.addEventListener('click', clickHandler, true);
       window._employeePickClickHandler = clickHandler;
@@ -2542,6 +2583,55 @@
       }
 
       console.log(LOG_PREFIX, 'Employee selection toggled:', normId, 'selected:', window.Trips.pickedEmployees.has(normId));
+    }
+
+    /**
+     * E5-2: одиночный выбор обычным кликом в пик-режиме. Прежний выбор
+     * сбрасывается (штатная подсветка .selected снимается у всех карточек из
+     * набора pickedEmployees), затем выбирается только эта карточка.
+     */
+    function selectSingleEmployeePick(card, empId) {
+      var normId = String(empId == null ? (card.getAttribute('data-id') || '') : empId).replace(/^emp_/, '');
+      if (!normId) return;
+
+      if (!window.Trips.pickedEmployees) {
+        window.Trips.pickedEmployees = new Set();
+      }
+
+      clearEmployeePickHighlights();
+
+      window.Trips.pickedEmployees.add(normId);
+      card.classList.add('selected');
+
+      console.log(LOG_PREFIX, 'Employee selected (single):', normId, 'picked:', Array.from(window.Trips.pickedEmployees).join(','));
+    }
+
+    /**
+     * E5-2: снять штатную подсветку .selected у всех карточек, входящих в
+     * текущий набор pickedEmployees, и очистить набор.
+     */
+    function clearEmployeePickHighlights() {
+      // E5 G2 fix (координатор, микрофикс по политике E10): снимаем подсветку
+      // со ВСЕХ выбранных карточек, а не только входящих в текущий набор.
+      // Иначе после confirmEmployeePick (подсветка остаётся, набор зануляется)
+      // и повторного пика «осиротевшие» подсветки переживают cancel —
+      // ТЗ E5-2: «снять .selected со всех выбранных карточек».
+      document.querySelectorAll('.employee.selected').forEach(function(el) {
+        el.classList.remove('selected');
+      });
+      if (window.Trips.pickedEmployees) {
+        window.Trips.pickedEmployees.clear();
+      }
+    }
+
+    /**
+     * E5-2: кнопка «Отменить» — сбросить выбор (подсветка + набор) и вернуть
+     * панель БЕЗ добавления участников.
+     */
+    function cancelEmployeePick() {
+      clearEmployeePickHighlights();
+      console.log(LOG_PREFIX, 'Employee pick cancelled — selection cleared');
+      endEmployeePick();
     }
 
     function positionEmployeePickDock() {
@@ -2612,6 +2702,12 @@
 
       // Set confirm mode for toggle behavior
       window._employeePickConfirmMode = true;
+
+      // E5 G2 fix (координатор): пик завершён — подсветки выбора больше не
+      // нужны (участники видны в строках формы), снимаем их ДО endEmployeePick,
+      // пока набор ещё жив. Иначе подсвеченные карточки «зависают» до
+      // следующего пика.
+      clearEmployeePickHighlights();
 
       // Err4 fix: по ТЗ один клик по edge-кнопке «✓ Добавить сотрудников»
       // должен и добавить участников, и вернуть панель в полный режим —

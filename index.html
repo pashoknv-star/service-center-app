@@ -1809,10 +1809,13 @@
     }
     
     /* T5-DEFECT-5: Employee pick dock */
-    /* Err4 fix: специфичность 0,1,0 проигрывала .vacation-panel.open (0,2,0)
-       → translateX(0) побеждал, панель не уезжала. Квалифицируем по id. */
+    /* E5-1: панель уезжает за левый край ПОЛНОСТЬЮ (включая рамку):
+       left:0 гасит базовый left:3px, translateX(-100%) прячет всю панель.
+       Никаких «+46px» — на экране остаётся только отдельный ярлык
+       .trip-pick-edge (fixed, append в body). */
     aside.vacation-panel.trip-panel-slided {
-      transform: translateX(calc(-100% + 46px)) !important;
+      left: 0;
+      transform: translateX(-100%) !important;
       transition: transform 0.25s ease;
     }
     
