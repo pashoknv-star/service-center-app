@@ -151,10 +151,62 @@ try {
                     updated_at           = excluded.updated_at'
             );
             $keepEmpIds = [];
+            // --- E10-2 (2026-09-19): защита от массового затирания устаревшим клиентом ---
+            // Инцидент 2026-09-18 06:43: автосейв вкладки со старым state одним запросом
+            // затёр photo_url (~40 сотрудников) и location (~43), откатил фамилии/позиции/
+            // сортировку. Сигнатура: >=3 сотрудников в ОДНОМ запросе получают ПУСТОЕ
+            // значение поля, которое в БД непустое (photo_url/location). Такие строки
+            // замораживаются (серверные значения сохраняются), аудит: employee.wipe_blocked.
+            // Порог 3 не мешает легитимным поштучным операциям: каждый клик «Удалить фото»
+            // или очистка локации вызывает свой save с ОДНИМ затиранием; сортировка и
+            // переименования под гард не попадают (меняются, а не emptied).
+            $wipeSuspects = [];
+            try {
+                $curMap = [];
+                $resCur = $pdo->query('SELECT id, photo_url, location FROM employees');
+                while ($r = $resCur->fetch(PDO::FETCH_ASSOC)) {
+                    $curMap[(string) $r['id']] = $r;
+                }
+                foreach ($body['employees'] as $e) {
+                    if (!is_array($e) || !array_key_exists('id', $e)) {
+                        continue;
+                    }
+                    $eid = (string) $e['id'];
+                    if (!isset($curMap[$eid])) {
+                        continue; // новой строке нечего затирать
+                    }
+                    $newPhoto = $e['photo_url'] ?? $e['photoUrl'] ?? $e['photo'] ?? null;
+                    $newLoc   = $e['location'] ?? null;
+                    $photoWipe = ($curMap[$eid]['photo_url'] !== null && $curMap[$eid]['photo_url'] !== '')
+                        && ($newPhoto === null || $newPhoto === '');
+                    $locWipe = ($curMap[$eid]['location'] !== null && $curMap[$eid]['location'] !== '')
+                        && ($newLoc === null || $newLoc === '');
+                    if ($photoWipe || $locWipe) {
+                        $wipeSuspects[$eid] = true;
+                    }
+                }
+            } catch (Throwable $_we) {
+                $wipeSuspects = []; // при ошибке выборки гард не срабатывает (безопасный отказ)
+            }
+            $staleWipe = count($wipeSuspects) >= 3;
+            if ($staleWipe) {
+                try {
+                    audit($pdo, 'employee.wipe_blocked', null, null, 'employee',
+                        implode(',', array_keys($wipeSuspects)),
+                        ['suspectCount' => count($wipeSuspects),
+                         'reason' => 'mass blank of photo_url/location in a single request (stale client suspected); server values kept']);
+                } catch (Throwable $_ae) { /* non-critical */ }
+            }
             // E5-6: предварительный выборка для аудита create vs update.
             $stmtPreSel = null;
             foreach ($body['employees'] as $e) {
                 $id = $e['id'] ?? genId('emp_');
+                // E10-2: замороженные строки не обновляем (сервер — истина), но
+                // регистрируем их в keepIds, чтобы sync-delete их не удалил.
+                if ($staleWipe && isset($wipeSuspects[(string) $id])) {
+                    $keepEmpIds[(string) $id] = true;
+                    continue;
+                }
                 // Для новых записей created_at = ts; для существующих сохраняем.
                 $createdAt = $e['created_at'] ?? $ts;
                 // --- E5-6: SELECT до execute для определения create/update ---
@@ -226,34 +278,53 @@ try {
                 $keepEmpIds[$id] = true;
             }
             // Удаляем сотрудников, которых нет в payload (вместе с их записями матрицы).
+            // --- E10-2 (2026-09-19): защита от массового удаления устаревшим клиентом ---
+            // Легитимный UI удаляет ПОШТУЧНО (кнопка «Удалить» → свой save с 1 удалением).
+            // >=3 отсутствующих в одном запросе — сигнатура stale-вкладки: блокируем
+            // все удаления этого запроса, серверные строки сохраняем, аудит
+            // employee.mass_delete_blocked. Внешний импорт идёт через import.php
+            // и этим гардом не затрагивается.
             if (!empty($keepEmpIds)) {
                 $existing = $pdo->query('SELECT id FROM employees')->fetchAll(PDO::FETCH_COLUMN);
-                $stmtDelEmp = $pdo->prepare('DELETE FROM employees WHERE id = :id');
-                $stmtDelEnt = $pdo->prepare('DELETE FROM schedule_entries WHERE employee_id = :id');
+                $toDelete = [];
                 foreach ($existing as $oldId) {
                     if (!isset($keepEmpIds[$oldId])) {
-                        // E5-6: прочитать удаляемого сотрудника для аудита.
-                        try {
-                            $stmtD = $pdo->prepare('SELECT full_name FROM employees WHERE id = :eid LIMIT 1');
-                            $stmtD->bindValue(':eid', $oldId, PDO::PARAM_STR);
-                            $stmtD->execute();
-                            $delRow = $stmtD->fetch(PDO::FETCH_ASSOC);
-                        } catch (Throwable $_d) { $delRow = null; }
-                        $stmtDelEnt->bindValue(':id', $oldId, PDO::PARAM_STR);
-                        $stmtDelEnt->execute();
-                        $stmtDelEmp->bindValue(':id', $oldId, PDO::PARAM_STR);
-                        $stmtDelEmp->execute();
-                        // E8: журнал синхронизации (удаление сотрудника).
-                        sync_log($pdo, 'employee', $oldId, 'delete', $ts);
-                        // E5-6: аудит удаления сотрудника (UI-путь).
-                        try {
-                            if ($delRow && isset($delRow['full_name'])) {
-                                audit($pdo, 'employee.delete', null, null, 'employee', $oldId, [
-                                    'fullName' => $delRow['full_name'],
-                                ]);
-                            }
-                        } catch (Throwable $_e) { /* non-critical */ }
+                        $toDelete[] = $oldId;
                     }
+                }
+                if (count($toDelete) >= 3) {
+                    try {
+                        audit($pdo, 'employee.mass_delete_blocked', null, null, 'employee',
+                            implode(',', $toDelete),
+                            ['deleteCount' => count($toDelete),
+                             'reason' => '>=3 employees missing from a single full-state payload (stale client suspected); server rows kept']);
+                    } catch (Throwable $_ae2) { /* non-critical */ }
+                    $toDelete = [];
+                }
+                $stmtDelEmp = $pdo->prepare('DELETE FROM employees WHERE id = :id');
+                $stmtDelEnt = $pdo->prepare('DELETE FROM schedule_entries WHERE employee_id = :id');
+                foreach ($toDelete as $oldId) {
+                    // E5-6: прочитать удаляемого сотрудника для аудита.
+                    try {
+                        $stmtD = $pdo->prepare('SELECT full_name FROM employees WHERE id = :eid LIMIT 1');
+                        $stmtD->bindValue(':eid', $oldId, PDO::PARAM_STR);
+                        $stmtD->execute();
+                        $delRow = $stmtD->fetch(PDO::FETCH_ASSOC);
+                    } catch (Throwable $_d) { $delRow = null; }
+                    $stmtDelEnt->bindValue(':id', $oldId, PDO::PARAM_STR);
+                    $stmtDelEnt->execute();
+                    $stmtDelEmp->bindValue(':id', $oldId, PDO::PARAM_STR);
+                    $stmtDelEmp->execute();
+                    // E8: журнал синхронизации (удаление сотрудника).
+                    sync_log($pdo, 'employee', $oldId, 'delete', $ts);
+                    // E5-6: аудит удаления сотрудника (UI-путь).
+                    try {
+                        if ($delRow && isset($delRow['full_name'])) {
+                            audit($pdo, 'employee.delete', null, null, 'employee', $oldId, [
+                                'fullName' => $delRow['full_name'],
+                            ]);
+                        }
+                    } catch (Throwable $_e) { /* non-critical */ }
                 }
             }
         }

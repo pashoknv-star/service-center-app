@@ -1743,7 +1743,25 @@ try {
         assertTrue($exists > 0, 'test employee should exist before delete');
         // Count existing employee.delete records
         $cntBefore = (int) $pdoB->query("SELECT COUNT(*) FROM audit_log WHERE action='employee.delete'")->fetchColumn();
-        // Call save.php with ONLY the fixture employee (no e56 emp in payload) -> triggers SYNC delete of e56
+        // E10-2 (2026-09-19): payload должен отражать реальный фронт — полное
+        // состояние МИНУС удаляемый сотрудник. Payload «только один сотрудник»
+        // теперь корректно блокируется гардом массового удаления (>=3 отсутствующих).
+        $keepEmployees = [];
+        foreach ($pdoB->query("SELECT id, full_name, position_id, group_id, location, phone, photo_url, is_technical, requires_full_profile, sort_order FROM employees WHERE id != '$runE56TestEmpId'") as $row) {
+            $keepEmployees[] = [
+                'id' => $row['id'],
+                'fullName' => $row['full_name'],
+                'positionId' => $row['position_id'],
+                'groupId' => $row['group_id'],
+                'location' => $row['location'],
+                'phone' => $row['phone'],
+                'photo' => $row['photo_url'],
+                'isTechnical' => (bool) $row['is_technical'],
+                'requiresFullProfile' => (bool) $row['requires_full_profile'],
+                'sortOrder' => $row['sort_order'],
+            ];
+        }
+        // Call save.php with all employees EXCEPT e56 (e56 gets deleted by SYNC)
         $r = httpRequest('POST', $base . '/api/save.php', [
             'cookie' => $cookieAdmin,
             'body' => [
@@ -1751,12 +1769,7 @@ try {
                 'entries' => [],
                 'groups' => [['id' => 'g0', 'name' => 'Smoke Fixture Group', 'sort_order' => 0]],
                 'positions' => [['id' => 'pos_master', 'name' => 'Master', 'sort_order' => 0]],
-                'employees' => [[ // only keep the fixture; e56 gets deleted by SYNC
-                    'id' => 'emp_1',
-                    'fullName' => 'Smoke Fixture Employee',
-                    'positionId' => 'pos_master',
-                    'groupId' => 'g0',
-                ]],
+                'employees' => $keepEmployees,
                 'holidays' => [],
                 'vacationBalances' => [],
             ],
