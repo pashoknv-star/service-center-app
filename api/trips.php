@@ -12,12 +12,22 @@ declare(strict_types=1);
  *                                              { success, trips: [...], lastSyncId }
  * POST api/trips.php                          — создание (auth + edit + зона)
  *      body: { title, location?, comment?, status?('forecast'|'confirmed'),
- *              participants: [{employeeId, startDate, endDate}] (>=1) }
+ *              participants: [{employeeId, startDate, endDate}] (>=1),
+ *              origin?, hotel?, transportOutRequired?, transportOutMode?,
+ *              transportBackRequired?, transportBackMode?, advanceAmount?,
+ *              businessProcess?, phone? }
+ *              — E12-1, RPA v1.2 (HelpMe); отсутствующие поля -> NULL.
  * PUT  api/trips.php?id=trip_...              — изменение полей/состава/дат
  *      body: { title?, location?, comment?, status?,
- *              participants?: [...], entryVersion? }  (E8-сверка версии)
+ *              participants?: [...], entryVersion?,  (E8-сверка версии)
+ *              <те же RPA-поля v1.2, что в POST> }
  * PUT  api/trips.php?id=trip_...&action=confirm — forecast -> confirmed
  * DELETE api/trips.php?id=trip_...            — удаление (confirmed — только admin)
+ *
+ * Валидация RPA v1.2 (E12-1): advanceAmount — целое >= 0 (иначе 400
+ * advance_invalid); transportOutMode/transportBackMode — 'avia' | 'zd'
+ * (иначе 400 transport_mode_invalid); origin/hotel/businessProcess/phone —
+ * строки (trim, пустая строка -> NULL).
  *
  * Права:
  *   admin      — всё, включая правку/удаление confirmed.
@@ -76,7 +86,10 @@ function trips_valid_date(string $d): bool
 function trips_fetch(PDO $pdo, string $id): ?array
 {
     $stmtT = $pdo->prepare(
-        'SELECT id, title, location, comment, status, version, created_by, created_at, updated_at
+        'SELECT id, title, location, comment, status, version, created_by, created_at, updated_at,
+                origin, hotel, transport_out_required, transport_out_mode,
+                transport_back_required, transport_back_mode, advance_amount,
+                business_process, phone
          FROM trips WHERE id = :id LIMIT 1'
     );
     $stmtT->bindValue(':id', $id, PDO::PARAM_STR);
@@ -111,6 +124,17 @@ function trips_fetch(PDO $pdo, string $id): ?array
         'createdBy'    => $row['created_by'],
         'createdAt'    => $row['created_at'],
         'updatedAt'    => $row['updated_at'],
+        // E12-1: RPA v1.2 (HelpMe). Транспортные флаги — 0/1 (NULL -> 1,
+        // т.к. миграция для существующих строк ставит «плечо нужно»).
+        'origin'       => $row['origin'],
+        'hotel'        => $row['hotel'],
+        'transportOutRequired'  => $row['transport_out_required'] === null ? 1 : (int) $row['transport_out_required'],
+        'transportOutMode'      => $row['transport_out_mode'],
+        'transportBackRequired' => $row['transport_back_required'] === null ? 1 : (int) $row['transport_back_required'],
+        'transportBackMode'     => $row['transport_back_mode'],
+        'advanceAmount' => $row['advance_amount'] === null ? null : (int) $row['advance_amount'],
+        'businessProcess' => $row['business_process'],
+        'phone'        => $row['phone'],
         'participants' => $participants,
     ];
 }
@@ -198,6 +222,88 @@ function trips_normalize_participants(array $raw, PDO $pdo): ?array
     return $participants !== [] ? $participants : null;
 }
 
+/**
+ * E12-1: нормализует и валидирует RPA-поля v1.2 (HelpMe) из body.
+ *
+ * @param array $body       Тело запроса (POST/PUT).
+ * @param bool  $isPut      true для PUT (отсутствующее поле = «не менять»).
+ * @param array $existing    Текущий trip (только для PUT).
+ * @return array Значения для INSERT/UPDATE: ключ -> значение (или NULL).
+ */
+function trips_normalize_rpa_fields(array $body, bool $isPut, array $existing = []): array
+{
+    // --- Строки: origin/hotel/businessProcess/phone (trim, '' -> NULL) ---
+    $textFields = [
+        'origin'          => 'origin',
+        'hotel'           => 'hotel',
+        'businessProcess' => 'business_process',
+        'phone'           => 'phone',
+    ];
+    $out = [];
+    foreach ($textFields as $bodyKey => $col) {
+        if (!$isPut || array_key_exists($bodyKey, $body)) {
+            $v = isset($body[$bodyKey]) && $body[$bodyKey] !== null ? trim((string) $body[$bodyKey]) : '';
+            $out[$col] = $v !== '' ? $v : null;
+        }
+    }
+
+    // --- Целочисленные флаги: transportOutRequired/transportBackRequired ---
+    $boolFields = [
+        'transportOutRequired'  => 'transport_out_required',
+        'transportBackRequired' => 'transport_back_required',
+    ];
+    foreach ($boolFields as $bodyKey => $col) {
+        if (!$isPut || array_key_exists($bodyKey, $body)) {
+            $raw = $body[$bodyKey] ?? null;
+            if ($raw === null || $raw === '') {
+                $out[$col] = null; // поле отсутствует/пустое -> NULL (POST)
+            } elseif (is_bool($raw)) {
+                $out[$col] = $raw ? 1 : 0;
+            } elseif (is_int($raw)) {
+                $out[$col] = $raw === 0 ? 0 : 1;
+            } elseif (is_string($raw) && ($raw === '0' || $raw === '1')) {
+                $out[$col] = (int) $raw;
+            } else {
+                $out[$col] = 1; // «плечо нужно» — толерантная интерпретация truthy
+            }
+        }
+    }
+
+    // --- Сумма аванса: целое >= 0, иначе 400 advance_invalid ---
+    if (!$isPut || array_key_exists('advanceAmount', $body)) {
+        $raw = $body['advanceAmount'] ?? null;
+        if ($raw === null || $raw === '') {
+            $out['advance_amount'] = null;
+        } elseif (is_int($raw) && $raw >= 0) {
+            $out['advance_amount'] = $raw;
+        } elseif (is_string($raw) && preg_match('/^\d+$/', $raw) === 1) {
+            $out['advance_amount'] = (int) $raw;
+        } else {
+            sendJson(['error' => 'advance_invalid'], 400);
+        }
+    }
+
+    // --- Способ «выезд»/«возврат»: только 'avia' | 'zd' ---
+    $modeFields = [
+        'transportOutMode'  => 'transport_out_mode',
+        'transportBackMode' => 'transport_back_mode',
+    ];
+    foreach ($modeFields as $bodyKey => $col) {
+        if (!$isPut || array_key_exists($bodyKey, $body)) {
+            $raw = $body[$bodyKey] ?? null;
+            if ($raw === null || $raw === '') {
+                $out[$col] = null;
+            } elseif (is_string($raw) && in_array($raw, ['avia', 'zd'], true)) {
+                $out[$col] = $raw;
+            } else {
+                sendJson(['error' => 'transport_mode_invalid'], 400);
+            }
+        }
+    }
+
+    return $out;
+}
+
 try {
     $db = Database::getInstance();
     $pdo = $db->getPDO();
@@ -258,6 +364,9 @@ try {
         // Валидация списка участников и существования сотрудников.
         $participants = trips_normalize_participants($rawParticipants, $pdo);
 
+        // E12-1: RPA-поля v1.2 (отсутствующие -> NULL).
+        $rpa = trips_normalize_rpa_fields($body, false);
+
         $pdo->beginTransaction();
         try {
             // --- Зона: не-admin (supervisor) — все участники должны быть его зоны ---
@@ -301,8 +410,14 @@ try {
             $username = is_array($user) && !empty($user['username'])
                 ? (string) $user['username'] : 'api';
             $stmtTrip = $pdo->prepare(
-                'INSERT INTO trips (id, title, location, comment, status, version, created_by, created_at, updated_at)
-                 VALUES (:id, :title, :location, :comment, :status, 1, :created_by, :ts, :ts)'
+                'INSERT INTO trips (id, title, location, comment, status, version, created_by, created_at, updated_at,
+                                    origin, hotel, transport_out_required, transport_out_mode,
+                                    transport_back_required, transport_back_mode, advance_amount,
+                                    business_process, phone)
+                 VALUES (:id, :title, :location, :comment, :status, 1, :created_by, :ts, :ts,
+                         :origin, :hotel, :transport_out_required, :transport_out_mode,
+                         :transport_back_required, :transport_back_mode, :advance_amount,
+                         :business_process, :phone)'
             );
             $stmtTrip->bindValue(':id', $id, PDO::PARAM_STR);
             $stmtTrip->bindValue(':title', $title, PDO::PARAM_STR);
@@ -311,6 +426,15 @@ try {
             $stmtTrip->bindValue(':status', $status, PDO::PARAM_STR);
             $stmtTrip->bindValue(':created_by', $username, PDO::PARAM_STR);
             $stmtTrip->bindValue(':ts', $ts, PDO::PARAM_STR);
+            $stmtTrip->bindValue(':origin', $rpa['origin'], PDO::PARAM_STR);
+            $stmtTrip->bindValue(':hotel', $rpa['hotel'], PDO::PARAM_STR);
+            $stmtTrip->bindValue(':transport_out_required', $rpa['transport_out_required'] === null ? null : (int) $rpa['transport_out_required'], PDO::PARAM_INT);
+            $stmtTrip->bindValue(':transport_out_mode', $rpa['transport_out_mode'], PDO::PARAM_STR);
+            $stmtTrip->bindValue(':transport_back_required', $rpa['transport_back_required'] === null ? null : (int) $rpa['transport_back_required'], PDO::PARAM_INT);
+            $stmtTrip->bindValue(':transport_back_mode', $rpa['transport_back_mode'], PDO::PARAM_STR);
+            $stmtTrip->bindValue(':advance_amount', $rpa['advance_amount'] === null ? null : (int) $rpa['advance_amount'], PDO::PARAM_INT);
+            $stmtTrip->bindValue(':business_process', $rpa['business_process'], PDO::PARAM_STR);
+            $stmtTrip->bindValue(':phone', $rpa['phone'], PDO::PARAM_STR);
             $stmtTrip->execute();
 
             $stmtPart = $pdo->prepare(
@@ -510,6 +634,35 @@ try {
             sendJson(['error' => 'invalid_status'], 400);
         }
 
+        // E12-1: RPA-поля v1.2. В PUT отсутствующее поле = «не менять».
+        // Для флагов/аванса NULL в body ($raw === null) тоже означает «не менять».
+        $rpa = trips_normalize_rpa_fields($body, true, $existing);
+        $rpaUpdate = [];
+        $flagCols = ['transport_out_required', 'transport_back_required'];
+        foreach ($rpa as $col => $val) {
+            $bodyKey = [
+                'origin'                  => 'origin',
+                'hotel'                   => 'hotel',
+                'business_process'        => 'businessProcess',
+                'phone'                   => 'phone',
+                'transport_out_required'  => 'transportOutRequired',
+                'transport_back_required' => 'transportBackRequired',
+                'advance_amount'          => 'advanceAmount',
+                'transport_out_mode'      => 'transportOutMode',
+                'transport_back_mode'     => 'transportBackMode',
+            ][$col];
+            if (!array_key_exists($bodyKey, $body)) {
+                continue; // поле не передано — оставляем текущее значение
+            }
+            if (in_array($col, $flagCols, true) && $val === null) {
+                continue; // null у флага в PUT = «не менять»
+            }
+            if ($col === 'advance_amount' && $val === null && ($body['advanceAmount'] ?? null) !== null) {
+                continue; // непустой сброс аванса в NULL не предусмотрен контрактом
+            }
+            $rpaUpdate[$col] = $val;
+        }
+
         // Зонная проверка нового состава.
         if (!$isAdmin) {
             $foreign = [];
@@ -549,9 +702,15 @@ try {
 
             $ts = now();
             $newVersion = $serverVersion + 1;
+            // E12-1: динамические SET-части для RPA-полей (только переданные).
+            $rpaSetSql = '';
+            foreach (array_keys($rpaUpdate) as $i => $col) {
+                $rpaSetSql .= ", {$col} = :rpa{$i}";
+            }
             $stmtUpd = $pdo->prepare(
                 'UPDATE trips SET title = :title, location = :location, comment = :comment,
                         status = :status, version = :version, updated_at = :ts
+                        ' . $rpaSetSql . '
                  WHERE id = :id'
             );
             $stmtUpd->bindValue(':title', $newTitle, PDO::PARAM_STR);
@@ -561,6 +720,16 @@ try {
             $stmtUpd->bindValue(':version', $newVersion, PDO::PARAM_INT);
             $stmtUpd->bindValue(':ts', $ts, PDO::PARAM_STR);
             $stmtUpd->bindValue(':id', $id, PDO::PARAM_STR);
+            foreach (array_keys($rpaUpdate) as $i => $col) {
+                $val = $rpaUpdate[$col];
+                if ($val === null) {
+                    $stmtUpd->bindValue(":rpa{$i}", null, PDO::PARAM_NULL);
+                } elseif (is_int($val)) {
+                    $stmtUpd->bindValue(":rpa{$i}", $val, PDO::PARAM_INT);
+                } else {
+                    $stmtUpd->bindValue(":rpa{$i}", (string) $val, PDO::PARAM_STR);
+                }
+            }
             $stmtUpd->execute();
 
             // Полная замена набора участников.

@@ -1,11 +1,12 @@
 -- ============================================================================
 -- Service Center App — SQLite Schema
--- Version: 6
+-- Version: 7
 -- Tables: groups, positions, employees, schedule_entries, holidays,
 --         vacation_balances, users, meta, sync_log, audit_log,
 --         trips, trip_participants
 -- Features: E5-4 automatic audit_log cleanup (>7 days)
 --           Business trips (trips + trip_participants, schema v6)
+--           RPA v1.2 (HelpMe) fields on trips (schema v7, E12-1)
 -- ============================================================================
 
 PRAGMA foreign_keys = ON;
@@ -158,7 +159,17 @@ CREATE TABLE IF NOT EXISTS trips (
     status      TEXT NOT NULL DEFAULT 'forecast',  -- forecast | confirmed
     version     INTEGER NOT NULL DEFAULT 1, -- E8 optimistic concurrency
     created_by  TEXT,
-    created_at  TEXT, updated_at TEXT
+    created_at  TEXT, updated_at TEXT,
+    -- RPA v1.2 (HelpMe), схема v7 (E12-1) -------------------------------
+    origin      TEXT,                       -- место отправления
+    hotel       TEXT,                       -- данные о гостинице
+    transport_out_required INTEGER DEFAULT 1,  -- предзаказ билетов «выезд»
+    transport_out_mode     TEXT,               -- 'avia' | 'zd'
+    transport_back_required INTEGER DEFAULT 1, -- предзаказ «возврат»
+    transport_back_mode    TEXT,               -- 'avia' | 'zd'
+    advance_amount INTEGER,                 -- сумма аванса, целые рубли, >= 0
+    business_process TEXT,                   -- точное значение пункта списка HelpMe
+    phone       TEXT                        -- телефон сотрудника (ручной ввод)
 );
 
 -- ----------------------------------------------------------------------------

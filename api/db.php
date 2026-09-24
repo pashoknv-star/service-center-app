@@ -27,7 +27,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 6;
+    private const SCHEMA_VERSION = 7;
 
     private static ?Database $instance = null;
 
@@ -223,6 +223,20 @@ final class Database
             $this->pdo->exec(
                 'CREATE INDEX IF NOT EXISTS idx_trip_participants_emp ON trip_participants (employee_id)'
             );
+        }
+
+        // --- v6 → v7 (E12-1): поля RPA v1.2 (HelpMe) в trips ---
+        if ($current < 7) {
+            $this->addColumnIfNotExists('trips', 'origin', 'TEXT');
+            $this->addColumnIfNotExists('trips', 'hotel', 'TEXT');
+            // Флаги «плечо нужно»: DEFAULT 1 — плечо нужно для существующих строк.
+            $this->addColumnIfNotExists('trips', 'transport_out_required', 'INTEGER DEFAULT 1');
+            $this->addColumnIfNotExists('trips', 'transport_out_mode', 'TEXT');
+            $this->addColumnIfNotExists('trips', 'transport_back_required', 'INTEGER DEFAULT 1');
+            $this->addColumnIfNotExists('trips', 'transport_back_mode', 'TEXT');
+            $this->addColumnIfNotExists('trips', 'advance_amount', 'INTEGER');
+            $this->addColumnIfNotExists('trips', 'business_process', 'TEXT');
+            $this->addColumnIfNotExists('trips', 'phone', 'TEXT');
         }
 
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---
