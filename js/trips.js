@@ -2782,6 +2782,19 @@
       // не оставлять её уехавшей с кнопкой «← Вернуть».
       endEmployeePick();
 
+      // E10-5 fix (2026-09-28, координатор): если пик пришёл из карточки
+      // сотрудника (draft), форма командировки ещё НЕ открыта — открыть её
+      // в панели «Командировки» с выбранными участниками. Раньше
+      // syncPickedEmployeesToForm молча выходил по (!container), и после
+      // «Подтвердить» не происходило ничего — ощущалось как «кнопка
+      // Командировка не реагирует».
+      var formContainer = document.getElementById('tripParticipants');
+      if (!formContainer && draft && draft.participants && draft.participants.length > 0) {
+        switchTab('trips');
+        renderTripFormInPanel({ participants: draft.participants });
+        formContainer = document.getElementById('tripParticipants');
+      }
+
       // Sync the picked employees into the trip form's participant rows (R2 form).
       syncPickedEmployeesToForm(selectedEmployees);
     }
