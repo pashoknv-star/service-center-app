@@ -524,6 +524,30 @@ try {
                 $rows = $pdo->query(
                     "SELECT employee_id, date FROM schedule_entries WHERE $whereYear"
                 )->fetchAll(PDO::FETCH_ASSOC);
+                // --- E10-4 (2026-09-28): защита календаря от stale-клиента ---
+                // Инцидент 2026-09-28 08:52: устаревшая вкладка delete'нула 1360
+                // записей календаря через sync-delete (гард E10-2 защищал только
+                // employees). Сигнатура stale-клиента: удаление записей у >=10
+                // РАЗНЫХ сотрудников за один запрос. Легитимные операции матрицы
+                // («Очистить», удаление отпуска) касаются 1-2 сотрудников и под
+                // порог не попадают. Блокируем ВСЕ sync-удаления запроса, аудит
+                // entry.mass_delete_blocked.
+                $staleDelEmps = [];
+                foreach ($rows as $row) {
+                    $k = $row['employee_id'] . ':' . $row['date'];
+                    if (!isset($keepKeys[$k])) {
+                        $staleDelEmps[$row['employee_id']] = true;
+                    }
+                }
+                if (count($staleDelEmps) >= 10) {
+                    try {
+                        audit($pdo, 'entry.mass_delete_blocked', null, null, 'entry',
+                            'year:' . implode(',', array_keys($payYears)),
+                            ['employeeCount' => count($staleDelEmps),
+                             'reason' => '>=10 distinct employees would lose entries in one sync-delete (stale client suspected); server rows kept']);
+                    } catch (Throwable $_ae3) { /* non-critical */ }
+                    $rows = []; // ничего не удаляем
+                }
                 $stmtDel = $pdo->prepare(
                     'DELETE FROM schedule_entries WHERE employee_id = :eid AND date = :d'
                 );
