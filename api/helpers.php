@@ -12,6 +12,7 @@ declare(strict_types=1);
  *   getJsonBody()      — чтение и декодирование JSON из тела запроса.
  *   now()              — текущее время в ISO 8601 UTC (date('c')).
  *   genId($prefix)     — генерация уникального ID (uniqid($prefix, true)).
+ *   generateRequestId($tripId, $num) — ID заявки RPA-роботу (E12-2).
  *   error($msg, $code) — JSON-ошибка.
  *   strToBool()        — нормализация булевых значений из JSON.
  */
@@ -95,6 +96,23 @@ function now(): string
 function genId(string $prefix): string
 {
     return uniqid($prefix, true);
+}
+
+/**
+ * E12-2: ID заявки RPA-роботу (trip_requests.request_id).
+ *
+ * Формат: "SC-" + первые 4 символа trip id + "-" + номер участника + "-" + unixtime.
+ * Пример: trip_6789ab.. -> "SC-trip-2-1759146000".
+ *
+ * Общая для trips.php (создание заявки при confirm) и trip_relay.php;
+ * в trip_relay.php НЕ переопределять.
+ *
+ * @param string $tripId         ID командировки.
+ * @param int    $participantNum Порядковый номер участника (1..N).
+ */
+function generateRequestId(string $tripId, int $participantNum): string
+{
+    return 'SC-' . substr($tripId, 0, 4) . '-' . $participantNum . '-' . time();
 }
 
 /**

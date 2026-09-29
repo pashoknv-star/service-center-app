@@ -1139,19 +1139,58 @@
               <input type="text" class="trip-form-input" id="tripTitle" value="${trip ? escapeHtml(trip.title) : ''}" ${isViewer ? 'disabled' : ''}>
             </div>
             <div class="trip-form-row">
-              <label class="trip-form-label">Место</label>
-              <input type="text" class="trip-form-input" id="tripLocation" value="${trip ? escapeHtml(trip.location || '') : ''}" ${isViewer ? 'disabled' : ''}>
+              <label class="trip-form-label">Место отправления</label>
+              <input type="text" class="trip-form-input" id="tripOrigin" value="${trip ? escapeHtml(trip.origin || '') : ''}" placeholder="Город/Аэропорт" ${isViewer ? 'disabled' : ''}>
             </div>
             <div class="trip-form-row">
-              <label class="trip-form-label">Комментарий</label>
-              <textarea class="trip-form-input" id="tripComment" rows="3" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.comment || '') : ''}</textarea>
+              <label class="trip-form-label">Данные о гостинице</label>
+              <textarea class="trip-form-input" id="tripHotel" rows="3" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.hotel || '') : ''}</textarea>
             </div>
             <div class="trip-form-row">
-              <label class="trip-form-label">Статус</label>
-              <select class="trip-form-input" id="tripStatus" ${isViewer || (trip && trip.status === TRIP_STATUS.CONFIRMED && !user.isAdmin) ? 'disabled' : ''}>
-                <option value="${TRIP_STATUS.FORECAST}" ${trip && trip.status === TRIP_STATUS.FORECAST ? 'selected' : ''}>Прогнозируемая</option>
-                <option value="${TRIP_STATUS.CONFIRMED}" ${trip && trip.status === TRIP_STATUS.CONFIRMED ? 'selected' : ''}>Подтверждённая</option>
-              </select>
+              <label class="trip-form-label">Бизнес-процесс (HelpMe)</label>
+              <input type="text" class="trip-form-input" id="tripBusinessProcess" list="businessProcessList" value="${trip ? escapeHtml(trip.businessProcess || '') : ''}" placeholder="Начните вводить..." ${isViewer ? 'disabled' : ''}>
+              <datalist id="businessProcessList">
+                <option value="Проведение технических работ">
+                <option value="Проверка систем">
+                <option value="Консультации">
+                <option value="Обучение">
+                <option value="Встреча с клиентом">
+              </datalist>
+            </div>
+            <div class="trip-form-row">
+              <label class="trip-form-label">Телефон сотрудника</label>
+              <input type="tel" class="trip-form-input" id="tripPhone" value="${trip ? escapeHtml(trip.phone || '') : ''}" maxlength="18" placeholder="+7 (999) 000-00-00" oninput="window.Trips.maskPhoneField(this)" ${isViewer ? 'disabled' : ''}>
+            </div>
+            <div class="trip-form-row">
+              <label class="trip-form-label">Сумма аванса, руб.</label>
+              <input type="number" class="trip-form-input" id="tripAdvanceAmount" min="0" step="1" value="${trip && trip.advanceAmount !== null ? trip.advanceAmount : ''}" placeholder="Не указано" ${isViewer ? 'disabled' : ''}>
+            </div>
+            <div class="trip-form-row trip-transport-block">
+              <label class="trip-form-label">Транспорт (билеты)</label>
+              <div class="trip-transport-columns">
+                <div class="trip-transport-column">
+                  <label style="display:flex; align-items:center; margin-bottom:5px;">
+                    <input type="checkbox" id="transportOutRequired" ${(!trip || trip.transportOutRequired === 1 || trip.transportOutRequired === null) && !isViewer ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportOut')">
+                    <span style="margin-left:8px;">Выезд нужен билет</span>
+                  </label>
+                  <select class="trip-form-input" id="transportOutMode" disabled ${isViewer ? 'disabled' : ''}>
+                    <option value="">Выберите способ</option>
+                    <option value="avia" ${trip && trip.transportOutMode === 'avia' ? 'selected' : ''}>Авиа</option>
+                    <option value="zd" ${trip && trip.transportOutMode === 'zd' ? 'selected' : ''}>ЖД</option>
+                  </select>
+                </div>
+                <div class="trip-transport-column">
+                  <label style="display:flex; align-items:center; margin-bottom:5px;">
+                    <input type="checkbox" id="transportBackRequired" ${(!trip || trip.transportBackRequired === 1 || trip.transportBackRequired === null) && !isViewer ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportBack')">
+                    <span style="margin-left:8px;">Возврат нужен билет</span>
+                  </label>
+                  <select class="trip-form-input" id="transportBackMode" disabled ${isViewer ? 'disabled' : ''}>
+                    <option value="">Выберите способ</option>
+                    <option value="avia" ${trip && trip.transportBackMode === 'avia' ? 'selected' : ''}>Авиа</option>
+                    <option value="zd" ${trip && trip.transportBackMode === 'zd' ? 'selected' : ''}>ЖД</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
           <div class="trip-form-right">
@@ -1407,6 +1446,80 @@
   }
 
   /**
+   * Toggle transport select disabled state based on checkbox
+   * E12-3: transport block
+   */
+  function toggleTransportSelect(type) {
+    var checkboxId = type === 'transportOut' ? 'transportOutRequired' : 'transportBackRequired';
+    var selectId = type === 'transportOut' ? 'transportOutMode' : 'transportBackMode';
+    var checkbox = document.getElementById(checkboxId);
+    var select = document.getElementById(selectId);
+    if (checkbox && select) {
+      select.disabled = !checkbox.checked;
+      if (!checkbox.checked) {
+        select.value = '';
+      }
+    }
+  }
+
+  /**
+   * E12-3: Phone mask validation helper
+   * - Allows 11 digits (Russian format +7XXXXXXXXXX)
+   * - Permits: leading +, digits, spaces, hyphens, parentheses
+   * - Empty field = correct (not mandatory)
+   * - Shows error if <10 digits
+   */
+  function maskPhoneField(el) {
+    var value = el.value.replace(/[^\d+\s\-\(\)]/g, '');
+    var digits = value.replace(/[^\d]/g, '');
+    
+    // E12-3: empty phone = not allowed (block submission with error)
+    if (value.trim() === '') {
+      el.classList.add('trip-form-error');
+      el.setCustomValidity('Телефон сотрудника: обязательное поле');
+      return;
+    }
+    
+    // E12-3: validate 10+ digits after +
+    if (digits.length < 10) {
+      el.classList.add('trip-form-error');
+      el.setCustomValidity('Телефон сотрудника: обязательное поле');
+      return;
+    }
+    
+    el.classList.remove('trip-form-error');
+    el.setCustomValidity('');
+  }
+
+  /**
+   * E12-3: Advance amount validation helper
+   * - Empty = correct (not specified)
+   * - Integer >= 0, otherwise error
+   */
+  function validateAdvanceAmount(el) {
+    var value = el.value.trim();
+    
+    // E12-3: empty advanceAmount = not specified
+    if (value === '') {
+      el.classList.remove('trip-form-error');
+      el.setCustomValidity('');
+      return;
+    }
+    
+    var num = Number(value);
+    
+    // E12-3: non-integer/empty string = error
+    if (!Number.isInteger(num) || num < 0) {
+      el.classList.add('trip-form-error');
+      el.setCustomValidity('Сумма аванса: целое число >= 0');
+      return;
+    }
+    
+    el.classList.remove('trip-form-error');
+    el.setCustomValidity('');
+  }
+
+  /**
    * Remove participant row
    */
   function removeParticipantRow(index) {
@@ -1530,12 +1643,60 @@
       return;
     }
     
+    // E12-3: validate RPA fields before building payload
+    // Collect RPA field values first
+    var origin = document.getElementById('tripOrigin').value.trim();
+    var hotel = document.getElementById('tripHotel').value.trim();
+    var businessProcess = document.getElementById('tripBusinessProcess').value.trim();
+    var phone = document.getElementById('tripPhone').value.trim();
+    var advanceAmount = document.getElementById('tripAdvanceAmount').value.trim();
+    
+    // Phone validation: empty is not allowed, must have 10+ digits (after +)
+    var phoneDigits = phoneEl.value.replace(/[^\\d]/g, '').length;
+    if (phoneDigits < 10) {
+      showError('tripPhone', 'Телефон сотрудника: обязательное поле');
+      return;
+    }
+    
+    // AdvanceAmount validation: empty = allowed, else must be integer >= 0
+    if (advanceAmount) {
+      var num = Number(advanceAmount);
+      if (!Number.isInteger(num) || num < 0) {
+        showError('tripAdvanceAmount', 'Сумма аванса: целое число >= 0');
+        return;
+      }
+    }
+    
+    // Transport validation: if checkbox checked, select must be filled
+    var transportOutRequired = document.getElementById('transportOutRequired').checked;
+    var transportOutMode = document.getElementById('transportOutMode').value;
+    if (transportOutRequired && !transportOutMode) {
+      showError('transportOutMode', 'Выберите способ транспорта');
+      return;
+    }
+    var transportBackRequired = document.getElementById('transportBackRequired').checked;
+    var transportBackMode = document.getElementById('transportBackMode').value;
+    if (transportBackRequired && !transportBackMode) {
+      showError('transportBackMode', 'Выберите способ транспорта');
+      return;
+    }
+    
     var payload = {
       title: title,
       location: location,
       comment: comment,
       status: status,
-      participants: participants
+      participants: participants,
+      // E12-3: RPA v1.2 (HelpMe) fields
+      origin: origin || null,
+      hotel: hotel || null,
+      transportOutRequired: transportOutRequired ? 1 : 0,
+      transportOutMode: transportOutMode || null,
+      transportBackRequired: transportBackRequired ? 1 : 0,
+      transportBackMode: transportBackMode || null,
+      advanceAmount: advanceAmount !== '' ? advanceAmount : null,
+      businessProcess: businessProcess || null,
+      phone: phone || null
     };
     
     var promise = id ? updateTrip(id, payload) : createTrip(payload);

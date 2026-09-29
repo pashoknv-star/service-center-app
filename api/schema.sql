@@ -1,12 +1,13 @@
 -- ============================================================================
 -- Service Center App — SQLite Schema
--- Version: 7
+-- Version: 8
 -- Tables: groups, positions, employees, schedule_entries, holidays,
 --         vacation_balances, users, meta, sync_log, audit_log,
---         trips, trip_participants
+--         trips, trip_participants, trip_requests
 -- Features: E5-4 automatic audit_log cleanup (>7 days)
 --           Business trips (trips + trip_participants, schema v6)
 --           RPA v1.2 (HelpMe) fields on trips (schema v7, E12-1)
+--           RPA relay queue trip_requests (schema v8, E12-2)
 -- ============================================================================
 
 PRAGMA foreign_keys = ON;
@@ -188,3 +189,28 @@ CREATE TABLE IF NOT EXISTS trip_participants (
 );
 CREATE INDEX IF NOT EXISTS idx_trips_dates ON trips (created_at);
 CREATE INDEX IF NOT EXISTS idx_trip_participants_emp ON trip_participants (employee_id);
+
+-- ----------------------------------------------------------------------------
+-- trip_requests: очередь заявок RPA-роботу (relay-механизм E12-2, schema v8)
+-- status: 'queued' | 'delivered' | 'created' | 'validation_error' | 'failed'
+--   queued    — создана при confirm, ждёт poll робота
+--   delivered — выдана роботу по GET (claimed_at), ждёт callback
+--   created / validation_error / failed — финальные, выставляются callback POST
+-- payload — JSON-контракт v1.2 (HelpMe), заморожен на момент confirm.
+-- Токен робота: meta['rpa_relay_token'] (создаётся лениво в trip_relay.php).
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS trip_requests (
+    request_id  TEXT PRIMARY KEY,           -- generateRequestId(): SC-xxxx-N-unixtime
+    trip_id     TEXT NOT NULL,
+    employee_id TEXT,
+    payload     TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'queued',
+    ticket_id   TEXT,
+    attempts    INTEGER DEFAULT 0,
+    last_error  TEXT,
+    created_at  TEXT,
+    claimed_at  TEXT,
+    done_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_trip_requests_status ON trip_requests (status);
+CREATE INDEX IF NOT EXISTS idx_trip_requests_created_at ON trip_requests (created_at);

@@ -13,6 +13,9 @@ declare(strict_types=1);
  *   getPDO()        — прямой доступ к PDO.
  *   getSchemaVersion() — текущая версия схемы из meta (int) или 0.
  *   migrate()       — применяет schema.sql при необходимости и обновляет meta.
+ *
+ * Схема v8 (E12-2): таблица trip_requests — очередь заявок RPA-роботу
+ * (relay-механизм: poll GET / callback POST в api/trip_relay.php).
  */
 
 final class Database
@@ -27,7 +30,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 7;
+    private const SCHEMA_VERSION = 8;
 
     private static ?Database $instance = null;
 
@@ -237,6 +240,31 @@ final class Database
             $this->addColumnIfNotExists('trips', 'advance_amount', 'INTEGER');
             $this->addColumnIfNotExists('trips', 'business_process', 'TEXT');
             $this->addColumnIfNotExists('trips', 'phone', 'TEXT');
+        }
+
+        // --- v7 → v8 (E12-2): очередь заявок RPA-роботу (relay) ---
+        if ($current < 8) {
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS trip_requests (' .
+                "    request_id  TEXT PRIMARY KEY," .
+                "    trip_id     TEXT NOT NULL," .
+                "    employee_id TEXT," .
+                "    payload     TEXT NOT NULL," .
+                "    status      TEXT NOT NULL DEFAULT 'queued'," .
+                "    ticket_id   TEXT," .
+                "    attempts    INTEGER DEFAULT 0," .
+                "    last_error  TEXT," .
+                "    created_at  TEXT," .
+                "    claimed_at  TEXT," .
+                "    done_at     TEXT" .
+                ')'
+            );
+            $this->pdo->exec(
+                'CREATE INDEX IF NOT EXISTS idx_trip_requests_status ON trip_requests (status)'
+            );
+            $this->pdo->exec(
+                'CREATE INDEX IF NOT EXISTS idx_trip_requests_created_at ON trip_requests (created_at)'
+            );
         }
 
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---

@@ -22,6 +22,10 @@ declare(strict_types=1);
  *              participants?: [...], entryVersion?,  (E8-сверка версии)
  *              <те же RPA-поля v1.2, что в POST> }
  * PUT  api/trips.php?id=trip_...&action=confirm — forecast -> confirmed
+ *      (E12-2: после UPDATE, в той же транзакции, каждому участнику
+ *      ставится заявка в trip_requests для RPA-робота; дубль-защита D4:
+ *      участник с уже висящей queued/delivered заявкой пропускается;
+ *      сбой очереди НЕ валит confirm — D1)
  * DELETE api/trips.php?id=trip_...            — удаление (confirmed — только admin)
  *
  * Валидация RPA v1.2 (E12-1): advanceAmount — целое >= 0 (иначе 400
@@ -304,6 +308,67 @@ function trips_normalize_rpa_fields(array $body, bool $isPut, array $existing = 
     return $out;
 }
 
+/**
+ * E12-2: строит payload заявки RPA-роботу (контракт v1.2, HelpMe).
+ *
+ * Даты — DD.MM.YYYY; days = dateEnd - dateStart + 1 (включительно).
+ * D5: sentAt — МОМЕНТ ГЕНЕРАЦИИ payload (now()), а не дата поездки.
+ * D6: fullName берётся из employees.full_name вызывающей стороной;
+ *     NULL-строки нормализуются в '' (роботу не уходят JSON-null).
+ *
+ * @param string $requestId ID заявки (generateRequestId()).
+ * @param array  $trip      Полный trip из trips_fetch() (camelCase).
+ * @param array  $p         Участник {employeeId, startDate, endDate, fullName}.
+ * @return array Payload для JSON-колонки trip_requests.payload.
+ */
+function trips_build_rpa_payload(string $requestId, array $trip, array $p): array
+{
+    $tsStart = strtotime((string) $p['startDate']);
+    $tsEnd   = strtotime((string) $p['endDate']);
+    $dateStart = $tsStart !== false ? date('d.m.Y', $tsStart) : (string) $p['startDate'];
+    $dateEnd   = $tsEnd   !== false ? date('d.m.Y', $tsEnd)   : (string) $p['endDate'];
+    $days = ($tsStart !== false && $tsEnd !== false)
+        ? (int) round(($tsEnd - $tsStart) / 86400) + 1
+        : 1;
+
+    $origin      = (string) ($trip['origin'] ?? '');
+    $destination = (string) ($trip['location'] ?? '');
+
+    return [
+        'requestId' => $requestId,
+        'sentAt'    => now(), // D5: момент генерации, не дата поездки
+        'employee'  => [
+            'fullName' => (string) ($p['fullName'] ?? ''), // D6: NULL -> ''
+            'phone'    => (string) ($trip['phone'] ?? ''), // NULL -> ''
+        ],
+        'trip'      => [
+            'destination' => $destination,
+            'origin'      => $origin,
+            'dateStart'   => $dateStart,
+            'dateEnd'     => $dateEnd,
+            'details'     => (string) ($trip['comment'] ?? ''),
+            'hotel'       => (string) ($trip['hotel'] ?? ''),
+            'days'        => $days,
+        ],
+        'transport' => [
+            'out'  => [
+                'required' => (int) ($trip['transportOutRequired'] ?? 1),
+                'mode'     => (string) ($trip['transportOutMode'] ?? ''),
+                'from'     => $origin,
+                'to'       => $destination,
+            ],
+            'back' => [
+                'required' => (int) ($trip['transportBackRequired'] ?? 1),
+                'mode'     => (string) ($trip['transportBackMode'] ?? ''),
+                'from'     => $destination,
+                'to'       => $origin,
+            ],
+        ],
+        'businessProcess' => (string) ($trip['businessProcess'] ?? ''),
+        'advance'         => ['amount' => $trip['advanceAmount'] ?? null],
+    ];
+}
+
 try {
     $db = Database::getInstance();
     $pdo = $db->getPDO();
@@ -574,6 +639,60 @@ try {
                 $stmtUpd->bindValue(':ts', $ts, PDO::PARAM_STR);
                 $stmtUpd->bindValue(':id', $id, PDO::PARAM_STR);
                 $stmtUpd->execute();
+
+                // --- E12-2: заявка RPA-роботу на КАЖДОГО участника (в той же
+                // транзакции). D1: сбой очереди НЕ валит confirm; D4: дубль-
+                // защита — участник с уже висящей queued/delivered заявкой
+                // по этому trip пропускается (повторный confirm-цикл не
+                // плодит строки).
+                try {
+                    $stmtDup = $pdo->prepare(
+                        "SELECT 1 FROM trip_requests
+                         WHERE trip_id = :tid AND employee_id = :eid
+                           AND status IN ('queued','delivered') LIMIT 1"
+                    );
+                    $stmtReq = $pdo->prepare(
+                        'INSERT INTO trip_requests
+                            (request_id, trip_id, employee_id, payload, status, attempts, created_at)
+                         VALUES
+                            (:request_id, :trip_id, :employee_id, :payload, :status, 0, :created_at)'
+                    );
+                    foreach ($existing['participants'] as $pnum => $p) {
+                        $eid = (string) $p['employeeId'];
+                        $stmtDup->bindValue(':tid', $id, PDO::PARAM_STR);
+                        $stmtDup->bindValue(':eid', $eid, PDO::PARAM_STR);
+                        $stmtDup->execute();
+                        if ($stmtDup->fetch(PDO::FETCH_COLUMN)) {
+                            continue; // D4: заявка уже queued/delivered — не дублируем
+                        }
+                        // D6: ФИО из employees; сотрудник мог быть удалён —
+                        // тогда fullName='' (payload всё равно строится).
+                        $stmtEmp = $pdo->prepare(
+                            'SELECT full_name FROM employees WHERE id = :id LIMIT 1'
+                        );
+                        $stmtEmp->bindValue(':id', $eid, PDO::PARAM_STR);
+                        $stmtEmp->execute();
+                        $fullName = $stmtEmp->fetch(PDO::FETCH_COLUMN);
+                        $p['fullName'] = is_string($fullName) ? $fullName : '';
+
+                        $requestId = generateRequestId($id, $pnum + 1);
+                        $payload = trips_build_rpa_payload($requestId, $existing, $p);
+                        $stmtReq->bindValue(':request_id', $requestId, PDO::PARAM_STR);
+                        $stmtReq->bindValue(':trip_id', $id, PDO::PARAM_STR);
+                        $stmtReq->bindValue(':employee_id', $eid, PDO::PARAM_STR);
+                        $stmtReq->bindValue(
+                            ':payload',
+                            json_encode($payload, JSON_UNESCAPED_UNICODE),
+                            PDO::PARAM_STR
+                        );
+                        $stmtReq->bindValue(':status', 'queued', PDO::PARAM_STR);
+                        $stmtReq->bindValue(':created_at', $ts, PDO::PARAM_STR);
+                        $stmtReq->execute();
+                    }
+                } catch (Throwable $_relay) {
+                    // D1: очередь — не причина срыва подтверждения.
+                    error_log('E12-2: trip_requests enqueue failed (confirm continues): ' . $_relay->getMessage());
+                }
 
                 trips_sync_log($pdo, $id, 'upsert', $ts);
                 try {
