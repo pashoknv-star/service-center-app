@@ -26,7 +26,10 @@ ALTER TABLE trips +9 колонок (RPA v1.2), CREATE trip_requests + 2 инд�
 - `js/trips.js` на проде md5 = локальному HEAD `0361e6f` (2ff2079b…) — байт-в-байт, 121184 Б;
 - маркеры E12 в отданном коде: «Проведение технических работ» ×1, tripBusinessProcess ×2, maskPhoneField ×2, transportOutRequired ×5;
 - smoke 76/76, trips-сьют 7/7, полный relay e2e — локально на том же коммите.
-- Функциональный reveal/poll на проде не выполнялся (прод-пароль приложения ротирован владельцем; анонимная матрица достаточна). Владельцу: login admin → GET /api/trip_relay.php?action=reveal → токен робота.
+- Функциональная проверка relay на проде (29.09, владельцем предоставлен прод-пароль admin):
+  login 200 → reveal 200 (токен сгенерирован при первом обращении), анонимный reveal 401,
+  poll роботом без сессии с верным токеном → 200 {"requestId": null}, неверный токен → 401,
+  callback на несуществующий requestId → 404 request_not_found, токен в ответах не светится.
 
 ## Токен робота
 Генерируется при первом обращении к relay-эндпоинту (INSERT OR IGNORE meta.rpa_relay_token). Получение: admin-сессия → `GET /api/trip_relay.php?action=reveal`. Для Sherpa: заголовок `X-Auth-Token`.
