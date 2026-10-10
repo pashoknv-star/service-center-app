@@ -126,6 +126,54 @@ try {
         }
 
         // ---------------------------------------------------------------
+        // E10-6 (2026-10-10): синхропротокол свежести.
+        // Клиент шлёт clientLastSyncId — курсор sync_log на момент, когда
+        // он ПОСЛЕДНИЙ РАЗ видел серверное состояние (load.php / sync.php).
+        // Правило: НЕЛЬЗЯ УДАЛИТЬ то, что изменилось ПОСЛЕ курсора клиента —
+        // вкладка не могла видеть это изменение, её «отсутствие записи» не
+        // является командой «удалить». Блокируем такие удаления, аудит
+        // sync.stale_delete_blocked. Полное отсутствие поля = старый фронт:
+        // поведение прежнее (гарды E10-2/E10-4 остаются вторым рубежом).
+        // ---------------------------------------------------------------
+        $clientLastSyncId = null;
+        if (isset($body['clientLastSyncId'])) {
+            $raw = $body['clientLastSyncId'];
+            if (is_int($raw) || (is_string($raw) && ctype_digit($raw))) {
+                $clientLastSyncId = (int) $raw;
+            }
+        }
+        // E10-6: кэши «свежести» — сущности, менявшиеся в sync_log ПОСЛЕ
+        // курсора клиента. Считаются ОДИН раз на запрос (до циклов entries),
+        // дальше только lookup. Старый фронт без clientLastSyncId — null, гард
+        // не активен (совместимость).
+        $freshEmpsCache = null;
+        $freshEntryKeysCache = null;
+        if ($clientLastSyncId !== null) {
+            $freshEmpsCache = [];
+            $freshEntryKeysCache = [];
+            try {
+                $stmtF1 = $pdo->prepare(
+                    "SELECT DISTINCT entity_id FROM sync_log
+                      WHERE id > :barrier AND entity_type = 'employee'"
+                );
+                $stmtF1->bindValue(':barrier', $clientLastSyncId, PDO::PARAM_INT);
+                $stmtF1->execute();
+                foreach ($stmtF1->fetchAll(PDO::FETCH_COLUMN) as $fid) {
+                    $freshEmpsCache[(string) $fid] = true;
+                }
+                $stmtF2 = $pdo->prepare(
+                    "SELECT entity_id FROM sync_log
+                      WHERE id > :barrier AND entity_type = 'entry'"
+                );
+                $stmtF2->bindValue(':barrier', $clientLastSyncId, PDO::PARAM_INT);
+                $stmtF2->execute();
+                foreach ($stmtF2->fetchAll(PDO::FETCH_COLUMN) as $fkey) {
+                    $freshEntryKeysCache[(string) $fkey] = true;
+                }
+            } catch (Throwable $_fe0) { /* non-critical: гард деградирует до прежнего поведения */ }
+        }
+
+        // ---------------------------------------------------------------
         // employees (upsert, обновляем updated_at)
         // SYNC: карточки, отсутствующие в payload, удаляются —
         // фронт отправляет полное состояние (кнопка «Сохранить» убрана).
@@ -301,6 +349,27 @@ try {
                     } catch (Throwable $_ae2) { /* non-critical */ }
                     $toDelete = [];
                 }
+                // --- E10-6: свежесть сотрудника. Если карточка менялась в
+                // sync_log ПОСЛЕ курсора клиента — клиент не мог видеть
+                // актуальную карточку и не имеет права её «не знать».
+                if ($clientLastSyncId !== null && !empty($toDelete)) {
+                    $keptByFresh = [];
+                    foreach ($toDelete as $di => $oldId) {
+                        if (isset($freshEmpsCache[(string) $oldId])) {
+                            $keptByFresh[] = $oldId;
+                            unset($toDelete[$di]);
+                        }
+                    }
+                    if (!empty($keptByFresh)) {
+                        try {
+                            audit($pdo, 'sync.stale_delete_blocked', null, null, 'employee',
+                                implode(',', $keptByFresh),
+                                ['clientLastSyncId' => $clientLastSyncId,
+                                 'reason' => 'employee changed after client cursor; delete blocked (E10-6)']);
+                        } catch (Throwable $_ae4) { /* non-critical */ }
+                        $toDelete = array_values($toDelete);
+                    }
+                }
                 $stmtDelEmp = $pdo->prepare('DELETE FROM employees WHERE id = :id');
                 $stmtDelEnt = $pdo->prepare('DELETE FROM schedule_entries WHERE employee_id = :id');
                 foreach ($toDelete as $oldId) {
@@ -338,6 +407,7 @@ try {
         // ---------------------------------------------------------------
         $conflicts = [];
         $rejections = [];   // E8-2: по-записные отклонения по правам (supervisor)
+        $staleValueRejects = [];  // E10-6: затирание значений свежее курсора клиента
         if (isset($body['entries']) && (is_array($body['entries']) || is_object($body['entries']))) {
             // E8-2: supervisor шлёт полное состояние, но может менять только trip/day_off
             // в своей зоне. Чужие и запрещённые записи — молча пропускаем как no-op
@@ -459,6 +529,30 @@ try {
                     continue;
                 }
 
+                // --- E10-6: защита ЗНАЧЕНИЙ от stale-клиента (admin без
+                // версии). Запись менялась в sync_log ПОСЛЕ курсора клиента,
+                // а клиент не прислал версию (v1 по умолчанию) → он не мог
+                // видеть актуальное значение. Отклоняем затирание, серверное
+                // значение сохраняется, запись защищена от sync-delete.
+                if (
+                    $e82IsAdmin
+                    && $clientLastSyncId !== null
+                    && $freshEntryKeysCache !== null
+                    && isset($freshEntryKeysCache[$key])
+                    && $serverRow !== false
+                    && (int) $clientVersion <= (int) $serverVersion
+                    && !(
+                        (string) ($entry['status'] ?? '') === (string) $serverRow['status']
+                        && (string) ($entry['comment'] ?? '') === (string) ($serverRow['comment'] ?? '')
+                        && (string) ($entry['approvalStatus'] ?? $entry['approval_status'] ?? 'draft') === (string) ($serverRow['approval_status'] ?? 'draft')
+                    )
+                ) {
+                    $staleValueRejects[$key] = true;
+                    $keepKeys[$key] = true;
+                    $payYears[substr((string) $date, 0, 4)] = true;
+                    continue;
+                }
+
 
                 // Запись принята — применим её
                 $newVersion = $serverVersion + 1;
@@ -552,9 +646,20 @@ try {
                     'DELETE FROM schedule_entries WHERE employee_id = :eid AND date = :d'
                 );
                 $deletedEntries = 0;
+                // --- E10-6: свежесть записей. Запись, изменённая в sync_log
+                // ПОСЛЕ курсора клиента, не подлежит sync-удалению: клиент
+                // не мог её видеть. Инциденты 07-08.10: больничные
+                // emp_5/emp_21, внесённые импортом, стёрла вкладка со
+                // старым курсором именно здесь. ---
+                $staleKeptEntries = [];
                 foreach ($rows as $row) {
                     $k = $row['employee_id'] . ':' . $row['date'];
                     if (!isset($keepKeys[$k])) {
+                        // E10-6: запись свежее курсора клиента → не удаляем.
+                        if ($clientLastSyncId !== null && isset($freshEntryKeysCache[$k])) {
+                            $staleKeptEntries[] = $k;
+                            continue;
+                        }
                         // --- E8-3: зональная проверка при SYNC-удалении ---
                         // Не-admin (supervisor) не должен удалять записи из чужих зон.
                         if (!$e82IsAdmin && $e82IsSupervisor) {
@@ -611,6 +716,17 @@ try {
                         } catch (Throwable $_e) { /* non-critical */ }
                     }
                 }
+            }
+            // E10-6: аудит заблокированных sync-удалений (свежее курсора клиента).
+            if (!empty($staleKeptEntries)) {
+                try {
+                    audit($pdo, 'sync.stale_delete_blocked', null, null, 'entry',
+                        count($staleKeptEntries) . ' entries: ' . implode(',', array_slice($staleKeptEntries, 0, 20))
+                        . (count($staleKeptEntries) > 20 ? ' …' : ''),
+                        ['clientLastSyncId' => $clientLastSyncId,
+                         'keptCount' => count($staleKeptEntries),
+                         'reason' => 'entries changed after client cursor; sync-delete blocked (E10-6)']);
+                } catch (Throwable $_ae5) { /* non-critical */ }
             }
         }
 
@@ -693,6 +809,7 @@ try {
         'savedAt' => now(),
         // E8: список отклонённых по версии записей (пуст для старого фронта).
         'conflicts' => $conflicts,
+        'staleValueRejects' => array_keys($staleValueRejects),
         // E8-2: применённые версии 'empId:date' => version (мерж в карту клиента;
         // no-op записи отдают текущую версию без инкремента).
         'appliedVersions' => $appliedVersions,

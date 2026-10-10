@@ -170,6 +170,21 @@ try {
                 audit($pdo, 'entry.upsert', null, null, 'entry', $employeeId . ':' . $date);
             } catch (Throwable $_e) { /* non-critical */ }
 
+            // E10-6: событие свежести — без записи в sync_log polling и
+            // stale-гард не видят эту правку (делает другие вкладки слепыми).
+            try {
+                $pdo->prepare(
+                    'INSERT INTO sync_log (entity_type, entity_id, action, actor, updated_at)
+                     VALUES (:t, :id, :a, :actor, :ts)'
+                )->execute([
+                    ':t'     => 'entry',
+                    ':id'    => (string) $employeeId . ':' . (string) $date,
+                    ':a'     => 'upsert',
+                    ':actor' => (function_exists('sync_actor') ? sync_actor() : 'api'),
+                    ':ts'    => $ts,
+                ]);
+            } catch (Throwable $_sl) { /* non-critical */ }
+
             sendJson(normalizeEntry($row));
             break;
 
@@ -336,6 +351,20 @@ try {
             try {
                 audit($pdo, 'entry.delete', null, null, 'entry', (string) $employeeId . ':' . $date);
             } catch (Throwable $_e) { /* non-critical */ }
+
+            // E10-6: событие свежести для polling/stale-гарда.
+            try {
+                $pdo->prepare(
+                    'INSERT INTO sync_log (entity_type, entity_id, action, actor, updated_at)
+                     VALUES (:t, :id, :a, :actor, :ts)'
+                )->execute([
+                    ':t'     => 'entry',
+                    ':id'    => (string) $employeeId . ':' . (string) $date,
+                    ':a'     => 'delete',
+                    ':actor' => (function_exists('sync_actor') ? sync_actor() : 'api'),
+                    ':ts'    => now(),
+                ]);
+            } catch (Throwable $_sl2) { /* non-critical */ }
 
             sendJson([
                 'success'    => true,

@@ -503,6 +503,11 @@
 
       try {
         var payload = legacyToServer(input);
+        // E10-6: курсор свежести — сервер не даст этой вкладке удалить то,
+        // что изменилось после этого курсора (stale-tab защита).
+        if (typeof window !== 'undefined' && window.__syncCursor != null) {
+          payload.clientLastSyncId = window.__syncCursor;
+        }
         console.log(LOG_PREFIX, 'save() — POST', SAVE_URL,
           'employees:', payload.employees.length,
           'entries:', Object.keys(payload.entries).length,
@@ -552,6 +557,10 @@
           vacationData: vacationData,
           idCounter: legacy.idCounter
         });
+        // E10-6: курсор свежести (аналогично save()).
+        if (typeof window !== 'undefined' && window.__syncCursor != null) {
+          payload.clientLastSyncId = window.__syncCursor;
+        }
 
         var resp = await fetch(SAVE_URL, {
           method: 'POST',
