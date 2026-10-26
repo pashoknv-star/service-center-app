@@ -11,6 +11,9 @@ declare(strict_types=1);
  *   PUT ?date=<date>     — обновить (body: поля для апдейта).
  *   DELETE ?date=<date>  — удалить, подтверждение в body: { confirm: true }.
  *
+ * Доступ (HF-2): GET — require_auth (401 для анонима); POST/PUT/DELETE —
+ * require_admin (401 аноним, 403 не-admin).
+ *
  * Схема: { date, type, label }
  *   type: 'weekend' | 'holiday' | 'transferred_day_off' | 'working_weekend'
  *
@@ -19,6 +22,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/auth.php';
 
 handleOptions();
 
@@ -30,6 +34,13 @@ try {
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     // Ключ праздника — date. Принимаем и id, и date для гибкости.
     $date = $_GET['date'] ?? $_GET['id'] ?? null;
+
+    // HF-2 (S-05/A-06): чтение — любой залогиненный, запись — только admin.
+    if ($method === 'GET') {
+        require_auth();
+    } else {
+        require_admin();
+    }
 
     switch ($method) {
         // ===============================================================

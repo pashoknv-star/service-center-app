@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+// HF-2 (S-06/A-07): служебный CLI-скрипт — под веб-SAPI отвечаем 404 и ничего не исполняем.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 /**
  * smoke_test.php — Phase 9A backend smoke test.
  *
@@ -1550,6 +1556,107 @@ try {
         assertTrue($r['status'] === 403, 'status ' . $r['status']);
         assertTrue(($j['error'] ?? '') === 'forbidden', 'wrong error');
         return 'forbidden';
+    });
+
+    // --- HF-2: holidays.php auth, trip_relay reveal admin-only, X-Powered-By ---
+    $hf2HolDate = '2099-12-30';
+    $hf2Pdo = function () use ($root) {
+        $p = new PDO('sqlite:' . $root . '/data/app.db');
+        $p->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        return $p;
+    };
+
+    $run('HF-2 holidays anon GET -> 401', function () use ($base) {
+        $r = httpRequest('GET', $base . '/api/holidays.php');
+        assertTrue($r['status'] === 401, 'status ' . $r['status']);
+        return 'unauthorized';
+    });
+
+    $run('HF-2 holidays anon POST -> 401 and nothing written', function () use ($base, $hf2HolDate, $hf2Pdo) {
+        $r = httpRequest('POST', $base . '/api/holidays.php', [
+            'body' => ['date' => $hf2HolDate, 'type' => 'holiday', 'label' => 'hf2-anon'],
+        ]);
+        assertTrue($r['status'] === 401, 'status ' . $r['status']);
+        $st = $hf2Pdo()->prepare('SELECT COUNT(*) FROM holidays WHERE date = :d');
+        $st->execute([':d' => $hf2HolDate]);
+        assertTrue((int) $st->fetchColumn() === 0, 'anon POST wrote a row');
+        return 'unauthorized, no row';
+    });
+
+    $run('HF-2 holidays supervisor POST -> 403', function () use ($base, $cookieSup, $hf2HolDate, $hf2Pdo) {
+        $r = httpRequest('POST', $base . '/api/holidays.php', [
+            'cookie' => $cookieSup,
+            'body' => ['date' => $hf2HolDate, 'type' => 'holiday', 'label' => 'hf2-sup'],
+        ]);
+        assertTrue($r['status'] === 403, 'status ' . $r['status']);
+        $st = $hf2Pdo()->prepare('SELECT COUNT(*) FROM holidays WHERE date = :d');
+        $st->execute([':d' => $hf2HolDate]);
+        assertTrue((int) $st->fetchColumn() === 0, 'supervisor POST wrote a row');
+        return 'forbidden, no row';
+    });
+
+    $run('HF-2 holidays admin POST -> 201, DELETE -> 200 (self-cleaning)', function () use ($base, $cookieAdmin, $hf2HolDate, $hf2Pdo) {
+        try {
+            $r = httpRequest('POST', $base . '/api/holidays.php', [
+                'cookie' => $cookieAdmin,
+                'body' => ['date' => $hf2HolDate, 'type' => 'holiday', 'label' => 'hf2-admin'],
+            ]);
+            assertTrue($r['status'] === 201, 'POST status ' . $r['status'] . ' ' . $r['body']);
+            $g = httpRequest('GET', $base . '/api/holidays.php?date=' . $hf2HolDate, ['cookie' => $cookieAdmin]);
+            assertTrue($g['status'] === 200, 'GET status ' . $g['status']);
+            $d = httpRequest('DELETE', $base . '/api/holidays.php?date=' . $hf2HolDate, [
+                'cookie' => $cookieAdmin,
+                'body' => ['confirm' => true],
+            ]);
+            assertTrue($d['status'] === 200, 'DELETE status ' . $d['status'] . ' ' . $d['body']);
+        } finally {
+            $st = $hf2Pdo()->prepare('DELETE FROM holidays WHERE date = :d');
+            $st->execute([':d' => $hf2HolDate]);
+        }
+        return 'created+deleted';
+    });
+
+    $run('HF-2 trip_relay reveal viewer -> 403', function () use ($base) {
+        $cookieView = tempnam(sys_get_temp_dir(), 'sc_view_cookie_');
+        $r0 = login($base, $cookieView, 'viewer_test', 'changeme');
+        assertTrue($r0['status'] === 200, 'viewer login failed: ' . $r0['status']);
+        $r = httpRequest('GET', $base . '/api/trip_relay.php?action=reveal', ['cookie' => $cookieView]);
+        @unlink($cookieView);
+        assertTrue($r['status'] === 403, 'status ' . $r['status']);
+        assertTrue(strpos($r['body'], '"token"') === false, 'token leaked to viewer');
+        return 'forbidden';
+    });
+
+    $run('HF-2 trip_relay reveal supervisor -> 403', function () use ($base, $cookieSup) {
+        $r = httpRequest('GET', $base . '/api/trip_relay.php?action=reveal', ['cookie' => $cookieSup]);
+        assertTrue($r['status'] === 403, 'status ' . $r['status']);
+        assertTrue(strpos($r['body'], '"token"') === false, 'token leaked to supervisor');
+        return 'forbidden';
+    });
+
+    $run('HF-2 trip_relay reveal admin -> 200 + audit relay.token_reveal (no token in audit)', function () use ($base, $cookieAdmin, $hf2Pdo) {
+        $pdoA = $hf2Pdo();
+        $cntBefore = 0;
+        try {
+            $cntBefore = (int) $pdoA->query("SELECT COUNT(*) FROM audit_log WHERE action='relay.token_reveal'")->fetchColumn();
+        } catch (Throwable $_) { /* audit_log ещё может не существовать */ }
+        $r = httpRequest('GET', $base . '/api/trip_relay.php?action=reveal', ['cookie' => $cookieAdmin]);
+        assertTrue($r['status'] === 200, 'status ' . $r['status']);
+        $j = jsonDecode($r['body']);
+        assertTrue(!empty($j['token']) && is_string($j['token']), 'token missing in admin reveal');
+        $cntAfter = (int) $pdoA->query("SELECT COUNT(*) FROM audit_log WHERE action='relay.token_reveal'")->fetchColumn();
+        assertTrue($cntAfter === $cntBefore + 1, 'relay.token_reveal not audited: before=' . $cntBefore . ' after=' . $cntAfter);
+        $row = $pdoA->query("SELECT actor, role, details FROM audit_log WHERE action='relay.token_reveal' ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        assertTrue(strpos((string) ($row['details'] ?? ''), $j['token']) === false, 'token value found in audit details');
+        assertTrue(($row['role'] ?? '') === 'admin', 'audit role=' . ($row['role'] ?? 'null'));
+        return 'audited actor=' . ($row['actor'] ?? '?');
+    });
+
+    $run('HF-2 session.php has no X-Powered-By', function () use ($base) {
+        $r = httpRequest('GET', $base . '/api/session.php');
+        assertTrue($r['status'] === 200, 'status ' . $r['status']);
+        assertTrue(headerValue($r['headers_raw'], 'X-Powered-By') === '', 'X-Powered-By present: ' . headerValue($r['headers_raw'], 'X-Powered-By'));
+        return 'header absent';
     });
 
     // --- E5-5: Behavioral checks for audit details ---

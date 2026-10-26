@@ -8,8 +8,9 @@ declare(strict_types=1);
  * Аутентификация робота — ТОЛЬКО заголовок X-Auth-Token (D3: у робота нет
  * PHP-сессии, require_auth для poll/callback НЕ используется). Токен хранится
  * в meta['rpa_relay_token'] и создаётся лениво при первом обращении (D2).
- * Владелец видит токен через GET ?action=reveal под сессией admin/supervisor
- * (require_auth + require_edit); в обычных ответах relay токен НЕ возвращается.
+ * Владелец видит токен через GET ?action=reveal под сессией admin
+ * (require_auth + require_admin, HF-2: supervisor токен не получает; факт
+ * показа пишется в audit_log как relay.token_reveal, значение токена — НЕ пишется); в обычных ответах relay токен НЕ возвращается.
  *
  * GET  api/trip_relay.php            — poll: старейшая queued-заявка ->
  *                                      status='delivered' + claimed_at,
@@ -23,7 +24,7 @@ declare(strict_types=1);
  *                                      -> обновить (status, ticket_id,
  *                                      last_error, attempts, done_at),
  *                                      last-write-wins, 200 {"success":true}.
- * GET  api/trip_relay.php?action=reveal — токен под сессией admin/supervisor.
+ * GET  api/trip_relay.php?action=reveal — токен под сессией admin.
  *
  * Коды ошибок:
  *   401 {error: 'missing_token'}  — заголовка X-Auth-Token нет;
@@ -98,14 +99,18 @@ try {
     $action = isset($_GET['action']) ? (string) $_GET['action'] : '';
 
     // -----------------------------------------------------------------
-    // reveal: показать токен владельцу (только сессия admin/supervisor).
+    // reveal: показать токен владельцу (только сессия admin; HF-2).
     // -----------------------------------------------------------------
     if ($action === 'reveal') {
         require_auth();
-        require_edit();
+        require_admin();
+        $revealToken = relay_ensure_token($pdo);
+        // Аудит факта показа (actor/role берутся из сессии внутри audit());
+        // значение токена в details НЕ пишем.
+        audit($pdo, 'relay.token_reveal', null, null, 'relay', 'rpa_relay_token', null);
         sendJson([
             'success' => true,
-            'token'   => relay_ensure_token($pdo),
+            'token'   => $revealToken,
         ]);
     }
 

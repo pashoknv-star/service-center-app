@@ -1,2 +1,7 @@
 # Apache (Hostland) срезает Authorization для PHP-CGI: восстанавливаем.
 SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+
+# HF-2 (S-06/A-07/F-02): служебные скрипты и документация не отдаются по вебу (Apache 2.4).
+<FilesMatch "^(smoke_test|debug_token|init_db|seed_positions)\.php$|\.(sql|md)$">
+  Require all denied
+</FilesMatch>
