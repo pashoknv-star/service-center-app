@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+// HF-2 (S-06/A-07): служебный CLI-скрипт — под веб-SAPI отвечаем 404 и ничего не исполняем.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 /**
  * seed_positions.php — CLI-заполнение справочника должностей по умолчанию.
  *

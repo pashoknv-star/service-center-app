@@ -19,7 +19,7 @@ declare(strict_types=1);
  *   { "employeeId": "emp_1", "startDate": "2026-07-15", "endDate": "2026-07-28",
  *     "status": "vacation", "comment": "", "approvalStatus": "approved" }
  *   ИЛИ по ФИО:
- *   { "employeeName": "Сотрудник 11",
+ *   { "employeeName": "<ФИО сотрудника>",
  *     "startDate": "2026-09-07", "endDate": "2026-09-28" }
  *
  * 2. Batch:

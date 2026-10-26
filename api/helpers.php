@@ -2,6 +2,11 @@
 
 declare(strict_types=1);
 
+// HF-2 (S-19/A-12): на проде display_errors=On -> Fatal с путями виден анониму.
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+if (!headers_sent()) { header_remove('X-Powered-By'); }
+
 /**
  * helpers.php — общие helper-функции для API Service Center App.
  *
