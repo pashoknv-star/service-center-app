@@ -118,6 +118,9 @@ rm -f ~/sc-hostland-deploy.tar.gz
 ```bash
 WWW=~/host1882970.hostland.pro/htdocs/www
 
+# 0. Снимок ACL ДО выкладки (R1-01): data/ и images/ принадлежат веб-юзеру/имеют его ACL.
+getfacl -p $WWW/data $WWW/images | tee ~/acl-before.txt
+
 # 1. Бэкап БД ПЕРЕД выкладкой (абсолютный путь, каталог backups должен существовать).
 mkdir -p /home/host1882970/backups
 sqlite3 $WWW/data/app.db ".backup '/home/host1882970/backups/app-$(date +%F-%H%M).db'"
@@ -127,7 +130,8 @@ ls -l /home/host1882970/backups | tail -3        # убедиться, что к
 mkdir -p /tmp/scnew && tar -xzf ~/sc-hostland-deploy.tar.gz -C /tmp/scnew
 cp -a /tmp/scnew/api /tmp/scnew/index.html /tmp/scnew/js /tmp/scnew/upload.php $WWW/
 cp -a /tmp/scnew/data/.htaccess /tmp/scnew/data/holidays $WWW/data/ 2>/dev/null
-cp -a /tmp/scnew/images/.htaccess $WWW/images/ 2>/dev/null
+# images/.htaccess на прод НЕ копировать (R1-02): в нём php_flag -> на Hostland даёт HTTP 500
+# для всех /images/*. Файл в репозитории не меняется; проверка фото — строка /images/ в разделе 10.
 rm -rf /tmp/scnew ~/sc-hostland-deploy.tar.gz
 
 # 3. Удалить с прода устаревшие/служебные файлы (F-02). `cp -a` их не удаляет сам.
@@ -137,13 +141,32 @@ rm -rf docs
 rm -f  js/test_*.js test_*.php test_*.sh      # тестовые файлы, если есть
 # (api/schema.sql остаётся: нужен db.php для миграций; закрывается от веба в HF-2)
 
-# 4. Права: каталоги 755, файлы 644 (static/ не трогать — chmod на него падает без прав).
-find api data/holidays images js -type d -exec chmod 755 {} +
-find api data/holidays images js -type f -exec chmod 644 {} +
-chmod 755 data
-chmod 644 data/.htaccess index.html upload.php
-# data/app.db — права НЕ менять (ACL веб-юзера).
+# 4. Права (R1-01): chmod ТОЛЬКО для кодовых каталогов и двух файлов. Без -R.
+#    data/, images/, static/ и data/app.db НЕ трогать: в images/ лежат фото веб-юзера
+#    (chmod -> Operation not permitted), chmod на data/ может пересчитать ACL-маску
+#    и отнять у веб-юзера запись в data/app.db.
+find api data/holidays js -type d -exec chmod 755 {} +
+find api data/holidays js -type f -exec chmod 644 {} +
+chmod 644 index.html upload.php
+
+# 5. Снимок ACL ПОСЛЕ выкладки и сравнение с шагом 0: различий быть не должно.
+getfacl -p $WWW/data $WWW/images > ~/acl-after.txt
+diff ~/acl-before.txt ~/acl-after.txt && echo "OK   ACL data/images не изменились" || echo "FAIL: ACL изменились"
+
+# 6. Служебные файлы удалены (R2-01): каждый должен отдавать 403 или 404.
+BASE=http://host1882970.hostland.pro
+for p in /api/debug_token.php /api/smoke_test.php /api/init_db.php /api/seed_positions.php \
+         /api/E8_SYNC.md /docs/API_DOCUMENTATION.json; do
+  code=$(curl -sI -o /dev/null -w '%{http_code}' "$BASE$p")
+  case $code in 403|404) echo "OK   $p -> $code";; *) echo "FAIL $p -> $code (ожидалось 403|404)";; esac
+done
 ```
+
+Чек-лист §4: (1) `acl-before.txt` снят до распаковки; (2) `images/.htaccess` не скопирован;
+(3) `chmod` выполнен только на `api`, `data/holidays`, `js`, `index.html`, `upload.php`;
+(4) `diff` ACL пуст; (5) `curl -I` по 6 путям шага 6 — только 403/404; (6) запись работает:
+логин и сохранение данных в приложении (проверяет, что у веб-юзера сохранилась запись в `data/app.db`);
+(7) выполнен раздел 10.
 
 После обновления — обязательно раздел 10 «Проверка после выкладки».
 
@@ -230,6 +253,8 @@ sqlite3 ~/host1882970.hostland.pro/htdocs/www/data/app.db \
 | `/api/debug_token.php` | 404 |
 | `/api/schema.sql` | 403 |
 | `/docs/API_DOCUMENTATION.json` | 404 |
+| `/api/E8_SYNC.md` | 403 или 404 |
+| `/images/<существующее фото>` | 200 (проверка, что `images/.htaccess` с `php_flag` не даёт 500, R1-02) |
 | `/api/session.php` | 200, без заголовка `X-Powered-By` |
 | `/data/app.db` | 403 |
 
@@ -247,6 +272,9 @@ chk /api/seed_positions.php        '403|404'
 chk /api/debug_token.php           404
 chk /api/schema.sql                403
 chk /docs/API_DOCUMENTATION.json   404
+chk /api/E8_SYNC.md                '403|404'
+# фото: подставить реальное имя существующего файла из images/ (ls $WWW/images | head)
+chk /images/<существующее-фото>    200
 chk /api/session.php               200
 chk /data/app.db                   403
 # заголовок X-Powered-By на session.php: ожидаем пустой вывод
