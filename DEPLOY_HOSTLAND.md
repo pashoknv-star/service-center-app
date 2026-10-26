@@ -24,31 +24,71 @@
 
 ## 1. Что кладём на хостинг (состав Hostland-пакета)
 
+Пакет собирается по **явному allowlist** (раздел 2). Каталоги целиком (`tar … api data images …`) не архивируем.
+
 ```
 www/
-├── index.html          # фронтенд (vanilla JS, монолит)
+├── index.html          # фронтенд (vanilla JS, монолит) — БЕЗ вшитых данных сотрудников
 ├── upload.php          # корневой делегат загрузки фото -> api/upload.php
-├── api/                # весь backend (PHP 8.1-совместимый)
-│   └── smoke_test.php  # можно НЕ заливать на прод (опционально)
-├── js/storage.js
+├── api/
+│   ├── *.php           # backend (PHP 8.1-совместимый), КРОМЕ smoke_test.php, init_db.php,
+│   │                   #   seed_positions.php, debug_token.php
+│   ├── .htaccess
+│   └── schema.sql      # нужен db.php для миграций (от веба закрывается в HF-2)
+├── js/                 # ТОЛЬКО файлы, подключённые в index.html через <script src>
+│                       #   (сейчас js/storage.js, js/trips.js; js/test_*.js не кладём)
 ├── data/
 │   ├── .htaccess       # Require all denied — ЗАЩИТА БД (работает, проверено)
-│   ├── app.db          # SQLite, инициализированная локально
-│   └── holidays/2026-2028.json
+│   └── holidays/*.json
 └── images/
     └── .htaccess       # запрет исполнения PHP в папке фото
 ```
 
-**НЕ кладём:** корневой `.htaccess` (php_flag → 500), `DEPLOY.md`, `scripts/`, `css/`, `QA_REPORT.md`.
+**НЕ кладём:** `data/app.db` (БД не входит в пакет — см. ниже), `docs/`, `api/E8_SYNC.md`,
+`test_*` (корневые и `js/test_*`), `scripts/`, `reports/`, `staff_project/`, корневой `.htaccess`
+(php_flag → 500), `DEPLOY.md`, `css/`, `QA_REPORT.md`.
+
+> **БД.** `data/app.db` в пакет не входит — ни при первой выкладке, ни при обновлении.
+> При самой первой выкладке (на сервере ещё нет БД) БД инициализируется локально
+> (`php api/init_db.php` на PHP 8.3 в staging-копии) и заливается **отдельным** `scp` в `$WWW/data/`;
+> при обновлении живую `data/app.db` на проде не трогаем (раздел 4).
 
 ## 2. Сборка пакета (на машине разработчика, PHP 8.3)
 
+Собирать из чистого дерева нужной ветки/коммита (корень репозитория). Корневой `.htaccess`
+в пакет не попадает: он не входит в allowlist.
+
 ```bash
-# staging без корневого .htaccess
-cd /home/hermes/sc-hostland-staging
-rm -f data/app.db* && php api/init_db.php   # свежая БД
-tar -czf /home/hermes/sc-hostland-deploy.tar.gz api data images index.html js upload.php
+set -euo pipefail
+cd /home/hermes/service-center-app          # корень репозитория (или worktree нужной ветки)
+OUT=/home/hermes/sc-hostland-deploy.tar.gz
+
+# Шаг 1. Guard ПДн. exit != 0 -> сборку ПРЕРВАТЬ (set -e), пакет не создавать.
+bash scripts/check_no_pii.sh            # по умолчанию: index.html js api
+
+# Шаг 2. JS — только реально подключённые в index.html (<script src>), без внешних URL.
+JS=$(grep -oP '<script[^>]+src="\K[^"]+' index.html | grep -vE '^(https?:)?//')
+
+# Шаг 3. api/*.php, кроме служебных/тестовых/отладочных.
+API=$(ls api/*.php | grep -vE '^api/(smoke_test|init_db|seed_positions|debug_token)\.php$')
+
+# Шаг 4. Явный allowlist (никаких каталогов целиком).
+tar -czf "$OUT" \
+  index.html upload.php \
+  $JS \
+  $API api/.htaccess api/schema.sql \
+  data/.htaccess data/holidays/*.json \
+  images/.htaccess
+
+# Шаг 5. Приложить список содержимого и убедиться, что запрещённого в пакете нет.
+tar -tzf "$OUT" | sort | tee /home/hermes/sc-hostland-deploy.lst
+if tar -tzf "$OUT" | grep -E '^(docs/|scripts/|reports/|staff_project/|data/app\.db|test_|js/test_|api/(E8_SYNC\.md|smoke_test\.php|init_db\.php|seed_positions\.php|debug_token\.php)$|\.htaccess$)'; then
+  echo "ЗАПРЕЩЁННЫЕ ФАЙЛЫ В ПАКЕТЕ — выкладку остановить" >&2; rm -f "$OUT"; exit 1
+fi
 ```
+
+> Список `tar -tzf … | sort` каждой сборки прикладывается к отчёту о выкладке.
+> Шаг 1 проверяет исходники; результат на проде проверяется отдельно (раздел 10).
 
 ## 3. Выкладка на Hostland
 
@@ -61,6 +101,8 @@ sshpass -p '<пароль>' scp -P 1024 /home/hermes/sc-hostland-deploy.tar.gz \
 WWW=~/host1882970.hostland.pro/htdocs/www
 tar -czf ~/backups/old-site-$(date +%Y%m%d-%H%M).tar.gz -C $WWW .   # бэкап старого
 tar -xzf ~/sc-hostland-deploy.tar.gz -C $WWW
+# ТОЛЬКО при самой первой выкладке (БД на сервере ещё нет): отдельным scp залить
+# локально инициализированную data/app.db в $WWW/data/ (в пакет она не входит).
 find $WWW/api $WWW/data $WWW/images $WWW/js -type d -exec chmod 755 {} +
 find $WWW/api $WWW/data $WWW/images $WWW/js -type f -exec chmod 644 {} +
 chmod 644 $WWW/index.html $WWW/upload.php
@@ -71,17 +113,43 @@ rm -f ~/sc-hostland-deploy.tar.gz
 
 ## 4. Обновление приложения (когда код изменится)
 
+Живую `data/app.db` НЕ перезаписывать (пакет её и не содержит). Порядок:
+
 ```bash
-# та же выкладка, НО: НЕ перезаписывать data/app.db (там живые данные)!
-# Вариант: распаковать во временный каталог и скопировать всё, кроме data/app.db*:
-tar -xzf ~/sc-hostland-deploy.tar.gz -C /tmp/scnew
 WWW=~/host1882970.hostland.pro/htdocs/www
+
+# 1. Бэкап БД ПЕРЕД выкладкой (абсолютный путь, каталог backups должен существовать).
+mkdir -p /home/host1882970/backups
+sqlite3 $WWW/data/app.db ".backup '/home/host1882970/backups/app-$(date +%F-%H%M).db'"
+ls -l /home/host1882970/backups | tail -3        # убедиться, что копия создана и не пуста
+
+# 2. Распаковать пакет во временный каталог и скопировать в $WWW.
+mkdir -p /tmp/scnew && tar -xzf ~/sc-hostland-deploy.tar.gz -C /tmp/scnew
 cp -a /tmp/scnew/api /tmp/scnew/index.html /tmp/scnew/js /tmp/scnew/upload.php $WWW/
 cp -a /tmp/scnew/data/.htaccess /tmp/scnew/data/holidays $WWW/data/ 2>/dev/null
+cp -a /tmp/scnew/images/.htaccess $WWW/images/ 2>/dev/null
 rm -rf /tmp/scnew ~/sc-hostland-deploy.tar.gz
+
+# 3. Удалить с прода устаревшие/служебные файлы (F-02). `cp -a` их не удаляет сам.
+cd $WWW
+rm -f  api/smoke_test.php api/debug_token.php api/init_db.php api/seed_positions.php api/E8_SYNC.md
+rm -rf docs
+rm -f  js/test_*.js test_*.php test_*.sh      # тестовые файлы, если есть
+# (api/schema.sql остаётся: нужен db.php для миграций; закрывается от веба в HF-2)
+
+# 4. Права: каталоги 755, файлы 644 (static/ не трогать — chmod на него падает без прав).
+find api data/holidays images js -type d -exec chmod 755 {} +
+find api data/holidays images js -type f -exec chmod 644 {} +
+chmod 755 data
+chmod 644 data/.htaccess index.html upload.php
+# data/app.db — права НЕ менять (ACL веб-юзера).
 ```
 
+После обновления — обязательно раздел 10 «Проверка после выкладки».
+
 ## 5. Проверка после деплоя (только веб — CLI-тесты недоступны)
+
+> Анонимная матрица проверок с ожидаемыми кодами (обязательна после каждой выкладки) — раздел 10.
 
 ```bash
 BASE=http://host1882970.hostland.pro
@@ -146,3 +214,67 @@ sqlite3 ~/host1882970.hostland.pro/htdocs/www/data/app.db \
 - **php_flag/.htaccess-директивы PHP** не поддерживаются (500) — настройки PHP только через панель.
 - **`.user.ini`** можно попробовать для PHP-настроек (проверить в панели), но display_errors обычно уже выключен у Hostland.
 - Техдомен `host1882970.hostland.pro` — если понадобится свой домен, сайт в панели привязывается к новому домену с тем же каталогом.
+
+## 10. Проверка после выкладки (анонимные curl, без cookie)
+
+Выполняется сразу после каждой выкладки (§3/§4). Любое отклонение от ожидания — выкладка
+не принята, разбираться до закрытия окна работ.
+
+| URL | Ожидание |
+|---|---|
+| `/` | 200, и `curl -s … \| bash scripts/check_no_pii.sh -` находит 0 совпадений (exit 0) |
+| `/api/holidays.php` | 401 |
+| `/api/smoke_test.php` | 403 или 404 |
+| `/api/init_db.php` | 403 или 404 |
+| `/api/seed_positions.php` | 403 или 404 |
+| `/api/debug_token.php` | 404 |
+| `/api/schema.sql` | 403 |
+| `/docs/API_DOCUMENTATION.json` | 404 |
+| `/api/session.php` | 200, без заголовка `X-Powered-By` |
+| `/data/app.db` | 403 |
+
+```bash
+BASE=http://host1882970.hostland.pro
+chk() { # chk <path> <regex ожидаемых кодов>
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE$1")
+  if echo "$code" | grep -Eq "^($2)$"; then echo "OK   $1 -> $code"; else echo "FAIL $1 -> $code (ожидалось $2)"; fi
+}
+chk /                              200
+chk /api/holidays.php              401
+chk /api/smoke_test.php            '403|404'
+chk /api/init_db.php               '403|404'
+chk /api/seed_positions.php        '403|404'
+chk /api/debug_token.php           404
+chk /api/schema.sql                403
+chk /docs/API_DOCUMENTATION.json   404
+chk /api/session.php               200
+chk /data/app.db                   403
+# заголовок X-Powered-By на session.php: ожидаем пустой вывод
+curl -sI $BASE/api/session.php | grep -i '^x-powered-by' && echo "FAIL: X-Powered-By присутствует" || echo "OK   X-Powered-By отсутствует"
+# ПДн в отдаваемом анонимно index.html: ожидаем exit 0
+curl -s $BASE/ | bash scripts/check_no_pii.sh - && echo "OK   / без ПДн" || echo "FAIL: ПДн в /"
+```
+
+> `scripts/check_no_pii.sh -` читает stdin; при совпадении печатает только номера строк
+> (`<stdin>:N`), сами значения не выводятся. Скрипт выполняется на машине разработчика
+> (в пакет и на прод он не попадает).
+>
+> Часть ожиданий (`/api/holidays.php` → 401, `/api/schema.sql` → 403, `/api/session.php`
+> без `X-Powered-By`, 404 на `debug_token.php`) обеспечивается изменениями HF-2; до его выкладки
+> эти строки матрицы могут не выполняться — это ожидаемо, но фиксируется в отчёте о выкладке.
+
+## 11. Смена токена робота после хотфикса
+
+Выполняет **владелец по SSH**. Значения токенов в чат, логи и файлы не выводить.
+
+```bash
+sqlite3 ~/host1882970.hostland.pro/htdocs/www/data/app.db \
+  "DELETE FROM meta WHERE key='rpa_relay_token';"
+```
+
+Токен робота пересоздаётся лениво при `?action=reveal` (теперь только admin); новое значение
+владелец передаёт роботу штатным способом.
+
+Токен импорта (`external_api_token`) **не меняется** — решение владельца 2026-10-26:
+внешняя система принадлежит владельцу. Утечки нет: `debug_token.php` показывал 16 из 64
+hex-символов, оставшиеся 48 (192 бита) не подбираются.
