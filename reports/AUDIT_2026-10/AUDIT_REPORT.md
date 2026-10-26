@@ -229,7 +229,7 @@ api/*.php → auth.php (session, роли: admin / supervisor(scope_group_id) / 
 3. S-05 — `auth.php` + `require_admin` в `holidays.php`.
 4. ~~S-12 — починить форму командировки~~ → **бэклог BL-01** (сущность пока не применяется в бизнесе).
 5. S-19 — `ini_set('display_errors','0')` и `header_remove('X-Powered-By')` в `helpers.php`.
-6. S-07 (часть) — `reveal` → `require_admin`; после выкладки — ротация `rpa_relay_token` и `external_api_token` (могли утечь через `debug_token`/reveal).
+6. S-07 (часть) — `reveal` → `require_admin`; после выкладки — смена `rpa_relay_token` (мог утечь через reveal). `external_api_token` не меняется — решение владельца 2026-10-26: утечка через `debug_token` частичная (16 из 64 символов).
 
 **Фаза H1 — следующая (P1):**
 - S-03 (единая политика авторизации + матрица тестов S-14);
@@ -251,6 +251,6 @@ api/*.php → auth.php (session, роли: admin / supervisor(scope_group_id) / 
 
 **Зависимости:**
 - S-03 → S-02 (сервер перестанет принимать чужие записи, XSS сузится);
-- S-07 → ротация токенов после H0;
+- S-07 → смена токена робота после H0;
 - S-11 зависит от формата `export.php` (S-53);
 - S-01 и S-06 не зависят ни от чего — выполнять первыми.

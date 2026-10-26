@@ -29,7 +29,7 @@
 2. Редирект HTTP→HTTPS через `.htaccess` (`RewriteCond %{HTTPS} off` / `X-Forwarded-Proto` за nginx-прокси — проверить, что видит Apache). `php_flag` не использовать.
 3. Cookie: `secure => true` в `session_set_cookie_params` (`api/auth.php:314-319`).
 4. HSTS (`Strict-Transport-Security: max-age=31536000`) — после проверки, что всё работает по HTTPS.
-5. Сменить пароли всех учёток и ротировать `external_api_token` и `rpa_relay_token`: до перехода они передавались открытым текстом.
+5. Сменить пароли всех учёток и сменить `rpa_relay_token`: до перехода они передавались открытым текстом. Токен импорта (`external_api_token`) — на усмотрение владельца (его система).
 6. Сообщить новый URL (https) внешней системе импорта и HelpMe.
 7. Анонимная проверка: редирект 301, заголовки, `Set-Cookie … Secure`.
 8. После перехода пересмотреть S-04 (CSRF): собственный домен вне `hostland.pro` сделает SameSite-защиту полноценной.
