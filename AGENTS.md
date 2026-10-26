@@ -64,6 +64,14 @@ These instructions apply to this project. Keep them operational and concise; dur
 - SSH-пароль хостинга передаётся владельцем в чате; после деплоя напомнить о смене пароля.
 - Стартовые пароли учёток (`changeme`) — только в dev-БД; прод-пароли у владельца.
 
+## Решения владельца 2026-10-26 (после аудита AUDIT-2026-10)
+
+- **ПДн в репозитории запрещены.** Реальные ФИО, телефоны, фото, графики сотрудников в git не коммитятся; dev-данные — только синтетические. История переписана 2026-10-26, SHA сменились (`reports/GIT_REWRITE_2026-10-26.md`). Клоны, сделанные до этой даты, не пушить. После HOTFIX-H0 перед коммитом и сборкой прод-пакета выполнять `bash scripts/check_no_pii.sh`.
+- **HTTP намеренно (этап тестирования).** Let's Encrypt на Hostland доступен; переход на HTTPS — позже по команде владельца (бэклог BL-02, `reports/BACKLOG.md`). TLS не предлагать как срочное.
+- **Командировки отложены.** Сущность пока не применяется в бизнесе: починка формы и долг relay/trips — бэклог BL-01. Безопасность эндпоинтов `trips.php`/`trip_relay.php` при этом закрывается в общих фазах.
+- **Юридические вопросы (152-ФЗ) отложены.** Не поднимать и не включать в планы до команды владельца; архив — `reports/AUDIT_2026-10/DEFERRED_LEGAL_152FZ.md`.
+- Текущий план: `reports/HOTFIX_H0/PLAN.md` (запуск по «Старт»). Точка входа для новой сессии: `reports/HANDOFF.md`.
+
 ## Source of truth
 
 When instructions conflict, inspect the repository and current project configuration; do not use Wiki history to override actual code state.
