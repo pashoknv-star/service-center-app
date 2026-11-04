@@ -16,6 +16,31 @@ These instructions apply to this project. Keep them operational and concise; dur
 - Локальный сервер: `php -S 127.0.0.1:8090 router.php` из корня проекта.
 - Прод-пакет и порядок выкладки: см. `DEPLOY_HOSTLAND.md` (раздел 4 — обновление кода, никогда не перезаписывать `data/app.db`).
 
+## Session lifecycle (clock-in / clock-out)
+
+- **Clock-in, до правок кода:** прочитать `PROGRESS.md` (текущее состояние), при необходимости `reports/HANDOFF.md` (контекст). Прогнать релевантные сьюты из раздела Verification и убедиться, что базовое состояние зелёное. Если нет — сначала сообщить, а не чинить молча.
+- **Clock-out, перед сообщением «готово»:**
+  1. зелёный Verification gate (ниже);
+  2. `git checkout -- data/app.db` и `git status --porcelain` — никаких новых артефактов (например, `test_cookies.jar` после trips frontend);
+  3. обновить раздел Current State в `PROGRESS.md` (коммит и фактические результаты тестов);
+  4. закоммитить.
+
+## Verification (Definition of Done)
+
+- Задача или фаза считается выполненной **только** при зелёном прогоне: код выхода 0 и итоговая строка без падений (`RESULTS: N passed, 0 failed`, `RESULT: N passed, 0 failed`, `ALL TESTS PASSED`, `OK`). Без вывода прогона статус done / «готово» не ставится, Kanban-задача не закрывается.
+- Во время итераций — только релевантный сьют (см. ниже). Перед закрытием фазы и перед деплоем — **все** сьюты из таблицы.
+- Эталон на `c0ce47c` (2026-11-02): smoke 84, e51 23, e52 41, hygiene 19, trips frontend PASS, check_syntax OK, check_no_pii OK. Уменьшение числа тестов без объяснения в отчёте — тоже провал.
+
+| Сьют | Команда | Критерий |
+|---|---|---|
+| Backend smoke | `php api/smoke_test.php` | `RESULTS: N passed, 0 failed`, `DB intact: YES` |
+| e51 | `node scripts/test_e51_pick_geometry.js` | `0 failed` |
+| e52 | `node scripts/test_e52_pick_semantics.js` | `0 failed` |
+| hygiene | `node scripts/test_r4_hygiene.js` | `0 failed` |
+| trips frontend | `bash scripts/test_trips_frontend.sh` | `ALL TESTS PASSED` |
+| Синтаксис | `node scripts/check_syntax.js`, `php -l api/<file>.php` | `failed: 0` |
+| ПДн | `bash scripts/check_no_pii.sh` | `OK` |
+
 ## Test
 
 - Smoke-набор: `php api/smoke_test.php` из корня проекта (локально, PHP 8.3; на хостинге CLI PHP 5.3 — запускать нельзя). Критерий приёмки: 100% pass.
@@ -29,7 +54,7 @@ These instructions apply to this project. Keep them operational and concise; dur
 - e52 (семантика выбора): `node scripts/test_e52_pick_semantics.js`
 - hygiene: `node scripts/test_r4_hygiene.js`
 - trips frontend: `bash scripts/test_trips_frontend.sh`
-- E2E-харнесс: `/tmp/e5_final.js` (или актуальный `/tmp/e6_final.js`) через headless Chrome CDP
+- E2E-харнесс: `/tmp/e5_final.js` (или актуальный `/tmp/e6_final.js`) через headless Chrome CDP. **На 2026-11-02 этих файлов на хосте нет** (`/tmp` очищен) — E2E в gate не входит до возврата харнесса в `scripts/`.
 - Backend smoke: `php api/smoke_test.php`
 
 После smoke обязательно возвращать dev-БД: `git checkout -- data/app.db`.
