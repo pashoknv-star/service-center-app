@@ -11,6 +11,7 @@
 
 - Last commit: `c0ce47c` (main = origin/main), 2026-10-27, «HOTFIX-H0: deploy report».
 - Прод: HOTFIX-H0 выложен (коммит `4cf6f27`), анонимная матрица OK — `reports/HOTFIX_H0/DEPLOY_REPORT.md`.
+- Gate: `bash scripts/verify_all.sh` → `GATE: PASS (8 suites)` на `1eb6810`, 2026-11-04 (smoke 84, e51 23, e52 41, hygiene 19, trips 7, syntax, phplint 29 файлов, pii, clean).
 - Test status на `c0ce47c` (прогон 2026-11-02, Hermes):
 
 | Сьют | Команда | Результат |
@@ -33,7 +34,7 @@
 
 1. Фаза H1 (P1) — `reports/AUDIT_2026-10/AUDIT_REPORT.md` §9; заводится в Kanban по команде «Старт».
 2. Вернуть E2E-харнесс в репозиторий (`scripts/`): он жил в `/tmp` и потерян.
-3. `scripts/test_trips_frontend.sh` оставляет в корне `test_cookies.jar` — удалять его после прогона или исправить скрипт.
+3. `scripts/test_trips_frontend.sh` при ручном запуске оставляет в корне `test_cookies.jar` (`verify_all.sh` удаляет его сам).
 
 ## Blockers / ждёт владельца
 

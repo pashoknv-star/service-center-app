@@ -20,16 +20,18 @@ These instructions apply to this project. Keep them operational and concise; dur
 
 - **Clock-in, до правок кода:** прочитать `PROGRESS.md` (текущее состояние), при необходимости `reports/HANDOFF.md` (контекст). Прогнать релевантные сьюты из раздела Verification и убедиться, что базовое состояние зелёное. Если нет — сначала сообщить, а не чинить молча.
 - **Clock-out, перед сообщением «готово»:**
-  1. зелёный Verification gate (ниже);
-  2. `git checkout -- data/app.db` и `git status --porcelain` — никаких новых артефактов (например, `test_cookies.jar` после trips frontend);
+  1. `bash scripts/verify_all.sh` → `GATE: PASS` (скрипт сам откатывает `data/app.db`, удаляет `test_cookies.jar` и падает, если после прогона в дереве появились новые изменения);
+  2. `git status --porcelain` — только файлы задачи;
   3. обновить раздел Current State в `PROGRESS.md` (коммит и фактические результаты тестов);
   4. закоммитить.
 
 ## Verification (Definition of Done)
 
+- **Одна команда:** `bash scripts/verify_all.sh` (все сьюты) или `bash scripts/verify_all.sh e51 e52` (выборочно). Exit 0 и строка `GATE: PASS` — gate пройден; exit 1 — провал; exit 2 — прогон не начат (например, незакоммиченная `data/app.db`). В квитанцию и ревью прикладывать итоговую таблицу скрипта целиком.
 - Задача или фаза считается выполненной **только** при зелёном прогоне: код выхода 0 и итоговая строка без падений (`RESULTS: N passed, 0 failed`, `RESULT: N passed, 0 failed`, `ALL TESTS PASSED`, `OK`). Без вывода прогона статус done / «готово» не ставится, Kanban-задача не закрывается.
 - Во время итераций — только релевантный сьют (см. ниже). Перед закрытием фазы и перед деплоем — **все** сьюты из таблицы.
-- Эталон на `c0ce47c` (2026-11-02): smoke 84, e51 23, e52 41, hygiene 19, trips frontend PASS, check_syntax OK, check_no_pii OK. Уменьшение числа тестов без объяснения в отчёте — тоже провал.
+- Эталон числа тестов — массив `BASELINE` в `scripts/verify_all.sh` (единственный источник; на 2026-11-04: smoke 84, e51 23, e52 41, hygiene 19, trips 7). Тестов меньше эталона — FAIL. Добавили тесты — поднять `BASELINE` в том же коммите.
+- Ручные команды по сьютам (для отладки одного падения):
 
 | Сьют | Команда | Критерий |
 |---|---|---|
