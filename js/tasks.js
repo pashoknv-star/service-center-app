@@ -622,9 +622,19 @@
     return p;
   }
 
+  // T1-3: сообщаем матрице (js/tasks_matrix.js), что данные задач изменились на сервере.
+  function notifyChanged() {
+    try {
+      if (typeof document.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+        document.dispatchEvent(new CustomEvent('tasks:changed'));
+      }
+    } catch (e) { /* матрица необязательна */ }
+  }
+
   function handleWriteResult(r, id, okText) {
     S.busy = false;
     if (r.ok && r.data && r.data.success) {
+      notifyChanged();
       S.form = null;
       var task = r.data.task;
       if (task && task.archived) {
@@ -645,6 +655,7 @@
     }
     var code = r.data && r.data.error;
     if (r.status === 409 && code === 'VERSION_CONFLICT') {
+      notifyChanged();
       S.form = null;
       if (r.data.task) mergeTask(r.data.task);
       S.selectedId = id;

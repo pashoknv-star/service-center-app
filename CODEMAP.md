@@ -405,3 +405,16 @@
 {"type":"match","data":{"path":{"text":"index.html"},"lines":{"text":"    function doExport(format) {\n"},"line_number":5099,"absolute_offset":203499,"submatches":[{"match":{"text":"function "},"start":4,"end":13}]}}
 {"type":"end","data":{"path":{"text":"index.html"},"binary_offset":null,"stats":{"elapsed":{"secs":0,"nanos":5097263,"human":"0.005097s"},"searches":1,"searches_with_match":1,"bytes_searched":204047,"bytes_printed":31705,"matched_lines":134,"matches":135}}}
 {"data":{"elapsed_total":{"human":"0.075439s","nanos":75439182,"secs":0},"stats":{"bytes_printed":93444,"bytes_searched":410280,"elapsed":{"human":"0.020650s","nanos":20650138,"secs":0},"matched_lines":398,"matches":402,"searches":4,"searches_with_match":4}},"type":"summary"}
+
+## T1-3 — js/tasks_matrix.js (иконка варианта B + рамка срока в матрице; ручная секция, 2026-11-07)
+
+Файл `js/tasks_matrix.js` (ES5-IIFE, `window.TasksMatrix`). Подключён в `index.html:2178` (после `js/tasks.js`).
+- 39–58 даты: `isLeap`, `ymdOf`, `doyIn`, `ymdStr`, `readYear` (#yearDisplay), `domEmp` (emp_N → N)
+- 61 `load(year, force)` — ОДИН `GET api/tasks.php?from=Y-01-01&to=Y-12-31` на год, кеш `cache[year]`, защита от устаревших ответов (`gen`); 81 `invalidate`
+- 93 `buildPlan(tasks, year)` — чистая функция: открытые задачи → рамки (union сроков) и иконки (первый день, счётчик, conflict)
+- 132 `clearPaint`, 142 `cellAt` (row.cells[doy]), 148 `paint` — красит классы `tk-fr/tk-fr-l/tk-fr-r` на `td.day-cell-data` и добавляет `span.tk-mx-ic`
+- 191 `overlay(year)` — вызывается после `renderVacationMatrix()` (обёртка, как overlay в trips.js); 201 `refresh` — после мутаций
+- 210–218 `matrixVisible`, `onTasksChanged` (событие `tasks:changed` от js/tasks.js `notifyChanged`, ~625)
+- 220 `pickActive`, 225 `onMatrixPointer` — capture-обработчик на `#matrixBody` (click/mousedown): клик по иконке → `openTasksPanel({employeeId,date,view:'calendar'})`; Ctrl/Meta/Shift и пик-режим командировок не перехватываются
+- 239 `css` (рамка — `::before` ячейки, иконка — `.tk-mx-ic`), 262 `watchAuth`, 273 `init`
+Тесты: `scripts/test_tasks_matrix.js` (сьют `tasksmx` в verify_all).

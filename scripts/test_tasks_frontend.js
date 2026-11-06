@@ -87,7 +87,13 @@ function makeEnv(base, cookie) {
       inflight++;
       const headers = Object.assign({}, opt.headers || {}, cookie ? { Cookie: cookie } : {});
       return fetch(base + '/' + url, { method: opt.method || 'GET', headers, body: opt.body })
-        .finally(() => { inflight--; });
+        .then((r) => {
+          // inflight снимается, когда тело ответа ПРОЧИТАНО (а не когда пришли заголовки): php -S отдаёт
+          // тело после shutdown-фазы PHP, под нагрузкой хоста это занимает сотни мс — иначе settle() ложно срабатывает.
+          const readText = r.text.bind(r);
+          r.text = () => readText().finally(() => { inflight--; });
+          return r;
+        }, (e) => { inflight--; throw e; });
     },
   };
   win.window = win;
