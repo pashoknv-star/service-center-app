@@ -1,9 +1,11 @@
 -- ============================================================================
 -- Service Center App — SQLite Schema
--- Version: 8
+-- Version: 9
 -- Tables: groups, positions, employees, schedule_entries, holidays,
 --         vacation_balances, users, meta, sync_log, audit_log,
---         trips, trip_participants, trip_requests
+--         trips, trip_participants, trip_requests,
+--         tasks, task_assignees, task_checklist
+--           Блок «Задачи» (schema v9, T1-1)
 -- Features: E5-4 automatic audit_log cleanup (>7 days)
 --           Business trips (trips + trip_participants, schema v6)
 --           RPA v1.2 (HelpMe) fields on trips (schema v7, E12-1)
@@ -214,3 +216,52 @@ CREATE TABLE IF NOT EXISTS trip_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_trip_requests_status ON trip_requests (status);
 CREATE INDEX IF NOT EXISTS idx_trip_requests_created_at ON trip_requests (created_at);
+
+-- ----------------------------------------------------------------------------
+-- Блок «Задачи» (T1-1, schema v9; в ТЗ значилось «v7», но v7/v8 заняты E12-1/E12-2)
+-- tasks: задача. Время — локальное +05, ISO без смещения ('YYYY-MM-DD' или
+--   'YYYY-MM-DDTHH:MM[:SS]'); срок без периода: end_at = NULL.
+--   status: 'open' | 'closed' (закрывает только admin).
+--   check_state: 'ok' | 'pending' — результат проверки FR-10 (pending = внешняя
+--   проверка n8n недоступна, перепроверка по расписанию; T1-4).
+--   version — optimistic concurrency (409 VERSION_CONFLICT). archived=1 — «удалена».
+-- task_assignees: role 'assignee' (исполнитель) | 'watcher' (наблюдатель).
+-- task_checklist: пункты чек-листа.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tasks (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    description TEXT,
+    start_at    TEXT NOT NULL,
+    end_at      TEXT,
+    priority    INTEGER NOT NULL DEFAULT 2 CHECK (priority BETWEEN 1 AND 3),
+    label       TEXT,
+    status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+    check_state TEXT NOT NULL DEFAULT 'pending' CHECK (check_state IN ('ok','pending')),
+    version     INTEGER NOT NULL DEFAULT 1,
+    created_by  TEXT,
+    created_at  TEXT,
+    updated_at  TEXT,
+    closed_at   TEXT,
+    archived    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS task_assignees (
+    task_id     TEXT NOT NULL,
+    employee_id TEXT NOT NULL,
+    role        TEXT NOT NULL CHECK (role IN ('assignee','watcher')),
+    PRIMARY KEY (task_id, employee_id, role),
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_checklist (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id    TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    done       INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_start_at ON tasks (start_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
+CREATE INDEX IF NOT EXISTS idx_task_assignees_emp ON task_assignees (employee_id);
+CREATE INDEX IF NOT EXISTS idx_task_checklist_task ON task_checklist (task_id);

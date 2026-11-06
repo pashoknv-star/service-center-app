@@ -9,14 +9,16 @@
 
 ## Current State
 
-- Last commit: `c0ce47c` (main = origin/main), 2026-10-27, «HOTFIX-H0: deploy report».
+- Last commit: см. `git log --grep "T1-1"` (T1-1, 2026-11-07, поверх `fddc477`); `c0ce47c` — последний прод-релевантный коммит (main = origin/main, push делает координатор).
 - Прод: HOTFIX-H0 выложен (коммит `4cf6f27`), анонимная матрица OK — `reports/HOTFIX_H0/DEPLOY_REPORT.md`.
-- Gate: `bash scripts/verify_all.sh` → `GATE: PASS (8 suites)` на `1eb6810`, 2026-11-04 (smoke 84, e51 23, e52 41, hygiene 19, trips 7, syntax, phplint 29 файлов, pii, clean).
+- Gate: `bash scripts/verify_all.sh` → `GATE: PASS (9 suites)` на T1-1, 2026-11-07 (smoke 84, tasks 33, e51 23, e52 41, hygiene 19, trips 7, syntax, phplint 32 файла, pii, clean).
+- Блок «Задачи» (T1-1, backend): схема v9 (`tasks`, `task_assignees`, `task_checklist`), `api/tasks.php`, `api/tasks_rules.php`, сьют `api/tasks_test.php` (на временной копии БД). Отчёт: `reports/TASKS_BLOCK/T1-1_REPORT.md`. В ТЗ значилось «v7», но v7/v8 уже заняты E12 → фактически v9.
 - Test status на `c0ce47c` (прогон 2026-11-02, Hermes):
 
 | Сьют | Команда | Результат |
 |---|---|---|
 | Backend smoke | `php api/smoke_test.php` | PASS 84/84, DB intact |
+| Задачи (T1-1) | `php api/tasks_test.php` | PASS 33/33, DB intact (на копии БД) |
 | e51 | `node scripts/test_e51_pick_geometry.js` | PASS 23/23 |
 | e52 | `node scripts/test_e52_pick_semantics.js` | PASS 41/41 |
 | hygiene | `node scripts/test_r4_hygiene.js` | PASS 19/19 |

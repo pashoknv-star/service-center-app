@@ -33,37 +33,49 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
 
-handleOptions();
-requireMethod('GET');
+// T1-1: файл можно подключить как библиотеку (api/tasks_rules.php) —
+// define('HOLIDAYS_PROVIDER_AS_LIB', true) ДО require: тогда endpoint-часть
+// не исполняется, доступны только функции holidays_provider_year() и
+// generateFallbackHolidays(). Поведение HTTP-endpoint не меняется.
+if (!defined('HOLIDAYS_PROVIDER_AS_LIB')) {
+    handleOptions();
+    requireMethod('GET');
 
-$year = isset($_GET['year']) ? (int) $_GET['year'] : (int) date('Y');
+    $year = isset($_GET['year']) ? (int) $_GET['year'] : (int) date('Y');
 
-// Диапазон разумных лет (защита от мусорного ввода).
-if ($year < 2000 || $year > 2100) {
-    error('Year out of supported range', 400);
-}
-
-$jsonFile = dirname(__DIR__) . '/data/holidays/' . $year . '.json';
-
-if (is_readable($jsonFile)) {
-    $raw = file_get_contents($jsonFile);
-    $data = json_decode($raw, true);
-    if (is_array($data) && isset($data['holidays']) && is_array($data['holidays'])) {
-        sendJson($data);
+    // Диапазон разумных лет (защита от мусорного ввода).
+    if ($year < 2000 || $year > 2100) {
+        error('Year out of supported range', 400);
     }
-    // Если файл повреждён — падаем в fallback.
+
+    sendJson(holidays_provider_year($year));
 }
 
-// ---------------------------------------------------------------------------
-// Fallback: генерация базового календаря на лету (без официальных переносов).
-// ---------------------------------------------------------------------------
+/**
+ * Производственный календарь за год: data/holidays/{year}.json, а при
+ * отсутствии/повреждении файла — базовый fallback (выходные + праздники без переносов).
+ *
+ * @return array{year: int, holidays: array<string, array{type: string, label: string|null}>}
+ */
+function holidays_provider_year(int $year): array
+{
+    $jsonFile = dirname(__DIR__) . '/data/holidays/' . $year . '.json';
 
-$holidays = generateFallbackHolidays($year);
+    if (is_readable($jsonFile)) {
+        $raw = file_get_contents($jsonFile);
+        $data = json_decode((string) $raw, true);
+        if (is_array($data) && isset($data['holidays']) && is_array($data['holidays'])) {
+            return $data;
+        }
+        // Если файл повреждён — падаем в fallback.
+    }
 
-sendJson([
-    'year'     => $year,
-    'holidays' => $holidays,
-]);
+    // Fallback: генерация базового календаря на лету (без официальных переносов).
+    return [
+        'year'     => $year,
+        'holidays' => generateFallbackHolidays($year),
+    ];
+}
 
 /**
  * Генерирует базовый производственный календарь:

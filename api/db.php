@@ -16,6 +16,8 @@ declare(strict_types=1);
  *
  * Схема v8 (E12-2): таблица trip_requests — очередь заявок RPA-роботу
  * (relay-механизм: poll GET / callback POST в api/trip_relay.php).
+ * Схема v9 (T1-1): блок «Задачи» — tasks, task_assignees, task_checklist
+ * (api/tasks.php, правила — api/tasks_rules.php).
  */
 
 final class Database
@@ -30,7 +32,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 8;
+    private const SCHEMA_VERSION = 9;
 
     private static ?Database $instance = null;
 
@@ -265,6 +267,54 @@ final class Database
             $this->pdo->exec(
                 'CREATE INDEX IF NOT EXISTS idx_trip_requests_created_at ON trip_requests (created_at)'
             );
+        }
+
+        // --- v8 → v9 (T1-1): блок «Задачи» (tasks, task_assignees, task_checklist) ---
+        // Только CREATE ... IF NOT EXISTS: существующие данные не затрагиваются.
+        if ($current < 9) {
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS tasks (' .
+                "    id          TEXT PRIMARY KEY," .
+                "    title       TEXT NOT NULL," .
+                "    description TEXT," .
+                "    start_at    TEXT NOT NULL," .
+                "    end_at      TEXT," .
+                "    priority    INTEGER NOT NULL DEFAULT 2 CHECK (priority BETWEEN 1 AND 3)," .
+                "    label       TEXT," .
+                "    status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed'))," .
+                "    check_state TEXT NOT NULL DEFAULT 'pending' CHECK (check_state IN ('ok','pending'))," .
+                "    version     INTEGER NOT NULL DEFAULT 1," .
+                "    created_by  TEXT," .
+                "    created_at  TEXT," .
+                "    updated_at  TEXT," .
+                "    closed_at   TEXT," .
+                "    archived    INTEGER NOT NULL DEFAULT 0" .
+                ')'
+            );
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS task_assignees (' .
+                "    task_id     TEXT NOT NULL," .
+                "    employee_id TEXT NOT NULL," .
+                "    role        TEXT NOT NULL CHECK (role IN ('assignee','watcher'))," .
+                "    PRIMARY KEY (task_id, employee_id, role)," .
+                "    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE," .
+                "    FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE" .
+                ')'
+            );
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS task_checklist (' .
+                "    id         INTEGER PRIMARY KEY AUTOINCREMENT," .
+                "    task_id    TEXT NOT NULL," .
+                "    text       TEXT NOT NULL," .
+                "    done       INTEGER NOT NULL DEFAULT 0," .
+                "    sort_order INTEGER NOT NULL DEFAULT 0," .
+                "    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE" .
+                ')'
+            );
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_tasks_start_at ON tasks (start_at)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_assignees_emp ON task_assignees (employee_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_checklist_task ON task_checklist (task_id)');
         }
 
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---
