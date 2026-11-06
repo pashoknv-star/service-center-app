@@ -1979,6 +1979,7 @@
       <div class="panel-tabs" id="panelTabs">
         <button type="button" class="panel-tab active" id="tabMatrix">Матрица отпусков</button>
         <button type="button" class="panel-tab" id="tabTrips">Командировки</button>
+        <button type="button" class="panel-tab" id="tabTasks">Задачи</button>
       </div>
       <div class="year-selector">
         <button class="year-btn" id="prevYear">◀</button>
@@ -2010,6 +2011,9 @@
       <button type="button" class="btn" id="newTripBtn">+ Новая командировка</button>
       <div id="tripsList"></div>
     </div>
+
+    <!-- Tasks panel (T1-2, js/tasks.js) -->
+    <div id="tasksView" style="display:none;"></div>
 
   </aside>
 
@@ -2170,6 +2174,7 @@
 
   <script src="js/storage.js"></script>
   <script src="js/trips.js"></script>
+  <script src="js/tasks.js"></script>
   <script>
     const ZONES = [
       "Группа клиентского сервиса",
