@@ -1,0 +1,76 @@
+<style>
+:root{--b:#0088CC;--p:#7700FF;--o:#FF4F12;--g:#4CAF50;--r:#F44336;--t:#2196F3}
+.m{font-size:13px;color:var(--foreground);padding:4px 0}
+.m h3{margin:18px 0 6px;font-size:14px}
+.m small{color:var(--muted-foreground)}
+.row{display:flex;gap:0;margin:6px 0;align-items:stretch}
+.name{width:92px;font-size:12px;display:flex;align-items:center;color:var(--muted-foreground)}
+.d{width:44px;height:44px;border:1px solid var(--border);display:flex;align-items:flex-start;justify-content:flex-end;padding:2px;box-sizing:border-box;position:relative;font-size:10px;color:var(--muted-foreground)}
+.d.we{background:color-mix(in srgb,var(--border) 40%,transparent)}
+.d.vac{background:color-mix(in srgb,var(--g) 30%,transparent)}
+.d.sick{background:color-mix(in srgb,var(--r) 30%,transparent)}
+.span{position:relative;display:flex}
+.span::after{content:"";position:absolute;inset:-2px;border:1.5px solid var(--b);border-radius:8px;pointer-events:none;box-shadow:0 0 6px rgba(0,136,204,.2)}
+.ic{position:absolute;left:3px;bottom:3px;width:16px;height:16px}
+.cols{display:flex;gap:14px;flex-wrap:wrap}
+.card{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:var(--card);margin:6px 0;font-size:12px}
+.card b{display:block}
+.tag{display:inline-block;font-size:10px;border:1px solid var(--border);border-radius:10px;padding:0 6px;margin-right:4px}
+.hi{color:var(--o)}.warn{color:var(--r)}
+.col{flex:1;min-width:170px;border:1px solid var(--border);border-radius:8px;padding:6px 8px}
+table{border-collapse:collapse;width:100%;font-size:12px}td,th{border-bottom:1px solid var(--border);padding:4px 6px;text-align:left}
+.wk{display:grid;grid-template-columns:50px repeat(5,1fr);font-size:11px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.wk>div{border-right:1px solid var(--border);border-bottom:1px solid var(--border);min-height:26px;padding:2px 4px}
+.ev{background:color-mix(in srgb,var(--b) 18%,transparent);border-left:3px solid var(--b);border-radius:4px;padding:2px 4px;font-size:11px}
+</style>
+<div class="m">
+<h3>1. Иконка «есть открытая задача» (ставится ТОЛЬКО на первом дне срока) + рамка срока</h3>
+<small>Выходной — серый, отпуск — зелёный, больничный — красный (фон ячеек матрицы). Срок 3 дня: Ср–Пт, рамка вокруг всех дней.</small>
+
+<div><b>Вариант A — чекбокс</b></div>
+<div class="row"><div class="name">Иванов</div>
+<div class="d we">Сб</div><div class="d we">Вс</div><div class="d">Пн</div>
+<div class="span"><div class="d">Вт<svg class="ic" viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="none" stroke="#0088CC" stroke-width="1.6"/><path d="M4.5 8.2l2.4 2.4 4.6-5" fill="none" stroke="#0088CC" stroke-width="1.6"/></svg></div><div class="d">Ср</div><div class="d vac">Чт</div></div>
+<div class="d vac">Пт</div><div class="d">Сб</div></div>
+
+<div><b>Вариант B — кружок со счётчиком (сколько открытых задач стартует в этот день)</b></div>
+<div class="row"><div class="name">Петров</div>
+<div class="d we">Сб</div><div class="d we">Вс</div><div class="d">Пн</div>
+<div class="span"><div class="d">Вт<svg class="ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#0088CC"/><text x="8" y="11.5" font-size="10" text-anchor="middle" fill="#fff" font-family="sans-serif">2</text></svg></div><div class="d">Ср</div><div class="d">Чт</div></div>
+<div class="d">Пт</div><div class="d">Сб</div></div>
+
+<div><b>Вариант C — флажок (приоритет цветом: высокий — оранжевый, обычный — синий)</b></div>
+<div class="row"><div class="name">Сидоров</div>
+<div class="d we">Сб</div><div class="d we">Вс</div><div class="d">Пн</div>
+<div class="span"><div class="d">Вт<svg class="ic" viewBox="0 0 16 16"><path d="M3 14V2M3 2.5h9l-2 3 2 3H3" fill="#FF4F12" stroke="#FF4F12" stroke-width="1.5" stroke-linejoin="round"/></svg></div><div class="d">Ср</div><div class="d">Чт</div></div>
+<div class="d">Пт</div><div class="d">Сб</div></div>
+
+<div><b>Конфликт (задача легла на больничный, добавленный позже)</b></div>
+<div class="row"><div class="name">Козлов</div>
+<div class="d">Пн</div>
+<div class="span"><div class="d">Вт<svg class="ic" viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="none" stroke="#F44336" stroke-width="1.6"/><path d="M8 4.5v4.5M8 11v1.2" stroke="#F44336" stroke-width="1.6" stroke-linecap="round"/></svg></div><div class="d sick">Ср</div><div class="d sick">Чт</div></div>
+<div class="d">Пт</div></div>
+
+<h3>2. Панель «Задачи» — три представления (переключатель: Доска | Список | Неделя)</h3>
+<div><b>2.1 Доска</b> <small>(две колонки; перетаскивание в «Закрыта» — только admin)</small></div>
+<div class="cols">
+<div class="col"><b>Открыта · 2</b>
+<div class="card"><b>Подготовить отчёт</b>Иванов · Вт 09:00 — Чт 18:00<br><span class="tag hi">высокий</span><span class="tag">отчёты</span><span class="tag">☑ 1/3</span></div>
+<div class="card"><b>Проверить стенд</b>Петров, Козлов · Пн 14:00<br><span class="tag">обычный</span><span class="tag warn">конфликт: больничный</span></div></div>
+<div class="col"><b>Закрыта · 1</b>
+<div class="card" style="opacity:.6"><b>Сверка договоров</b>Сидоров · закрыта админом</div></div></div>
+
+<div style="margin-top:10px"><b>2.2 Список</b> <small>(фильтры: сотрудник, срок, приоритет, метка)</small></div>
+<table><tr><th>Задача</th><th>Исполнитель</th><th>Срок</th><th>Приор.</th><th>Статус</th></tr>
+<tr><td>Подготовить отчёт</td><td>Иванов</td><td>Вт 09:00 — Чт 18:00</td><td class="hi">высокий</td><td>Открыта</td></tr>
+<tr><td>Проверить стенд</td><td>Петров, Козлов</td><td>Пн 14:00</td><td>обычный</td><td>Открыта</td></tr>
+<tr><td>Сверка договоров</td><td>Сидоров</td><td>Пт 12:00</td><td>низкий</td><td>Закрыта</td></tr></table>
+
+<div style="margin-top:10px"><b>2.3 Неделя/день (как Outlook; сюда ведёт клик по иконке)</b> <small>— сотрудник: Иванов</small></div>
+<div class="wk">
+<div></div><div><b>Пн</b></div><div><b>Вт</b></div><div><b>Ср</b></div><div><b>Чт</b></div><div><b>Пт</b></div>
+<div>09:00</div><div></div><div><div class="ev">Подготовить отчёт<br>09:00 →</div></div><div><div class="ev">…продолжение</div></div><div><div class="ev">→ 18:00</div></div><div></div>
+<div>14:00</div><div></div><div></div><div style="background:color-mix(in srgb,var(--g) 25%,transparent)">отпуск (задача допустима)</div><div></div><div></div>
+</div>
+<small>Правая часть панели — карточка выбранной задачи: описание, чек-лист, приоритет, метка, исполнители; для admin — кнопки «Закрыть», «Переназначить», «Править».</small>
+</div>
