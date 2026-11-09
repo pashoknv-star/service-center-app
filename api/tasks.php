@@ -28,7 +28,9 @@ declare(strict_types=1);
  * Ответы не содержат телефонов/фото (из сотрудника отдаются только id и full_name).
  * Все мутации → audit_log: task.create / task.update / task.close / task.reopen / task.archive.
  * Время — локальное +05, ISO без смещения. check_state: 'ok' | 'pending'
- * (см. tasks_resolve_check_state(): точка расширения n8n, T1-4).
+ * (n8n, T1-4: см. tasks_check_period_checked() — вердикт tasks-validate, при недоступности
+ * PHP-fallback + 'pending'; перепроверка pending — tasks_recheck_pending() после ответа на чтение списка,
+ * не чаще раза в 15 мин). Настройка n8n — только окружение (TASKS_*_WEBHOOK_*, TASKS_N8N_WEBHOOK_SECRET).
  */
 
 require_once __DIR__ . '/helpers.php';
@@ -58,6 +60,36 @@ function tasks_valid_ymd(mixed $v): bool
 {
     $p = tasks_parse_when($v);
     return $p !== null && $p['time'] === null;
+}
+
+/**
+ * Отправляет JSON-ответ и ЗАВЕРШАЕТ ответ клиенту (Content-Length + close/fastcgi_finish_request),
+ * затем выполняет $after (фоновая работа, напр. вызов n8n с таймаутом 3 с) и выходит.
+ * Ошибки $after не влияют на уже отправленный ответ.
+ */
+function tasks_send_json_then(array $data, callable $after): void
+{
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    http_response_code(200);
+    header('Content-Type: application/json; charset=utf-8');
+    corsHeaders();
+    header('Content-Length: ' . strlen((string) $json));
+    header('Connection: close');
+    ignore_user_abort(true);
+    echo $json;
+    while (ob_get_level() > 0) {
+        @ob_end_flush();
+    }
+    flush();
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+    }
+    try {
+        $after();
+    } catch (Throwable $e) {
+        error_log('[tasks] post-response job failed: ' . $e->getMessage());
+    }
+    exit;
 }
 
 /** Аудит мутации (внутри транзакции; сбой аудита откатывает мутацию). */
@@ -341,17 +373,19 @@ function tasks_version_conflict(PDO $pdo, string $id): void
 
 /**
  * Проверка FR-10; при блоке — 422 TASK_BLOCKED_BY_SICK_OR_TRIP.
+ * Правила исполняет n8n (если настроен и отвечает ≤ 3 с), иначе PHP-эталон.
  *
  * @param string[] $assigneeIds
+ * @return string check_state для сохраняемой задачи: 'ok' | 'pending' (n8n настроен, но недоступен — AC-8)
  */
-function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?string $endAt): void
+function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?string $endAt): string
 {
-    $res = tasks_check_period($pdo, $assigneeIds, $startAt, $endAt);
+    $res = tasks_check_period_checked($pdo, $assigneeIds, $startAt, $endAt);
     if (isset($res['error'])) {
         tasks_fail($res['error']);
     }
     if ($res['ok']) {
-        return;
+        return $res['check_state'];
     }
     $sug = $res['suggested_start'];
     $sugStart = null;
@@ -370,17 +404,6 @@ function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?stri
         'suggested_start' => $sugStart,
         'suggested_end'   => $sugEnd,
     ]);
-}
-
-/** Текущий check_state для сохраняемой задачи (точка расширения n8n). */
-function tasks_compute_check_state(array $assigneeIds, array $period): string
-{
-    $ext = tasks_external_validate([
-        'employees' => $assigneeIds,
-        'from'      => $period['first_day'],
-        'to'        => $period['last_day'],
-    ]);
-    return tasks_resolve_check_state($ext);
 }
 
 // =====================================================================
@@ -529,12 +552,19 @@ try {
         foreach ($rows as $r) {
             $tasks[] = tasks_build($pdo, $r, $people, $checks);
         }
-        sendJson([
+        $listPayload = [
             'success' => true,
             'tasks'   => $tasks,
             'from'    => ($from !== '' ? $from : null),
             'to'      => ($to !== '' ? $to : null),
-        ]);
+        ];
+        // n8n tasks-recheck: pending → после ответа пользователю, раз в 15 мин (метка в meta).
+        if (tasks_recheck_claim($pdo)) {
+            tasks_send_json_then($listPayload, static function () use ($pdo): void {
+                tasks_recheck_pending($pdo);
+            });
+        }
+        sendJson($listPayload);
     }
 
     if (!in_array($method, ['POST', 'PUT', 'DELETE'], true)) {
@@ -587,8 +617,7 @@ try {
         $pdo->beginTransaction();
         try {
             // FR-10 внутри транзакции: проверка и вставка согласованы.
-            tasks_enforce_fr10($pdo, $assignees, (string) $startAt, $endAt);
-            $checkState = tasks_compute_check_state($assignees, $period);
+            $checkState = tasks_enforce_fr10($pdo, $assignees, (string) $startAt, $endAt);
 
             $newId = genId('task_');
             $ts = now();
@@ -834,8 +863,7 @@ try {
         if ($periodChanged || $assigneesChanged) {
             // FR-10 — только при смене срока/исполнителей: правка текста задачи,
             // у которой позже появился больничный (conflict), не блокируется.
-            tasks_enforce_fr10($pdo, $newAssignees, (string) $new['start_at'], $new['end_at']);
-            $checkState = tasks_compute_check_state($newAssignees, $period);
+            $checkState = tasks_enforce_fr10($pdo, $newAssignees, (string) $new['start_at'], $new['end_at']);
         }
         $ts = now();
         $upd = $pdo->prepare(

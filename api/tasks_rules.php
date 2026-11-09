@@ -24,7 +24,9 @@ declare(strict_types=1);
  * Время хранится как локальное (+05), ISO без смещения: 'YYYY-MM-DD' или
  * 'YYYY-MM-DDTHH:MM[:SS]'. Правила оперируют только датами.
  *
- * Точка расширения n8n (T1-4): tasks_external_validate() / tasks_resolve_check_state().
+ * n8n (T1-4, раздел «Интеграция с n8n» ниже): tasks_check_period_checked() (вердикт webhook
+ * tasks-validate, fallback — эта же PHP-логика), tasks_recheck_pending() (webhook tasks-recheck).
+ * Правила продублированы в n8n/code/common.js — менять синхронно (сверка: scripts/n8n_compare.php).
  */
 
 // holidays_provider подключаем как библиотеку (endpoint-часть не исполняется).
@@ -413,32 +415,246 @@ function tasks_calendar_facts(PDO $pdo, array $employeeIds, string $from, string
 }
 
 // =====================================================================
-// Точка расширения n8n (T1-4)
+// Интеграция с n8n (T1-4): push-модель, приложение → n8n по HTTPS
 // =====================================================================
+//
+// n8n НИКОГДА не вызывает приложение: все факты приложение отправляет в теле запроса.
+//   tasks-validate  POST {employee_ids[], from, to, facts} → {blocked_days[], notes[], suggested_start}
+//   tasks-recheck   POST {tasks:[{id, employee_ids[], from, to}], facts} → {results:[{id, conflict, blocked_days[]}]}
+// Конфигурация — ТОЛЬКО окружение: TASKS_VALIDATE_WEBHOOK_URL, TASKS_RECHECK_WEBHOOK_URL,
+// TASKS_N8N_WEBHOOK_SECRET (заголовок X-Tasks-Secret). Без переменных — чистый PHP-режим.
+// Секрет и тела запросов в лог не пишутся.
+
+/** Общий таймаут вызова n8n, мс (TZ §3: 3 с). */
+const TASKS_N8N_TIMEOUT_MS = 3000;
+
+/** Заголовок-секрет webhook (header-auth credential в n8n). */
+const TASKS_N8N_SECRET_HEADER = 'X-Tasks-Secret';
+
+/** Минимальный интервал между перепроверками pending, с (15 мин; метка в meta). */
+const TASKS_RECHECK_INTERVAL_SEC = 900;
+
+/** Максимум задач в одном пакете перепроверки. */
+const TASKS_RECHECK_BATCH = 200;
+
+/** Ключ meta с меткой времени (unix-секунды) последней попытки перепроверки. */
+const TASKS_RECHECK_META_KEY = 'tasks_recheck_at';
+
+/** @return array{validate_url: string, recheck_url: string, secret: string} */
+function tasks_n8n_config(): array
+{
+    $get = static function (string $k): string {
+        $v = getenv($k);
+        return is_string($v) ? trim($v) : '';
+    };
+    return [
+        'validate_url' => $get('TASKS_VALIDATE_WEBHOOK_URL'),
+        'recheck_url'  => $get('TASKS_RECHECK_WEBHOOK_URL'),
+        'secret'       => $get('TASKS_N8N_WEBHOOK_SECRET'),
+    ];
+}
 
 /**
- * Внешняя проверка (n8n webhook `tasks-validate`). В T1-1 вызов НЕ реализован:
- * функция лишь сообщает, настроена ли внешняя проверка (env TASKS_VALIDATE_WEBHOOK_URL).
- * T1-4 заменит тело на HTTP-вызов (таймаут 3 с) и вернёт
- * ['configured'=>true,'available'=>bool,'result'=>array|null].
+ * POST JSON на webhook n8n с жёстким общим таймаутом.
  *
- * @param array{employees: string[], from: string, to: string} $ctx
- * @return array{configured: bool, available: bool, reason?: string}
+ * @return array{ok: bool, status: int, json: ?array, reason: ?string, ms: int}
+ *   reason (без секретов): no_secret | connect_error | timeout | http_<код> | invalid_json | no_transport
+ */
+function tasks_n8n_post(string $url, string $secret, array $payload, int $timeoutMs = TASKS_N8N_TIMEOUT_MS): array
+{
+    $t0 = microtime(true);
+    $done = static function (bool $ok, int $status, ?array $json, ?string $reason) use ($t0): array {
+        return ['ok' => $ok, 'status' => $status, 'json' => $json, 'reason' => $reason,
+                'ms' => (int) round((microtime(true) - $t0) * 1000)];
+    };
+    if ($secret === '') {
+        return $done(false, 0, null, 'no_secret');
+    }
+    $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($body === false) {
+        return $done(false, 0, null, 'invalid_json');
+    }
+    $headers = ['Content-Type: application/json', 'Accept: application/json', TASKS_N8N_SECRET_HEADER . ': ' . $secret];
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST              => true,
+            CURLOPT_POSTFIELDS        => $body,
+            CURLOPT_HTTPHEADER        => $headers,
+            CURLOPT_RETURNTRANSFER    => true,
+            CURLOPT_CONNECTTIMEOUT_MS => $timeoutMs,
+            CURLOPT_TIMEOUT_MS        => $timeoutMs,   // общий потолок, включая TLS и ответ
+            CURLOPT_FOLLOWLOCATION    => false,
+            CURLOPT_NOSIGNAL          => true,
+        ]);
+        $raw = curl_exec($ch);
+        $errno = curl_errno($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if ($raw === false) {
+            return $done(false, 0, null, $errno === 28 ? 'timeout' : 'connect_error');
+        }
+    } else {
+        $ctx = stream_context_create(['http' => [
+            'method' => 'POST', 'header' => implode("\r\n", $headers), 'content' => $body,
+            'timeout' => $timeoutMs / 1000, 'ignore_errors' => true, 'follow_location' => 0,
+        ]]);
+        $raw = @file_get_contents($url, false, $ctx);
+        if ($raw === false) {
+            return $done(false, 0, null, 'connect_error');
+        }
+        $status = 0;
+        foreach ($http_response_header ?? [] as $h) {
+            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) {
+                $status = (int) $m[1];
+            }
+        }
+    }
+    if ($status < 200 || $status >= 300) {
+        return $done(false, $status, null, 'http_' . $status);
+    }
+    $json = json_decode((string) $raw, true);
+    if (!is_array($json)) {
+        return $done(false, $status, null, 'invalid_json');
+    }
+    return $done(true, $status, $json, null);
+}
+
+/** Строка факта в формате calendar_facts. */
+function tasks_fact_row(PDO $pdo, string $date, ?string $status, ?array $trip): array
+{
+    $info = tasks_day_info($pdo, $date);
+    return [
+        'date'          => $date,
+        'matrix_status' => $status,
+        'day_type'      => $info['type'],
+        'is_day_off'    => tasks_is_day_off_type($info['type']),
+        'holiday_label' => $info['label'],
+        'trip'          => $trip,
+    ];
+}
+
+/**
+ * Строки только с БЛОКИРУЮЩИМИ фактами (sick/trip) за диапазон — разреженный формат
+ * calendar_facts: отсутствие строки = нет блока. employee_id => строки по возрастанию даты.
+ *
+ * @param string[] $employeeIds
+ */
+function tasks_sparse_blocking_facts(PDO $pdo, array $employeeIds, string $from, string $to): array
+{
+    return tasks_sparse_rows_from_matrix($pdo, tasks_matrix_facts($pdo, $employeeIds, $from, $to), $from, $to);
+}
+
+/** То же из уже загруженных фактов матрицы (tasks_matrix_facts). */
+function tasks_sparse_rows_from_matrix(PDO $pdo, array $matrix, string $from, string $to): array
+{
+    $out = [];
+    foreach (tasks_blocked_from_facts($matrix, $from, $to) as $b) {
+        $f = $matrix[$b['employee_id']][$b['date']];
+        $out[$b['employee_id']][] = tasks_fact_row($pdo, $b['date'], $f['status'] ?? null, $f['trip'] ?? null);
+    }
+    return $out;
+}
+
+/**
+ * Факты для tasks-validate: полные строки calendar_facts на [from, to] (нужны для notes)
+ * + разреженные блокирующие строки на (to, to + HORIZON] — этого достаточно для
+ * suggested_start: PHP-эталон смотрит блоки в [from, from + HORIZON + длина − 1] = [from, to + HORIZON].
+ * Размер ограничен: полный блок = employees × len(period) ≤ 100 × 366 строк, хвост — только число
+ * реальных sick/trip-дней сотрудников (единицы–десятки), а не 400 × employees.
+ *
+ * @param string[] $employeeIds
+ */
+function tasks_n8n_validate_facts(PDO $pdo, array $employeeIds, string $from, string $to): array
+{
+    $facts = tasks_calendar_facts($pdo, $employeeIds, $from, $to);
+    $tail = tasks_sparse_blocking_facts(
+        $pdo, $employeeIds, tasks_date_add($to, 1), tasks_date_add($to, TASKS_SUGGEST_HORIZON_DAYS)
+    );
+    foreach ($tail as $emp => $rows) {
+        foreach ($rows as $r) {
+            $facts[$emp][] = $r;
+        }
+    }
+    return $facts;
+}
+
+/**
+ * Приводит ответ tasks-validate к строгому виду или null, если формат неверен.
+ *
+ * @return array{blocked_days: array, notes: array, suggested_start: ?string}|null
+ */
+function tasks_n8n_normalize_verdict(?array $j): ?array
+{
+    if ($j === null || !isset($j['blocked_days'], $j['notes']) || !is_array($j['blocked_days']) || !is_array($j['notes'])
+        || !array_key_exists('suggested_start', $j)) {
+        return null;
+    }
+    $blocked = [];
+    foreach ($j['blocked_days'] as $b) {
+        if (!is_array($b) || !tasks_valid_date_string($b['date'] ?? null) || !is_string($b['employee_id'] ?? null)
+            || !in_array($b['reason'] ?? null, ['sick', 'trip'], true)) {
+            return null;
+        }
+        $blocked[] = ['date' => $b['date'], 'employee_id' => $b['employee_id'], 'reason' => $b['reason']];
+    }
+    $notes = [];
+    foreach ($j['notes'] as $n) {
+        if (!is_array($n) || !tasks_valid_date_string($n['date'] ?? null) || !is_string($n['kind'] ?? null)
+            || !(($n['employee_id'] ?? null) === null || is_string($n['employee_id']))
+            || !(($n['label'] ?? null) === null || is_string($n['label']))) {
+            return null;
+        }
+        $notes[] = ['date' => $n['date'], 'employee_id' => $n['employee_id'] ?? null, 'kind' => $n['kind'],
+                    'label' => $n['label'] ?? null];
+    }
+    $sug = $j['suggested_start'];
+    if ($sug !== null && !tasks_valid_date_string($sug)) {
+        return null;
+    }
+    return ['blocked_days' => $blocked, 'notes' => $notes, 'suggested_start' => $sug];
+}
+
+/** 'YYYY-MM-DD' без времени. */
+function tasks_valid_date_string(mixed $v): bool
+{
+    $p = tasks_parse_when($v);
+    return $p !== null && $p['time'] === null;
+}
+
+/**
+ * Внешняя проверка (n8n webhook `tasks-validate`).
+ *
+ * @param array $ctx {employee_ids: string[], from: string, to: string, facts: array}
+ * @return array{configured: bool, available: bool, reason?: string, result?: ?array, ms?: int}
+ *   available=true ⇒ result — нормализованный вердикт (tasks_n8n_normalize_verdict).
  */
 function tasks_external_validate(array $ctx): array
 {
-    $url = getenv('TASKS_VALIDATE_WEBHOOK_URL');
-    if (!is_string($url) || $url === '') {
+    $cfg = tasks_n8n_config();
+    if ($cfg['validate_url'] === '') {
         return ['configured' => false, 'available' => false, 'reason' => 'not_configured'];
     }
-    // TODO(T1-4): HTTP POST на webhook с таймаутом 3 с.
-    return ['configured' => true, 'available' => false, 'reason' => 'not_implemented'];
+    $r = tasks_n8n_post($cfg['validate_url'], $cfg['secret'], $ctx);
+    $res = ['configured' => true, 'available' => false, 'reason' => $r['reason'], 'result' => null, 'ms' => $r['ms']];
+    if ($r['ok']) {
+        $v = tasks_n8n_normalize_verdict($r['json']);
+        if ($v === null) {
+            $res['reason'] = 'invalid_response';
+        } else {
+            $res['available'] = true;
+            $res['reason'] = null;
+            $res['result'] = $v;
+        }
+    }
+    return $res;
 }
 
 /**
  * check_state по результату внешней проверки: 'ok' — внешняя проверка не нужна
  * (локальные правила авторитетны) или пройдена; 'pending' — настроена, но недоступна
- * (задача сохраняется, перепроверка по расписанию — AC-8).
+ * (задача сохраняется, перепроверка — AC-8).
  */
 function tasks_resolve_check_state(array $external): string
 {
@@ -446,4 +662,187 @@ function tasks_resolve_check_state(array $external): string
         return 'ok';
     }
     return !empty($external['available']) ? 'ok' : 'pending';
+}
+
+/**
+ * Проверка FR-10 с учётом n8n (вариант B): если n8n настроен и ответил — вердикт n8n
+ * (check_state 'ok'); иначе PHP-эталон (fallback) и check_state 'pending' (допущение Д-3).
+ * Без настройки n8n — PHP-эталон, 'ok'. При расхождении n8n и PHP пишет предупреждение в error_log.
+ *
+ * @return array как tasks_check_period() + 'check_state' ('ok'|'pending') + 'source' ('php'|'n8n')
+ *         (+ 'n8n_reason' при fallback), либо ['error' => код].
+ */
+function tasks_check_period_checked(PDO $pdo, array $assigneeIds, string $startAt, ?string $endAt): array
+{
+    $php = tasks_check_period($pdo, $assigneeIds, $startAt, $endAt);
+    if (isset($php['error'])) {
+        return $php;
+    }
+    $cfg = tasks_n8n_config();
+    if ($cfg['validate_url'] === '') {
+        return $php + ['check_state' => 'ok', 'source' => 'php'];
+    }
+    $ids = array_values(array_unique(array_map('strval', $assigneeIds)));
+    $ext = tasks_external_validate([
+        'employee_ids' => $ids,
+        'from'         => $php['first_day'],
+        'to'           => $php['last_day'],
+        'facts'        => tasks_n8n_validate_facts($pdo, $ids, $php['first_day'], $php['last_day']),
+    ]);
+    if (tasks_resolve_check_state($ext) !== 'ok') {
+        error_log('[tasks] n8n tasks-validate unavailable: ' . ($ext['reason'] ?? '?') . ' → php fallback, check_state=pending');
+        return $php + ['check_state' => 'pending', 'source' => 'php', 'n8n_reason' => (string) ($ext['reason'] ?? 'unavailable')];
+    }
+    $v = $ext['result'];
+    $same = $v['blocked_days'] === $php['blocked_days'] && $v['notes'] === $php['notes']
+        && $v['suggested_start'] === $php['suggested_start'];
+    if (!$same) {
+        error_log('[tasks] n8n/php DIVERGENCE for ' . json_encode(['from' => $php['first_day'], 'to' => $php['last_day'], 'employees' => $ids])
+            . ' n8n=' . json_encode($v, JSON_UNESCAPED_UNICODE) . ' php='
+            . json_encode(['blocked_days' => $php['blocked_days'], 'notes' => $php['notes'], 'suggested_start' => $php['suggested_start']], JSON_UNESCAPED_UNICODE));
+    }
+    return [
+        'ok'              => $v['blocked_days'] === [],
+        'blocked_days'    => $v['blocked_days'],
+        'suggested_start' => $v['suggested_start'],
+        'notes'           => $v['notes'],
+        'first_day'       => $php['first_day'],
+        'last_day'        => $php['last_day'],
+        'days'            => $php['days'],
+        'check_state'     => 'ok',
+        'source'          => 'n8n',
+    ];
+}
+
+// ---------------------------------------------------------------------
+// Перепроверка pending (tasks-recheck)
+// ---------------------------------------------------------------------
+
+/**
+ * Нужна ли перепроверка и «занять слот»: n8n recheck настроен, есть pending-задачи,
+ * с прошлой попытки прошло ≥ TASKS_RECHECK_INTERVAL_SEC. Метка (meta) ставится в момент захвата —
+ * параллельные чтения не дублируют вызов, а недоступный n8n не вызывается чаще раза в интервал.
+ */
+function tasks_recheck_claim(PDO $pdo, ?int $nowTs = null): bool
+{
+    $cfg = tasks_n8n_config();
+    if ($cfg['recheck_url'] === '') {
+        return false;
+    }
+    $nowTs = $nowTs ?? time();
+    $has = $pdo->query("SELECT 1 FROM tasks WHERE check_state = 'pending' AND archived = 0 LIMIT 1")->fetchColumn();
+    if (!$has) {
+        return false;
+    }
+    $pdo->prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (:k, '0')")->execute([':k' => TASKS_RECHECK_META_KEY]);
+    $upd = $pdo->prepare(
+        'UPDATE meta SET value = :now WHERE key = :k AND CAST(value AS INTEGER) <= :th'
+    );
+    $upd->execute([':now' => (string) $nowTs, ':k' => TASKS_RECHECK_META_KEY, ':th' => $nowTs - TASKS_RECHECK_INTERVAL_SEC]);
+    return $upd->rowCount() === 1;
+}
+
+/**
+ * Пакетная перепроверка pending-задач через tasks-recheck. Запись — только здесь, в приложении:
+ * при вердикте n8n check_state 'pending' → 'ok' (без смены version/updated_at, чтобы не вызывать
+ * 409 у открытых вкладок) + audit 'task.recheck' {conflict, blocked_days_count}. Признак conflict
+ * вычисляется при чтении (tasks_build, AC-4) и поэтому отдельно не хранится.
+ * Недоступность n8n не бросает исключений — задачи остаются pending.
+ *
+ * @return array{configured: bool, available: bool, checked: int, resolved: int, conflicts: int, reason?: ?string}
+ */
+function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH): array
+{
+    $stat = ['configured' => false, 'available' => false, 'checked' => 0, 'resolved' => 0, 'conflicts' => 0];
+    $cfg = tasks_n8n_config();
+    if ($cfg['recheck_url'] === '') {
+        return $stat + ['reason' => 'not_configured'];
+    }
+    $stat['configured'] = true;
+
+    $stmt = $pdo->prepare(
+        "SELECT id, start_at, end_at, version FROM tasks
+         WHERE check_state = 'pending' AND archived = 0 ORDER BY updated_at, id LIMIT :n"
+    );
+    $stmt->bindValue(':n', max(1, $limit), PDO::PARAM_INT);
+    $stmt->execute();
+    $assg = $pdo->prepare("SELECT employee_id FROM task_assignees WHERE task_id = :t AND role = 'assignee' ORDER BY employee_id");
+
+    $batch = [];   // id => ['version' => int, 'ids' => string[], 'from' => string, 'to' => string]
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $p = tasks_validate_period($r['start_at'], $r['end_at']);
+        $assg->execute([':t' => $r['id']]);
+        $ids = array_map('strval', $assg->fetchAll(PDO::FETCH_COLUMN));
+        if ($p['error'] !== null || $ids === []) {
+            continue;
+        }
+        $batch[(string) $r['id']] = ['version' => (int) $r['version'], 'ids' => $ids, 'from' => $p['first_day'], 'to' => $p['last_day']];
+    }
+    if ($batch === []) {
+        return $stat + ['reason' => 'nothing_pending'];
+    }
+
+    $allIds = [];
+    $min = null;
+    $max = null;
+    $tasks = [];
+    foreach ($batch as $id => $b) {
+        $allIds = array_merge($allIds, $b['ids']);
+        $min = $min === null || $b['from'] < $min ? $b['from'] : $min;
+        $max = $max === null || $b['to'] > $max ? $b['to'] : $max;
+        $tasks[] = ['id' => $id, 'employee_ids' => $b['ids'], 'from' => $b['from'], 'to' => $b['to']];
+    }
+    $allIds = array_values(array_unique($allIds));
+    $matrix = tasks_matrix_facts($pdo, $allIds, $min, $max);
+    $facts = tasks_sparse_rows_from_matrix($pdo, $matrix, $min, $max);
+    $stat['checked'] = count($tasks);
+
+    $r = tasks_n8n_post($cfg['recheck_url'], $cfg['secret'], ['tasks' => $tasks, 'facts' => (object) $facts]);
+    if (!$r['ok'] || !isset($r['json']['results']) || !is_array($r['json']['results'])) {
+        error_log('[tasks] n8n tasks-recheck unavailable: ' . ($r['reason'] ?? 'invalid_response'));
+        return array_merge($stat, ['reason' => $r['reason'] ?? 'invalid_response']);
+    }
+    $stat['available'] = true;
+
+    $upd = $pdo->prepare(
+        "UPDATE tasks SET check_state = 'ok'
+         WHERE id = :id AND version = :v AND check_state = 'pending' AND archived = 0"
+    );
+    foreach ($r['json']['results'] as $res) {
+        $id = is_array($res) && is_string($res['id'] ?? null) ? $res['id'] : null;
+        if ($id === null || !isset($batch[$id]) || !array_key_exists('conflict', $res) || !is_bool($res['conflict'])
+            || !is_array($res['blocked_days'] ?? null)) {
+            continue;   // вердикт с ошибкой/неизвестная задача — остаётся pending
+        }
+        $b = $batch[$id];
+        // Сверка с PHP-эталоном (логируем расхождение, запись идёт по вердикту n8n).
+        $phpConf = tasks_blocked_from_facts($matrix, $b['from'], $b['to']);
+        $phpConf = array_values(array_filter($phpConf, static fn($x) => in_array($x['employee_id'], $b['ids'], true)));
+        if (($phpConf !== []) !== $res['conflict']) {
+            error_log('[tasks] n8n/php DIVERGENCE (recheck) task=' . $id . ' n8n_conflict=' . json_encode($res['conflict'])
+                . ' php_conflict=' . json_encode($phpConf !== []));
+        }
+        $pdo->beginTransaction();
+        try {
+            $upd->execute([':id' => $id, ':v' => $b['version']]);
+            if ($upd->rowCount() === 1) {
+                audit($pdo, 'task.recheck', 'system', null, 'task', $id, [
+                    'check_state'        => 'ok',
+                    'conflict'           => $res['conflict'],
+                    'blocked_days_count' => count($res['blocked_days']),
+                ]);
+                $stat['resolved']++;
+                if ($res['conflict']) {
+                    $stat['conflicts']++;
+                }
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('[tasks] recheck write failed for ' . $id . ': ' . $e->getMessage());
+        }
+    }
+    return $stat;
 }

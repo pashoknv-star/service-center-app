@@ -324,7 +324,7 @@ $env = getenv();
 $env['SC_APP_DB'] = $tmpDb;
 unset($env['TASKS_VALIDATE_WEBHOOK_URL']);
 $proc = proc_open(
-    sprintf('php -S %s:%d -t %s > %s 2>&1', $host, $port, escapeshellarg($root), escapeshellarg($serverLog)),
+    sprintf('exec php -S %s:%d -t %s > %s 2>&1', $host, $port, escapeshellarg($root), escapeshellarg($serverLog)),
     [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
     $pipes,
     $root,

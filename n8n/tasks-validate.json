@@ -1,0 +1,89 @@
+{
+  "name": "tasks-validate",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tasks-validate",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "27c48420-bbfc-54da-b8bb-67d2cf9dbe5d",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "5e4ecb65-2aa7-5112-935d-ba5efa1d2a2a",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "tasks-webhook-secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// ---- common.js: детерминированные правила блока «Задачи» (T1-4) ----------------\n// Строго эквивалентно api/tasks_rules.php (T1-1). Без LLM, без сетевых вызовов:\n// n8n НИКОГДА не обращается к приложению — все факты приходят в теле запроса.\n// Этот блок вставляется build-скриптом (scripts/n8n_deploy.py) в оба workflow.\nconst HORIZON_DAYS = 400;      // = TASKS_SUGGEST_HORIZON_DAYS (tasks_rules.php)\nconst MAX_PERIOD_DAYS = 366;   // = TASKS_MAX_PERIOD_DAYS\nconst MAX_EMPLOYEES = 100;\nconst DAY_MS = 86400000;\n\n// 'YYYY-MM-DD' → UTC-миллисекунды дня или null (как tasks_parse_when без времени + checkdate).\nfunction parseYmd(s) {\n  if (typeof s !== 'string') return null;\n  const m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(s);\n  if (!m) return null;\n  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);\n  const dt = new Date(0);\n  dt.setUTCFullYear(y, mo - 1, d);\n  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;\n  return dt.getTime();\n}\nfunction fmtYmd(t) {\n  const dt = new Date(t);\n  const y = String(dt.getUTCFullYear()).padStart(4, '0');\n  const m = String(dt.getUTCMonth() + 1).padStart(2, '0');\n  const d = String(dt.getUTCDate()).padStart(2, '0');\n  return y + '-' + m + '-' + d;\n}\nconst addDays = (ymd, n) => fmtYmd(parseYmd(ymd) + n * DAY_MS);\nconst diffDays = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / DAY_MS);\nconst cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);\n\n// Период [from, to] → {error} | {days: string[]}.\nfunction checkRange(from, to) {\n  if (parseYmd(from) === null) return { error: 'invalid_from' };\n  if (parseYmd(to) === null) return { error: 'invalid_to' };\n  const n = diffDays(from, to);\n  if (n < 0) return { error: 'date_range_invalid' };\n  if (n + 1 > MAX_PERIOD_DAYS) return { error: 'period_too_long' };\n  const days = [];\n  for (let i = 0; i <= n; i++) days.push(addDays(from, i));\n  return { days };\n}\n\n// facts = {employee_id: [{date, matrix_status, day_type, is_day_off, holiday_label, trip}, ...]}\n// (формат calendar_facts). Строки могут быть разреженными: отсутствие строки = нет блока.\n// Возвращает Map \"emp\\u0000date\" → row, только для запрошенных сотрудников.\nfunction indexFacts(facts, employeeIds) {\n  const idx = new Map();\n  if (facts === null || typeof facts !== 'object' || Array.isArray(facts)) return null;\n  for (const emp of employeeIds) {\n    const rows = facts[emp];\n    if (rows === undefined || rows === null) continue;\n    if (!Array.isArray(rows)) return null;\n    for (const r of rows) {\n      if (r === null || typeof r !== 'object' || parseYmd(r.date) === null) return null;\n      idx.set(emp + '\\u0000' + r.date, { emp, row: r });\n    }\n  }\n  return idx;\n}\n\n// Причина блока: sick | trip | null (tasks_blocked_from_facts).\nfunction blockReason(r) {\n  if (r.matrix_status === 'sick') return 'sick';\n  if (r.matrix_status === 'trip' || (r.trip !== null && r.trip !== undefined)) return 'trip';\n  return null;\n}\n\n// Блокирующие дни в [from, to], отсортированы по (date, employee_id).\nfunction blockedIn(idx, from, to) {\n  const out = [];\n  for (const { emp, row } of idx.values()) {\n    if (row.date < from || row.date > to) continue;\n    const reason = blockReason(row);\n    if (reason !== null) out.push({ date: row.date, employee_id: emp, reason });\n  }\n  out.sort((a, b) => cmp(a.date, b.date) || cmp(a.employee_id, b.employee_id));\n  return out;\n}\n\n// Ближайший старт >= start для периода длиной length дней (tasks_suggest_start).\nfunction suggestStart(idx, start, length) {\n  length = Math.max(1, length);\n  const limit = addDays(start, HORIZON_DAYS);\n  const winEnd = addDays(limit, length - 1);\n  const dates = [...new Set(blockedIn(idx, start, winEnd).map((b) => b.date))].sort();\n  let cand = start;\n  while (cand <= limit) {\n    const end = addDays(cand, length - 1);\n    let last = null;\n    for (const d of dates) if (d >= cand && d <= end) last = d;\n    if (last === null) return cand;\n    cand = addDays(last, 1);\n  }\n  return null;\n}\n\n// Нейтральные пометки (tasks_notes_from_facts): выходной/праздник по календарю и vacation/day_off.\nfunction buildNotes(idx, days) {\n  const notes = [];\n  const dayInfo = new Map();\n  for (const { row } of idx.values()) {\n    if (!dayInfo.has(row.date) && typeof row.day_type === 'string') {\n      dayInfo.set(row.date, { type: row.day_type, label: row.holiday_label === undefined ? null : row.holiday_label });\n    }\n  }\n  const set = new Set(days);\n  for (const d of days) {\n    const info = dayInfo.get(d);\n    if (info && ['weekend', 'holiday', 'transferred_day_off'].includes(info.type)) {\n      notes.push({ date: d, employee_id: null, kind: info.type === 'holiday' ? 'holiday' : 'weekend', label: info.label });\n    }\n  }\n  for (const { emp, row } of idx.values()) {\n    if (!set.has(row.date)) continue;\n    if (row.matrix_status === 'vacation' || row.matrix_status === 'day_off') {\n      notes.push({ date: row.date, employee_id: emp, kind: row.matrix_status, label: null });\n    }\n  }\n  notes.sort((a, b) => cmp(a.date, b.date) || cmp(a.employee_id === null ? '' : a.employee_id, b.employee_id === null ? '' : b.employee_id) || cmp(a.kind, b.kind));\n  return notes;\n}\n\n// Нормализация списка сотрудников → string[] | null.\nfunction normEmployees(v) {\n  if (!Array.isArray(v) || v.length === 0 || v.length > MAX_EMPLOYEES) return null;\n  const out = [];\n  for (const e of v) {\n    if (typeof e !== 'string' || e.trim() === '') return null;\n    const t = e.trim();\n    if (!out.includes(t)) out.push(t);\n  }\n  return out;\n}\n// ---- /common.js ----------------------------------------------------------------\n\n// ---- tasks-validate: вход {employee_ids[], from, to, facts} → {blocked_days[], notes[], suggested_start}\nconst body = $input.first().json.body ?? {};\nconst fail = (code) => [{ json: { error: code } }];\n\nconst employees = normEmployees(body.employee_ids);\nif (employees === null) return fail('employee_ids_invalid');\nconst range = checkRange(body.from, body.to);\nif (range.error) return fail(range.error);\nconst idx = indexFacts(body.facts, employees);\nif (idx === null) return fail('facts_invalid');\n\nconst blocked = blockedIn(idx, body.from, body.to);\nreturn [{\n  json: {\n    blocked_days: blocked,\n    notes: buildNotes(idx, range.days),\n    suggested_start: blocked.length > 0 ? suggestStart(idx, body.from, range.days.length) : null,\n  },\n}];\n"
+      },
+      "id": "c5433098-6d76-50a6-9f2e-fce92f454cbe",
+      "name": "Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": "={{ $json.error ? 400 : 200 }}"
+        }
+      },
+      "id": "604fb699-8f9d-5f9c-8354-b3d97af67a47",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rules": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "executionTimeout": 10
+  }
+}
