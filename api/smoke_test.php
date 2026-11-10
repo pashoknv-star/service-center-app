@@ -203,7 +203,7 @@ function cleanup(string $base, string $cookieAdmin, string $testEmpId, string $a
     }
 }
 
-$cmd = sprintf('php -S %s:%d -t %s > %s 2>&1', $host, $port, escapeshellarg($root), escapeshellarg($serverLog));
+$cmd = sprintf('exec php -S %s:%d -t %s > %s 2>&1', $host, $port, escapeshellarg($root), escapeshellarg($serverLog));
 $descriptors = [
     0 => ['pipe', 'r'],
     1 => ['pipe', 'w'],
