@@ -64,7 +64,7 @@ function tasks_valid_ymd(mixed $v): bool
 
 /**
  * Отправляет JSON-ответ и ЗАВЕРШАЕТ ответ клиенту (Content-Length + close/fastcgi_finish_request),
- * затем выполняет $after (фоновая работа, напр. вызов n8n с таймаутом 3 с) и выходит.
+ * затем выполняет $after (фоновая работа, напр. tasks-recheck с таймаутом 10 с) и выходит.
  * Ошибки $after не влияют на уже отправленный ответ.
  */
 function tasks_send_json_then(array $data, callable $after): void

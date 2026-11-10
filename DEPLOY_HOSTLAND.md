@@ -32,11 +32,15 @@ www/
 ├── upload.php          # корневой делегат загрузки фото -> api/upload.php
 ├── api/
 │   ├── *.php           # backend (PHP 8.1-совместимый), КРОМЕ smoke_test.php, init_db.php,
-│   │                   #   seed_positions.php, debug_token.php
+│   │                   #   seed_positions.php, debug_token.php и ВСЕХ тестов `*_test.php`
+│   │                   #   (tasks_test.php, tasks_n8n_test.php и будущие — исключаются по шаблону)
 │   ├── .htaccess
 │   └── schema.sql      # нужен db.php для миграций (от веба закрывается в HF-2)
 ├── js/                 # ТОЛЬКО файлы, подключённые в index.html через <script src>
-│                       #   (сейчас js/storage.js, js/trips.js; js/test_*.js не кладём)
+│                       #   (на 2026-11-10: js/storage.js, js/trips.js, js/tasks.js, js/tasks_matrix.js).
+│                       #   Список АВТОМАТИЧЕСКИЙ: шаг 2 раздела 2 берёт его из index.html,
+│                       #   поэтому новый подключённый скрипт попадёт в пакет сам, а текст выше
+│                       #   — лишь снимок на дату. js/test_*.js не кладём
 ├── data/
 │   ├── .htaccess       # Require all denied — ЗАЩИТА БД (работает, проверено)
 │   └── holidays/*.json
@@ -45,7 +49,8 @@ www/
 ```
 
 **НЕ кладём:** `data/app.db` (БД не входит в пакет — см. ниже), `docs/`, `api/E8_SYNC.md`,
-`test_*` (корневые и `js/test_*`), `scripts/`, `reports/`, `staff_project/`, корневой `.htaccess`
+`test_*` (корневые и `js/test_*`), `api/*_test.php`, `n8n/` (экспорты workflow и их код),
+`scripts/`, `reports/`, `staff_project/`, корневой `.htaccess`
 (php_flag → 500), `DEPLOY.md`, `css/`, `QA_REPORT.md`.
 
 > **БД.** `data/app.db` в пакет не входит — ни при первой выкладке, ни при обновлении.
@@ -69,8 +74,9 @@ bash scripts/check_no_pii.sh            # по умолчанию: index.html js
 # Шаг 2. JS — только реально подключённые в index.html (<script src>), без внешних URL.
 JS=$(grep -oP '<script[^>]+src="\K[^"]+' index.html | grep -vE '^(https?:)?//')
 
-# Шаг 3. api/*.php, кроме служебных/тестовых/отладочных.
-API=$(ls api/*.php | grep -vE '^api/(smoke_test|init_db|seed_positions|debug_token)\.php$')
+# Шаг 3. api/*.php, кроме служебных/отладочных (списком) и ВСЕХ тестов `*_test.php` (шаблоном:
+#        новый тест не попадёт в пакет, даже если про него забыли).
+API=$(ls api/*.php | grep -vE '^api/(smoke_test|init_db|seed_positions|debug_token)\.php$|_test\.php$')
 
 # Шаг 4. Явный allowlist (никаких каталогов целиком).
 tar -czf "$OUT" \
@@ -82,7 +88,7 @@ tar -czf "$OUT" \
 
 # Шаг 5. Приложить список содержимого и убедиться, что запрещённого в пакете нет.
 tar -tzf "$OUT" | sort | tee /home/hermes/sc-hostland-deploy.lst
-if tar -tzf "$OUT" | grep -E '^(docs/|scripts/|reports/|staff_project/|data/app\.db|test_|js/test_|api/(E8_SYNC\.md|smoke_test\.php|init_db\.php|seed_positions\.php|debug_token\.php)$|\.htaccess$)'; then
+if tar -tzf "$OUT" | grep -E '^(docs/|scripts/|reports/|staff_project/|n8n/|data/app\.db|test_|js/test_|api/(E8_SYNC\.md|smoke_test\.php|init_db\.php|seed_positions\.php|debug_token\.php)$|\.htaccess$)|_test\.php$'; then
   echo "ЗАПРЕЩЁННЫЕ ФАЙЛЫ В ПАКЕТЕ — выкладку остановить" >&2; rm -f "$OUT"; exit 1
 fi
 ```
@@ -137,6 +143,7 @@ rm -rf /tmp/scnew ~/sc-hostland-deploy.tar.gz
 # 3. Удалить с прода устаревшие/служебные файлы (F-02). `cp -a` их не удаляет сам.
 cd $WWW
 rm -f  api/smoke_test.php api/debug_token.php api/init_db.php api/seed_positions.php api/E8_SYNC.md
+rm -f  api/*_test.php                         # тесты по шаблону: tasks_test.php, tasks_n8n_test.php и любые будущие *_test.php
 rm -rf docs
 rm -f  js/test_*.js test_*.php test_*.sh      # тестовые файлы, если есть
 # (api/schema.sql остаётся: нужен db.php для миграций; закрывается от веба в HF-2)
@@ -156,6 +163,7 @@ diff ~/acl-before.txt ~/acl-after.txt && echo "OK   ACL data/images не изм�
 # 6. Служебные файлы удалены (R2-01): каждый должен отдавать 403 или 404.
 BASE=http://host1882970.hostland.pro
 for p in /api/debug_token.php /api/smoke_test.php /api/init_db.php /api/seed_positions.php \
+         /api/tasks_test.php /api/tasks_n8n_test.php \
          /api/E8_SYNC.md /docs/API_DOCUMENTATION.json; do
   code=$(curl -sI -o /dev/null -w '%{http_code}' "$BASE$p")
   case $code in 403|404) echo "OK   $p -> $code";; *) echo "FAIL $p -> $code (ожидалось 403|404)";; esac
@@ -164,7 +172,7 @@ done
 
 Чек-лист §4: (1) `acl-before.txt` снят до распаковки; (2) `images/.htaccess` не скопирован;
 (3) `chmod` выполнен только на `api`, `data/holidays`, `js`, `index.html`, `upload.php`;
-(4) `diff` ACL пуст; (5) `curl -I` по 6 путям шага 6 — только 403/404; (6) запись работает:
+(4) `diff` ACL пуст; (5) `curl -I` по 8 путям шага 6 — только 403/404; (6) запись работает:
 логин и сохранение данных в приложении (проверяет, что у веб-юзера сохранилась запись в `data/app.db`);
 (7) выполнен раздел 10.
 
@@ -250,6 +258,9 @@ sqlite3 ~/host1882970.hostland.pro/htdocs/www/data/app.db \
 | `/api/smoke_test.php` | 403 или 404 |
 | `/api/init_db.php` | 403 или 404 |
 | `/api/seed_positions.php` | 403 или 404 |
+| `/api/tasks.php` (без сессии) | 401 |
+| `/api/tasks_test.php` | 403 или 404 |
+| `/api/tasks_n8n_test.php` | 403 или 404 |
 | `/api/debug_token.php` | 404 |
 | `/api/schema.sql` | 403 |
 | `/docs/API_DOCUMENTATION.json` | 404 |
@@ -269,6 +280,9 @@ chk /api/holidays.php              401
 chk /api/smoke_test.php            '403|404'
 chk /api/init_db.php               '403|404'
 chk /api/seed_positions.php        '403|404'
+chk /api/tasks.php                 401              # без сессии (блок «Задачи»)
+chk /api/tasks_test.php            '403|404'        # тесты на прод не выкладываются
+chk /api/tasks_n8n_test.php        '403|404'
 chk /api/debug_token.php           404
 chk /api/schema.sql                403
 chk /docs/API_DOCUMENTATION.json   404
@@ -306,3 +320,16 @@ sqlite3 ~/host1882970.hostland.pro/htdocs/www/data/app.db \
 Токен импорта (`external_api_token`) **не меняется** — решение владельца 2026-10-26:
 внешняя система принадлежит владельцу. Утечки нет: `debug_token.php` показывал 16 из 64
 hex-символов, оставшиеся 48 (192 бита) не подбираются.
+
+## 12. n8n на проде (вариант A, решение владельца 2026-11-10)
+
+В варианте A n8n на проде **не подключается**. Переменные окружения `TASKS_VALIDATE_WEBHOOK_URL`,
+`TASKS_RECHECK_WEBHOOK_URL`, `TASKS_N8N_WEBHOOK_SECRET` на Hostland **НЕ задаются** — блок «Задачи»
+работает в чистом PHP-режиме: правила FR-10 считает `api/tasks_rules.php`, `check_state` всегда `ok`,
+перепроверка pending не запускается, внешние вызовы не выполняются. Каталог `n8n/` (экспорты workflow)
+в пакет не входит (раздел 2).
+
+Подключение n8n к проду — отдельным решением владельца. Для справки (при таком решении): таймаут
+проверки при сохранении (`tasks-validate`) — 3 с, фоновой перепроверки (`tasks-recheck`) — 10 с;
+вызов дольше 10 с пишется в `error_log` строкой `tasks n8n ANOMALY workflow=… ms=… reason=…`
+(`reports/TASKS_BLOCK/T1-9_REPORT.md`).

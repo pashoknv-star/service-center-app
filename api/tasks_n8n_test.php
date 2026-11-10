@@ -9,7 +9,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 /**
- * tasks_n8n_test.php — тесты интеграции блока «Задачи» с n8n (T1-4): вызов webhook с таймаутом 3 с,
+ * tasks_n8n_test.php — тесты интеграции блока «Задачи» с n8n (T1-4): вызов webhook (validate 3 с, recheck 10 с, лог аномалий > 10 с),
  * заголовок-секрет, fallback + check_state='pending' (AC-8), вердикт n8n как источник правил,
  * перепроверка pending (tasks-recheck) после ответа пользователю, не чаще раза в 15 мин.
  *
@@ -458,6 +458,109 @@ $run('N12 tasks_recheck_pending: вердикты с ошибкой/чужой i
         $pdo->exec("DELETE FROM tasks WHERE id = 'nn_bad'");
     }
     return 'остаётся pending';
+});
+
+// --- D-4 (T1-9): таймауты 3 с / 10 с и лог аномалий ----------------------------
+// Запись error_log во временный файл: [результат вызова, текст лога].
+$withLog = function (callable $fn): array {
+    $logf = tempnam(sys_get_temp_dir(), 'sc_n8n_elog_');
+    $prev = ini_set('error_log', $logf);
+    try {
+        $res = $fn();
+    } finally {
+        ini_set('error_log', $prev === false ? '' : $prev);
+    }
+    $log = (string) file_get_contents($logf);
+    @unlink($logf);
+    return [$res, $log];
+};
+$addPending = function (string $id, string $emp) use ($pdo): void {
+    $pdo->exec("INSERT INTO tasks (id, title, start_at, check_state) VALUES ('$id', 'pend', '2027-06-01', 'pending')");
+    $pdo->exec("INSERT INTO task_assignees (task_id, employee_id, role) VALUES ('$id', '$emp', 'assignee')");
+};
+$stateOf = fn(string $id): string => (string) $pdo->query("SELECT check_state FROM tasks WHERE id = " . $pdo->quote($id))->fetchColumn();
+
+$run('N13 D-4 константы: validate 3000 мс, recheck 10000 мс (отдельная), порог аномалии 10000 мс', function () {
+    eq(TASKS_N8N_TIMEOUT_MS, 3000, 'validate timeout');
+    eq(TASKS_N8N_RECHECK_TIMEOUT_MS, 10000, 'recheck timeout');
+    eq(TASKS_N8N_ANOMALY_MS, 10000, 'anomaly threshold');
+    $p = (new ReflectionFunction('tasks_recheck_pending'))->getParameters();
+    eq($p[2]->getName() . '=' . $p[2]->getDefaultValue(), 'timeoutMs=10000', 'recheck: таймаут по умолчанию = константа 10000');
+    return '3000 / 10000 / 10000';
+});
+
+$run('N14 validate с задержкой 4 с → pending за ≤ ~3,5 с; лог «timeout» (штатно), без ANOMALY и секрета', function () use ($pdo, $setEnv, $setCtl, $SECRET, $withLog) {
+    $setEnv(true, false, $SECRET);
+    try {
+        $setCtl(['validate' => ['delay_ms' => 4000, 'response' => ['blocked_days' => [], 'notes' => [], 'suggested_start' => null]]]);
+        $t0 = microtime(true);
+        [$r, $log] = $withLog(fn() => tasks_check_period_checked($pdo, ['nn_a'], '2027-08-20', '2027-08-21'));
+        $ms = (int) round((microtime(true) - $t0) * 1000);
+    } finally {
+        $setEnv(false, false, null);
+    }
+    eq([$r['source'], $r['check_state'], $r['n8n_reason']], ['php', 'pending', 'timeout'], 'fallback pending');
+    ok($ms >= 2800 && $ms <= 3500, 'validate занял ' . $ms . ' мс');
+    ok(preg_match('/tasks n8n timeout workflow=tasks-validate ms=\d+ limit_ms=3000/', $log) === 1, 'строка timeout: ' . trim($log));
+    ok(strpos($log, 'ANOMALY') === false, 'таймаут validate — не аномалия');
+    ok(strpos($log, $SECRET) === false, 'секрет не в логе');
+    usleep(1300000);   // mock дочитывает sleep
+    return $ms . ' мс';
+});
+
+$run('N15 recheck с задержкой 4 с (таймаут 10 с) → успех: pending → ok, без ANOMALY', function () use ($pdo, $setEnv, $setCtl, $SECRET, $withLog, $addPending, $stateOf) {
+    $addPending('nn_rc4', 'nn_a');
+    $setEnv(false, true, $SECRET);
+    try {
+        $setCtl(['recheck' => ['mode' => 'auto', 'delay_ms' => 4000]]);
+        $t0 = microtime(true);
+        [$s, $log] = $withLog(fn() => tasks_recheck_pending($pdo));
+        $ms = (int) round((microtime(true) - $t0) * 1000);
+        eq([$s['available'], $s['checked'], $s['resolved']], [true, 1, 1], 'stat');
+        eq($stateOf('nn_rc4'), 'ok', 'pending → ok');
+        ok($ms >= 3800 && $ms < 9000, 'recheck занял ' . $ms . ' мс (дольше 3 с, но в пределах 10 с)');
+        ok(strpos($log, 'ANOMALY') === false && strpos($log, 'tasks n8n timeout') === false, 'лога таймаутов нет: ' . trim($log));
+    } finally {
+        $setEnv(false, false, null);
+        $pdo->exec("DELETE FROM tasks WHERE id = 'nn_rc4'");
+        $pdo->exec("DELETE FROM audit_log WHERE action = 'task.recheck' AND entity_id = 'nn_rc4'");   // чтобы не влиять на счёт audit в H5
+    }
+    return $ms . ' мс';
+});
+
+$run('N16 recheck сверх таймаута → строка «tasks n8n ANOMALY» (workflow, мс, reason), задача pending', function () use ($pdo, $setEnv, $setCtl, $SECRET, $withLog, $addPending, $stateOf) {
+    $addPending('nn_rc_slow', 'nn_a');
+    $setEnv(false, true, $SECRET);
+    try {
+        $setCtl(['recheck' => ['mode' => 'auto', 'delay_ms' => 3000]]);
+        $t0 = microtime(true);
+        [$s, $log] = $withLog(fn() => tasks_recheck_pending($pdo, 200, 1500));   // таймаут 1,5 с вместо 10 с (чтобы не ждать 10+ с)
+        $ms = (int) round((microtime(true) - $t0) * 1000);
+        eq([$s['available'], $s['reason'], $s['resolved']], [false, 'timeout', 0], 'stat');
+        eq($stateOf('nn_rc_slow'), 'pending', 'остаётся pending');
+        ok($ms >= 1400 && $ms <= 2200, 'ушёл по таймауту за ' . $ms . ' мс');
+        $lines = array_values(array_filter(explode("\n", $log), fn($l) => strpos($l, 'ANOMALY') !== false));
+        eq(count($lines), 1, 'ровно одна строка ANOMALY');
+        ok(preg_match('/tasks n8n ANOMALY workflow=tasks-recheck ms=\d+ reason=timeout$/', trim($lines[0])) === 1, 'формат: ' . trim($lines[0]));
+        ok(strpos($log, $SECRET) === false && strpos($log, 'nn_rc_slow') === false && strpos($log, '2027-06') === false, 'без секрета и payload');
+        usleep(1700000);   // mock дочитывает sleep
+    } finally {
+        $setEnv(false, false, null);
+        $pdo->exec("DELETE FROM tasks WHERE id = 'nn_rc_slow'");
+    }
+    return $ms . ' мс';
+});
+
+$run('N17 tasks_n8n_log_call: > 10 с → ANOMALY, таймаут validate → без ANOMALY, быстрый вызов и пустой workflow → тишина', function () use ($withLog) {
+    $call = fn(string $wf, ?string $reason, int $ms) => $withLog(fn() => tasks_n8n_log_call($wf, ['ok' => $reason === null, 'reason' => $reason, 'ms' => $ms], 3000))[1];
+    ok(strpos($call('tasks-recheck', null, 10500), 'tasks n8n ANOMALY workflow=tasks-recheck ms=10500 reason=ok') !== false, 'успех за 10,5 с → ANOMALY');
+    ok(strpos($call('tasks-recheck', 'timeout', 10003), 'tasks n8n ANOMALY workflow=tasks-recheck ms=10003 reason=timeout') !== false, 'recheck timeout → ANOMALY');
+    $v = $call('tasks-validate', 'timeout', 3002);
+    ok(strpos($v, 'tasks n8n timeout workflow=tasks-validate ms=3002') !== false && strpos($v, 'ANOMALY') === false, 'validate timeout → без ANOMALY');
+    eq($call('tasks-recheck', null, 4000), '', 'быстрый успех — тишина');
+    eq($call('tasks-validate', 'http_500', 120), '', 'быстрый http_500 — тишина (его пишет вызывающий код)');
+    eq($call('', 'timeout', 20000), '', 'без workflow — тишина');
+    return '6 случаев';
 });
 
 // ----------------------------------------------------------------------------

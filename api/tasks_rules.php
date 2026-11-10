@@ -425,8 +425,20 @@ function tasks_calendar_facts(PDO $pdo, array $employeeIds, string $from, string
 // TASKS_N8N_WEBHOOK_SECRET (заголовок X-Tasks-Secret). Без переменных — чистый PHP-режим.
 // Секрет и тела запросов в лог не пишутся.
 
-/** Общий таймаут вызова n8n, мс (TZ §3: 3 с). */
+/**
+ * Таймаут синхронного вызова tasks-validate, мс (пользователь ждёт ответа; TZ §3: 3 с).
+ * Превышение — штатная ситуация (задача сохраняется как pending), не аномалия.
+ */
 const TASKS_N8N_TIMEOUT_MS = 3000;
+
+/**
+ * Таймаут фонового вызова tasks-recheck, мс (D-4, решение владельца 2026-11-10): идёт после ответа
+ * пользователю (tasks_send_json_then), поэтому может ждать дольше; задержки n8n на российском VPS допустимы.
+ */
+const TASKS_N8N_RECHECK_TIMEOUT_MS = 10000;
+
+/** Порог аномалии, мс: вызов n8n дольше 10 с (или фоновый recheck, упёршийся в свой таймаут) → строка `tasks n8n ANOMALY`. */
+const TASKS_N8N_ANOMALY_MS = 10000;
 
 /** Заголовок-секрет webhook (header-auth credential в n8n). */
 const TASKS_N8N_SECRET_HEADER = 'X-Tasks-Secret';
@@ -455,17 +467,43 @@ function tasks_n8n_config(): array
 }
 
 /**
- * POST JSON на webhook n8n с жёстким общим таймаутом.
+ * Лог длительности вызова n8n (D-4). Одна строка в error_log, без секрета и без payload.
+ *   `tasks n8n ANOMALY workflow=… ms=… reason=…` — вызов не завершился за 10 с: recheck, упёршийся в свой
+ *      таймаут, либо любой вызов с ms > TASKS_N8N_ANOMALY_MS;
+ *   `tasks n8n timeout workflow=… ms=… limit_ms=…` — таймаут validate (3 с): штатно, задача pending (не аномалия).
+ */
+function tasks_n8n_log_call(string $workflow, array $r, int $timeoutMs): void
+{
+    if ($workflow === '') {
+        return;
+    }
+    $reason = (string) ($r['reason'] ?? 'ok');
+    $ms = (int) $r['ms'];
+    $background = $workflow === 'tasks-recheck';   // фоновый вызов: его таймаут и есть порог аномалии
+    if ($ms > TASKS_N8N_ANOMALY_MS || ($reason === 'timeout' && $background)) {
+        error_log('tasks n8n ANOMALY workflow=' . $workflow . ' ms=' . $ms . ' reason=' . $reason);
+    } elseif ($reason === 'timeout') {
+        error_log('tasks n8n timeout workflow=' . $workflow . ' ms=' . $ms . ' limit_ms=' . $timeoutMs);
+    }
+}
+
+/**
+ * POST JSON на webhook n8n с жёстким общим таймаутом; длительность измеряется всегда (поле ms).
+ * $workflow ('tasks-validate' | 'tasks-recheck') — для лога таймаутов/аномалий (tasks_n8n_log_call); пусто — без лога.
  *
  * @return array{ok: bool, status: int, json: ?array, reason: ?string, ms: int}
  *   reason (без секретов): no_secret | connect_error | timeout | http_<код> | invalid_json | no_transport
  */
-function tasks_n8n_post(string $url, string $secret, array $payload, int $timeoutMs = TASKS_N8N_TIMEOUT_MS): array
+function tasks_n8n_post(string $url, string $secret, array $payload, int $timeoutMs = TASKS_N8N_TIMEOUT_MS, string $workflow = ''): array
 {
     $t0 = microtime(true);
-    $done = static function (bool $ok, int $status, ?array $json, ?string $reason) use ($t0): array {
-        return ['ok' => $ok, 'status' => $status, 'json' => $json, 'reason' => $reason,
-                'ms' => (int) round((microtime(true) - $t0) * 1000)];
+    $done = static function (bool $ok, int $status, ?array $json, ?string $reason) use ($t0, $workflow, $timeoutMs): array {
+        $r = ['ok' => $ok, 'status' => $status, 'json' => $json, 'reason' => $reason,
+              'ms' => (int) round((microtime(true) - $t0) * 1000)];
+        if ($reason !== 'no_secret') {   // вызова не было — нечего мерить
+            tasks_n8n_log_call($workflow, $r, $timeoutMs);
+        }
+        return $r;
     };
     if ($secret === '') {
         return $done(false, 0, null, 'no_secret');
@@ -502,7 +540,8 @@ function tasks_n8n_post(string $url, string $secret, array $payload, int $timeou
         ]]);
         $raw = @file_get_contents($url, false, $ctx);
         if ($raw === false) {
-            return $done(false, 0, null, 'connect_error');
+            $elapsed = (microtime(true) - $t0) * 1000;
+            return $done(false, 0, null, $elapsed >= $timeoutMs - 50 ? 'timeout' : 'connect_error');
         }
         $status = 0;
         foreach ($http_response_header ?? [] as $h) {
@@ -636,7 +675,7 @@ function tasks_external_validate(array $ctx): array
     if ($cfg['validate_url'] === '') {
         return ['configured' => false, 'available' => false, 'reason' => 'not_configured'];
     }
-    $r = tasks_n8n_post($cfg['validate_url'], $cfg['secret'], $ctx);
+    $r = tasks_n8n_post($cfg['validate_url'], $cfg['secret'], $ctx, TASKS_N8N_TIMEOUT_MS, 'tasks-validate');
     $res = ['configured' => true, 'available' => false, 'reason' => $r['reason'], 'result' => null, 'ms' => $r['ms']];
     if ($r['ok']) {
         $v = tasks_n8n_normalize_verdict($r['json']);
@@ -748,10 +787,11 @@ function tasks_recheck_claim(PDO $pdo, ?int $nowTs = null): bool
  * 409 у открытых вкладок) + audit 'task.recheck' {conflict, blocked_days_count}. Признак conflict
  * вычисляется при чтении (tasks_build, AC-4) и поэтому отдельно не хранится.
  * Недоступность n8n не бросает исключений — задачи остаются pending.
+ * Таймаут вызова — TASKS_N8N_RECHECK_TIMEOUT_MS (10 с; параметр $timeoutMs — для тестов); аномалии (> 10 с) — в error_log.
  *
  * @return array{configured: bool, available: bool, checked: int, resolved: int, conflicts: int, reason?: ?string}
  */
-function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH): array
+function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH, int $timeoutMs = TASKS_N8N_RECHECK_TIMEOUT_MS): array
 {
     $stat = ['configured' => false, 'available' => false, 'checked' => 0, 'resolved' => 0, 'conflicts' => 0];
     $cfg = tasks_n8n_config();
@@ -797,7 +837,7 @@ function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH): arra
     $facts = tasks_sparse_rows_from_matrix($pdo, $matrix, $min, $max);
     $stat['checked'] = count($tasks);
 
-    $r = tasks_n8n_post($cfg['recheck_url'], $cfg['secret'], ['tasks' => $tasks, 'facts' => (object) $facts]);
+    $r = tasks_n8n_post($cfg['recheck_url'], $cfg['secret'], ['tasks' => $tasks, 'facts' => (object) $facts], $timeoutMs, 'tasks-recheck');
     if (!$r['ok'] || !isset($r['json']['results']) || !is_array($r['json']['results'])) {
         error_log('[tasks] n8n tasks-recheck unavailable: ' . ($r['reason'] ?? 'invalid_response'));
         return array_merge($stat, ['reason' => $r['reason'] ?? 'invalid_response']);
