@@ -80,7 +80,8 @@
     dragId: null,
     loadSeq: 0,
     orphanCount: 0,                // T1-8: открытые задачи без исполнителя (?orphans=1)
-    modal: null                    // T1-8: окно замены { empId, fullName, items, target, error, busy }
+    modal: null,                   // T1-8: окно замены { empId, fullName, items, target, error, busy }
+    dirty: false                   // T1-11: sync принёс изменения, пока панель/форма закрыта — перечитать при возврате
   };
   var DOM = {};
 
@@ -241,23 +242,25 @@
     var ws = weekStart(a);
     return { from: ws, to: addDays(ws, 6) };
   }
-  function load() {
+  function load(silent) {
     var seq = ++S.loadSeq;
+    S.dirty = false;
     var q = '';
     if (S.view === 'calendar') {
       var r = calRange();
       q = '?from=' + r.from + '&to=' + r.to;
     }
-    S.loading = true;
-    render();
+    if (!silent) { S.loading = true; render(); }
     return api('GET', API + q).then(function (res) {
       if (seq !== S.loadSeq) return;       // устаревший ответ
       S.loading = false;
       if (res.ok && res.data.success) {
         S.tasks = res.data.tasks || [];
         S.loadError = null;
-      } else {
+      } else if (!silent) {
         S.loadError = errText(res);
+      } else {
+        return;                            // фоновое обновление не удалось — остаётся прежний список без ошибки
       }
       // выбранной карточки нет в выборке (например, другая неделя) — дотянуть по id
       if (S.selectedId && !findTask(S.selectedId)) {
@@ -340,6 +343,13 @@
     if (t.status === 'closed') h += '<span class="tk-tag tk-closed">закрыта</span>';
     return h;
   }
+  // подстрока карточки Доски: имена без ссылок; удалённый исполнитель открытой задачи зачёркнут (как в Списке/карточке)
+  function nameStrike(t) {
+    var open = t.status === 'open' && !t.archived;
+    return assigneesOf(t).map(function (p) {
+      return (p.removed && open) ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
+    }).join(', ');
+  }
   function nameLinks(t) {
     var a = assigneesOf(t);
     if (!a.length) return '<span class="tk-muted">—</span>';
@@ -411,7 +421,7 @@
     return '<div class="tk-card' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '"' +
       ' data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board"' + (admin ? ' draggable="true" data-tk-drag="' + esc(t.id) + '"' : '') + '>' +
       '<b>' + esc(t.title) + '</b>' +
-      '<div class="tk-sub">' + (isOrphan(t) ? plateHtml(t) : esc(assigneeNames(t).join(', '))) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
+      '<div class="tk-sub">' + (isOrphan(t) ? plateHtml(t) : nameStrike(t)) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
       '<div class="tk-badges">' + (+t.priority === 1 ? '<span class="tk-tag tk-hi">высокий</span>' : '<span class="tk-tag">' + esc(PRIORITY_TEXT[t.priority] || '') + '</span>') +
       badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></div>';
   }
@@ -720,6 +730,27 @@
     DOM.tab.innerHTML = 'Задачи' + (n > 0
       ? '<span class="tk-orph-cnt" data-tk-badge="orphans" title="Открытых задач без исполнителя: ' + n + '">⚠ ' + n + '</span>' : '');
   }
+  // P3-4: poll() применил дельту sync (index.html) — сотрудника могли удалить в другом клиенте.
+  // Всегда: счётчик ⚠ (один ?orphans=1). Если панель задач открыта и форма правки закрыта — перечитываем
+  // справочник сотрудников и текущее представление, не трогая фильтры, выбранную задачу, окно замены и форму.
+  function isPanelOpen() {
+    if (!S.active) return false;
+    var p = panelEl();
+    return !p || !p.classList || p.classList.contains('open');
+  }
+  function onRemoteChange() {
+    var cnt = refreshOrphanCount();
+    if (!S.active) return cnt;
+    if (!isPanelOpen() || S.form) { S.dirty = true; return cnt; }   // перечитаем, когда панель/форма освободятся
+    S.dirty = false;
+    return Promise.all([cnt, loadEmployees(true).then(function () { return load(true); })]);
+  }
+  function flushDirty() {
+    if (!S.dirty || !S.active || !isPanelOpen() || S.form) return;
+    S.dirty = false;
+    loadEmployees(true).then(function () { return load(true); });
+  }
+
   function refreshOrphanCount() {
     var seq = ++_orphSeq;
     return api('GET', API + '?orphans=1').then(function (r) {
@@ -878,7 +909,7 @@
       });
     },
     saveForm: function () { submitForm(); },
-    cancelForm: function () { S.form = null; render(); },
+    cancelForm: function () { S.form = null; render(); flushDirty(); },
     removeAssignee: function (el) {
       if (!S.form) return;
       S.form.draft.assignees = S.form.draft.assignees.filter(function (x) { return x !== el.dataset.emp; });
@@ -1093,6 +1124,14 @@
   function activeIds(task) {
     return assigneesOf(task).filter(function (a) { return !a.removed; }).map(function (a) { return a.employee_id; });
   }
+  // P3-1: строка задачи в окне — из ответа сервера (название, срок, версия), а не из снимка при открытии окна
+  function syncItemView(it, t) {
+    if (!t) return;
+    it.version = t.version;
+    if (t.title != null) it.title = t.title;
+    if (t.start_at != null) it.start_at = t.start_at;
+    it.end_at = t.end_at || null;
+  }
   // свежая карточка задачи: версия, состав исполнителей, не закрыта ли
   function readItem(it) {
     return api('GET', API + '?id=' + encodeURIComponent(it.id)).then(function (r) {
@@ -1105,7 +1144,7 @@
         return false;
       }
       it.task = t;
-      it.version = t.version;
+      syncItemView(it, t);
       it.others = activeIds(t);
       if (it.initialOthers === undefined) it.initialOthers = it.others.slice();
       if (t.status !== 'open' || t.archived) {
@@ -1142,7 +1181,7 @@
       if (r.ok && r.data && r.data.success) {
         it.status = 'done'; it.error = ''; it.blocked = null; it.checked = false;
         it.assignedTo = empName(target);
-        if (r.data.task) { it.task = r.data.task; it.version = r.data.task.version; }
+        if (r.data.task) { it.task = r.data.task; syncItemView(it, r.data.task); }
         return 'done';
       }
       if (r.status === 409 && code === 'VERSION_CONFLICT') {
@@ -1169,6 +1208,12 @@
       return 'error';
     });
   }
+  // P3-2: все назначены → «Задачи переназначены»; часть → «Переназначено N из M; остальные — см. окно» (info); ни одной → без тоста
+  function assignToastText(done, total) {
+    if (!done || !total) return null;
+    if (done >= total) return { text: 'Задачи переназначены', type: 'success' };
+    return { text: 'Переназначено ' + done + ' из ' + total + '; остальные — см. окно', type: 'info' };
+  }
   function runAssign(only, accept) {
     var M = S.modal;
     if (!M || M.busy || !canWrite()) return Promise.resolve();
@@ -1180,7 +1225,7 @@
     M.error = '';
     M.busy = true;
     renderModal();
-    var target = M.target, changed = false, noEmp = false;
+    var target = M.target, noEmp = false;
     return M.ready.then(function () {
       return items.reduce(function (p, it) {
         return p.then(function () {
@@ -1189,7 +1234,6 @@
           return go.then(function (ok) {
             if (!ok || it.status === 'skipped') return null;
             return putItem(it, target, accept, false).then(function (res) {
-              if (res === 'done') changed = true;
               if (res === 'no_employee') noEmp = true;
             });
           });
@@ -1197,15 +1241,18 @@
       }, Promise.resolve());
     }).then(function () {
       M.busy = false;
+      // P3-2: тост по факту — сколько из обработанных в этом запуске задач реально назначено
+      var done = items.filter(function (it) { return it.status === 'done'; }).length;
+      var toastText = assignToastText(done, items.length);
+      if (toastText) toast(toastText.text, toastText.type);
+      if (done) {
+        notifyChanged();
+        if (S.active) load();
+      }
       if (noEmp) {
         M.error = ERR_TEXT.employee_not_found + ' Возможно, его уже удалили — выберите другого.';
         M.target = '';
         return loadEmployees(true).then(function () { if (S.modal === M) renderModal(); });
-      }
-      if (changed) {
-        toast('Задачи переназначены', 'success');
-        notifyChanged();
-        if (S.active) load();
       }
       if (S.modal === M) renderModal();
       return null;
@@ -1477,7 +1524,7 @@
     DOM.root.addEventListener('drop', onDrop);
     // T1-8: счётчик ⚠ на вкладке — при старте и при каждом открытии панели отпусков
     var trg = document.getElementById('vacationTrigger');
-    if (trg) trg.addEventListener('click', function () { refreshOrphanCount(); });
+    if (trg) trg.addEventListener('click', function () { refreshOrphanCount(); setTimeout(flushDirty, 0); });
     refreshOrphanCount();
   }
   function autoInit() {
@@ -1490,7 +1537,8 @@
     open: openTasksPanel,
     activate: activate,
     deactivate: deactivate,
-    reload: load,
+    reload: function () { return load(); },
+    onRemoteChange: onRemoteChange,       // T1-11: index.html poll() после применённой дельты sync
     canWrite: canWrite,
     openTasksFor: openTasksFor,           // T1-8: до удаления сотрудника (index.html #deleteEmp)
     offerReassign: offerReassign,         // T1-8: после удаления (index.html #deleteEmp)

@@ -4970,6 +4970,11 @@
             renderVacationMatrix();
             showToast('Матрица обновлена: другой пользователь внёс изменения', 'info');
           }
+          // T1-11 (P3-4): дельта sync применена (changed) либо в ней удалён сотрудник — обновить счётчик ⚠ и открытый список задач.
+          // employeesDeleted проверяем отдельно: удаление сотрудника без записей в матрице не даёт changed === true.
+          if ((changed || (d.employeesDeleted && d.employeesDeleted.length)) && window.Tasks && typeof window.Tasks.onRemoteChange === 'function') {
+            try { window.Tasks.onRemoteChange(); } catch (e) {}
+          }
         }).catch(function () {}).finally(function () {
           busy = false;
         });
