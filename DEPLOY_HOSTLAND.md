@@ -261,7 +261,7 @@ sqlite3 ~/host1882970.hostland.pro/htdocs/www/data/app.db \
 | `/api/tasks.php` (без сессии) | 401 |
 | `/api/tasks_test.php` | 403 или 404 |
 | `/api/tasks_n8n_test.php` | 403 или 404 |
-| `/api/debug_token.php` | 404 |
+| `/api/debug_token.php` | 403 или 404 (файла нет; 403 даёт `FilesMatch` в `api/.htaccess` — факт выкладки T1 2026-11-11) |
 | `/api/schema.sql` | 403 |
 | `/docs/API_DOCUMENTATION.json` | 404 |
 | `/api/E8_SYNC.md` | 403 или 404 |
@@ -283,7 +283,7 @@ chk /api/seed_positions.php        '403|404'
 chk /api/tasks.php                 401              # без сессии (блок «Задачи»)
 chk /api/tasks_test.php            '403|404'        # тесты на прод не выкладываются
 chk /api/tasks_n8n_test.php        '403|404'
-chk /api/debug_token.php           404
+chk /api/debug_token.php           '403|404'
 chk /api/schema.sql                403
 chk /docs/API_DOCUMENTATION.json   404
 chk /api/E8_SYNC.md                '403|404'
