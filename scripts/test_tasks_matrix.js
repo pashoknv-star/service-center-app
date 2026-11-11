@@ -288,6 +288,16 @@ async function main() {
   check('B17 неизвестный сотрудник / задача вне года / мусор / конец<начала — без исключений; конец<начала = 1 день',
     !threw && A.icons().length === 1 && A.icons()[0].emp === '3' && A.framed(3).length === 1 && A.framed(1).length === 0);
 
+  // B19 (T1-7, D-1): задача удалённого сотрудника (orphan:true, assignees[].removed:true) — в матрице строки нет, исключений нет;
+  // смешанная задача (удалённый + действующий) рисуется только у действующего
+  const rem = (e) => ({ employee_id: 'emp_' + e, full_name: 'Удалён ' + e, removed: true, removed_at: '2026-11-11T10:00:00+00:00' });
+  const orph = task('2026-11-10', '2026-11-12', []); orph.assignees = [rem(77)]; orph.orphan = true;
+  const mixed = task('2026-11-10', '2026-11-12', [1]); mixed.assignees = [rem(78), mixed.assignees[0]]; mixed.orphan = false;
+  A = mk([orph, mixed]);
+  threw = false; try { await A.M.overlay(2026); await settle(); } catch (e) { threw = true; }
+  check('B19 orphan-задача (удалённый исполнитель) не ломает матрицу: без исключений, строки нет; смешанная — иконка и рамка только у действующего',
+    !threw && A.icons().length === 1 && A.icons()[0].emp === '1' && A.framed(1).length === 3);
+
   // B18 перерисовка не накапливает мусор
   A = mk([task('2026-11-10', '2026-11-12', [1])]);
   await A.M.overlay(2026); await A.M.overlay(2026); await A.M.overlay(2026); await settle();

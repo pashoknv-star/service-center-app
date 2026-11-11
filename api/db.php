@@ -32,7 +32,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 9;
+    private const SCHEMA_VERSION = 10;
 
     private static ?Database $instance = null;
 
@@ -317,6 +317,13 @@ final class Database
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_checklist_task ON task_checklist (task_id)');
         }
 
+        // --- v9 → v10 (T1-7, D-1): исполнитель задачи переживает удаление сотрудника ---
+        // task_assignees пересобирается БЕЗ FK на employees (FK на tasks CASCADE сохраняется)
+        // + full_name_snapshot (ФИО на момент назначения/переименования).
+        if ($current < 10) {
+            $this->rebuildTaskAssigneesV10();
+        }
+
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---
         // Происходит при миграции (в т.ч. когда схема уже v6), защищена
         // meta-флагом 'trips_legacy_migrated' — повторный запуск дублей не даёт.
@@ -325,6 +332,75 @@ final class Database
         // E5-4: периодическая очистка журнала аудита (сохраняет прежнее
         // поведение для БД, пришедших с версии >= 5).
         $this->cleanupAuditLog();
+    }
+
+    /**
+     * v9 → v10: пересборка task_assignees (create new → copy → drop → rename) без FK на
+     * employees и с колонкой full_name_snapshot (заполняется из employees).
+     *
+     * Идемпотентна: если у таблицы уже нет FK на employees и есть full_name_snapshot —
+     * ничего не делает (свежая БД получает именно такую таблицу из schema.sql).
+     * PRAGMA foreign_keys нельзя менять внутри транзакции — отключается до BEGIN и
+     * возвращается в ON после COMMIT/ROLLBACK (рекомендация SQLite для пересборки таблиц).
+     */
+    private function rebuildTaskAssigneesV10(): void
+    {
+        $exists = $this->pdo->query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_assignees'"
+        )->fetchColumn();
+        if (!$exists) {
+            return; // нечего пересобирать (создастся из schema.sql)
+        }
+        $cols = $this->pdo->query('PRAGMA table_info(task_assignees)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        $hasSnapshot = in_array('full_name_snapshot', $cols, true);
+        $hasEmpFk = false;
+        foreach ($this->pdo->query('PRAGMA foreign_key_list(task_assignees)')->fetchAll(PDO::FETCH_ASSOC) as $fk) {
+            if (strtolower((string) $fk['table']) === 'employees') {
+                $hasEmpFk = true;
+            }
+        }
+        if ($hasSnapshot && !$hasEmpFk) {
+            return; // уже v10
+        }
+
+        $this->pdo->exec('PRAGMA foreign_keys = OFF');
+        try {
+            $this->pdo->beginTransaction();
+            try {
+                $this->pdo->exec('DROP TABLE IF EXISTS task_assignees_v10');
+                $this->pdo->exec(
+                    'CREATE TABLE task_assignees_v10 (' .
+                    "    task_id            TEXT NOT NULL," .
+                    "    employee_id        TEXT NOT NULL," .
+                    "    role               TEXT NOT NULL CHECK (role IN ('assignee','watcher'))," .
+                    "    full_name_snapshot TEXT," .
+                    "    PRIMARY KEY (task_id, employee_id, role)," .
+                    "    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE" .
+                    ')'
+                );
+                $this->pdo->exec(
+                    'INSERT INTO task_assignees_v10 (task_id, employee_id, role, full_name_snapshot) ' .
+                    'SELECT ta.task_id, ta.employee_id, ta.role, ' .
+                    ($hasSnapshot
+                        ? 'COALESCE((SELECT e.full_name FROM employees e WHERE e.id = ta.employee_id), ta.full_name_snapshot) '
+                        : '(SELECT e.full_name FROM employees e WHERE e.id = ta.employee_id) ') .
+                    'FROM task_assignees ta'
+                );
+                $this->pdo->exec('DROP TABLE task_assignees');
+                $this->pdo->exec('ALTER TABLE task_assignees_v10 RENAME TO task_assignees');
+                $this->pdo->exec(
+                    'CREATE INDEX IF NOT EXISTS idx_task_assignees_emp ON task_assignees (employee_id)'
+                );
+                $this->pdo->commit();
+            } catch (Throwable $e) {
+                if ($this->pdo->inTransaction()) {
+                    $this->pdo->rollBack();
+                }
+                throw $e;
+            }
+        } finally {
+            $this->pdo->exec('PRAGMA foreign_keys = ON');
+        }
     }
 
     /**

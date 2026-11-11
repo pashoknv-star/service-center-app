@@ -806,7 +806,11 @@ function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH, int $
     );
     $stmt->bindValue(':n', max(1, $limit), PDO::PARAM_INT);
     $stmt->execute();
-    $assg = $pdo->prepare("SELECT employee_id FROM task_assignees WHERE task_id = :t AND role = 'assignee' ORDER BY employee_id");
+    // T1-7 (D-1): удалённые исполнители (нет в employees) фактов не имеют — в recheck не участвуют.
+    $assg = $pdo->prepare(
+        "SELECT ta.employee_id FROM task_assignees ta JOIN employees e ON e.id = ta.employee_id
+         WHERE ta.task_id = :t AND ta.role = 'assignee' ORDER BY ta.employee_id"
+    );
 
     $batch = [];   // id => ['version' => int, 'ids' => string[], 'from' => string, 'to' => string]
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {

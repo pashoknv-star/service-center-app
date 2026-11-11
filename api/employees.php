@@ -197,6 +197,11 @@ try {
             }
             $upStmt->execute();
 
+            // T1-7 (D-1): переименование → обновить ФИО-снимок в назначениях задач.
+            if (isset($params[':full_name']) && is_string($params[':full_name']) && $params[':full_name'] !== '') {
+                tasks_refresh_name_snapshot($pdo, $id, $params[':full_name']);
+            }
+
             if ($upStmt->rowCount() === 0) {
                 // Проверяем, существует ли сотрудник вообще.
                 if (!employeeExists($pdo, $id)) {
@@ -258,6 +263,8 @@ try {
             } catch (Throwable $_e) {
                 $delEmpRow = null;
             }
+            // T1-7 (D-1): открытые задачи, где он исполнитель, — в аудит (назначения остаются, «исполнитель удалён»).
+            $openTasks = tasks_open_ids_for_employee($pdo, $id);
             // Каскадное удаление записей и балансов через FK ON DELETE CASCADE.
             $stmt = $pdo->prepare('DELETE FROM employees WHERE id = :id');
             $stmt->bindValue(':id', $id, PDO::PARAM_STR);
@@ -268,6 +275,7 @@ try {
             if ($delEmpRow && is_array($delEmpRow) && !empty($delEmpRow['full_name'])) {
                 $empDetails['fullName'] = $delEmpRow['full_name'];
             }
+            $empDetails['open_tasks'] = $openTasks;
             try {
                 audit($pdo, 'employee.delete', null, null, 'employee', $id, empty($empDetails) ? null : $empDetails);
             } catch (Throwable $_e) { /* non-critical */ }

@@ -99,6 +99,15 @@ try {
             $counts['employees']++;
         }
 
+        // T1-7 (D-1): назначения задач остаются (task_assignees без FK на employees); вернувшийся
+        // с тем же id сотрудник снова «действующий» — освежаем ФИО-снимок.
+        try {
+            $pdo->exec(
+                'UPDATE task_assignees SET full_name_snapshot = (SELECT e.full_name FROM employees e WHERE e.id = task_assignees.employee_id)
+                 WHERE EXISTS (SELECT 1 FROM employees e WHERE e.id = task_assignees.employee_id)'
+            );
+        } catch (Throwable $_e) { /* non-critical */ }
+
         // --- entries (объект с ключами "employeeId:date" ИЛИ массив) ---
         if (isset($body['entries']) && (is_array($body['entries']) || is_object($body['entries']))) {
             $stmtEn = $pdo->prepare(

@@ -321,6 +321,10 @@ try {
                         if (!empty($changes)) {
                             audit($pdo, 'employee.update', null, null, 'employee', $id, ['changes' => $changes]);
                         }
+                        // T1-7 (D-1): переименование → обновить ФИО-снимок в назначениях задач.
+                        if (isset($changes['full_name']) && $changes['full_name'] !== '') {
+                            tasks_refresh_name_snapshot($pdo, (string) $id, (string) $changes['full_name']);
+                        }
                     }
                 } catch (Throwable $_e) { /* non-critical */ }
                 $keepEmpIds[$id] = true;
@@ -380,6 +384,8 @@ try {
                         $stmtD->execute();
                         $delRow = $stmtD->fetch(PDO::FETCH_ASSOC);
                     } catch (Throwable $_d) { $delRow = null; }
+                    // T1-7 (D-1): открытые задачи исполнителя — в аудит (назначения не удаляются).
+                    $oldOpenTasks = tasks_open_ids_for_employee($pdo, (string) $oldId);
                     $stmtDelEnt->bindValue(':id', $oldId, PDO::PARAM_STR);
                     $stmtDelEnt->execute();
                     $stmtDelEmp->bindValue(':id', $oldId, PDO::PARAM_STR);
@@ -391,6 +397,7 @@ try {
                         if ($delRow && isset($delRow['full_name'])) {
                             audit($pdo, 'employee.delete', null, null, 'employee', $oldId, [
                                 'fullName' => $delRow['full_name'],
+                                'open_tasks' => $oldOpenTasks,
                             ]);
                         }
                     } catch (Throwable $_e) { /* non-critical */ }

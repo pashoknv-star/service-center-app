@@ -263,6 +263,39 @@ function handleOptions(): void
 }
 
 /**
+ * T1-7 (D-1): id открытых неархивных задач, где сотрудник — исполнитель (роль assignee).
+ * Для аудита employee.delete (details.open_tasks) и GET tasks.php?open_for. Не бросает исключений
+ * (нет таблиц задач / старая схема → пусто).
+ *
+ * @return string[]
+ */
+function tasks_open_ids_for_employee(PDO $pdo, string $employeeId): array
+{
+    try {
+        $st = $pdo->prepare(
+            "SELECT DISTINCT t.id FROM tasks t JOIN task_assignees ta ON ta.task_id = t.id
+             WHERE ta.employee_id = :e AND ta.role = 'assignee' AND t.status = 'open' AND t.archived = 0
+             ORDER BY t.start_at, t.id"
+        );
+        $st->execute([':e' => $employeeId]);
+        return array_map('strval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $_e) {
+        return [];
+    }
+}
+
+/**
+ * T1-7 (D-1): обновить full_name_snapshot назначений сотрудника (переименование). Не бросает исключений.
+ */
+function tasks_refresh_name_snapshot(PDO $pdo, string $employeeId, string $fullName): void
+{
+    try {
+        $pdo->prepare('UPDATE task_assignees SET full_name_snapshot = :n WHERE employee_id = :e')
+            ->execute([':n' => $fullName, ':e' => $employeeId]);
+    } catch (Throwable $_e) { /* non-critical */ }
+}
+
+/**
  * Очистка audit_log старше 7 дней — выполняется при каждом вызове.
  * Вызывается из audit() функции по случаю (5% мутаций).
  *

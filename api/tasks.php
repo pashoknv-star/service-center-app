@@ -137,6 +137,36 @@ function tasks_get_row(PDO $pdo, string $id): ?array
 }
 
 /**
+ * T1-7 (D-1): дата удаления сотрудников — ts последней записи audit_log `employee.delete` по id.
+ * Записи audit_log старше 7 дней чистятся (E5-4) → для давних удалений null.
+ *
+ * @param string[] $employeeIds
+ * @return array<string, string> employee_id => ts
+ */
+function tasks_removed_at(PDO $pdo, array $employeeIds): array
+{
+    $out = [];
+    if ($employeeIds === []) {
+        return $out;
+    }
+    $in = implode(',', array_fill(0, count($employeeIds), '?'));
+    try {
+        $st = $pdo->prepare(
+            "SELECT entity_id, MAX(ts) AS ts FROM audit_log
+             WHERE action = 'employee.delete' AND entity_type = 'employee' AND entity_id IN ($in)
+             GROUP BY entity_id"
+        );
+        $st->execute(array_values($employeeIds));
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($r['ts'] !== null) {
+                $out[(string) $r['entity_id']] = (string) $r['ts'];
+            }
+        }
+    } catch (Throwable $_e) { /* audit_log ещё не создан → null */ }
+    return $out;
+}
+
+/**
  * Люди и чек-листы пачкой.
  *
  * @param string[] $ids
@@ -151,17 +181,31 @@ function tasks_load_related(PDO $pdo, array $ids): array
     }
     $in = implode(',', array_fill(0, count($ids), '?'));
     $stmt = $pdo->prepare(
-        "SELECT ta.task_id, ta.employee_id, ta.role, e.full_name
+        "SELECT ta.task_id, ta.employee_id, ta.role, e.id AS emp_id, e.full_name, ta.full_name_snapshot
          FROM task_assignees ta LEFT JOIN employees e ON e.id = ta.employee_id
          WHERE ta.task_id IN ($in)
-         ORDER BY e.sort_order, e.full_name, ta.employee_id"
+         ORDER BY (e.id IS NULL), e.sort_order, COALESCE(e.full_name, ta.full_name_snapshot), ta.employee_id"
     );
     $stmt->execute($ids);
-    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // T1-7 (D-1): «удалён» вычисляется при чтении (employee_id нет в employees); дата — из audit_log.
+    $removedIds = [];
+    foreach ($rows as $r) {
+        if ($r['emp_id'] === null) {
+            $removedIds[(string) $r['employee_id']] = true;
+        }
+    }
+    $removedAt = tasks_removed_at($pdo, array_keys($removedIds));
+    foreach ($rows as $r) {
         // Намеренно ТОЛЬКО id и full_name — без phone/photo_url.
+        $eid = (string) $r['employee_id'];
+        $removed = $r['emp_id'] === null;
+        $name = $removed ? $r['full_name_snapshot'] : $r['full_name'];
         $people[(string) $r['task_id']][(string) $r['role']][] = [
-            'employee_id' => (string) $r['employee_id'],
-            'full_name'   => $r['full_name'] !== null ? (string) $r['full_name'] : null,
+            'employee_id' => $eid,
+            'full_name'   => $name !== null ? (string) $name : null,
+            'removed'     => $removed,
+            'removed_at'  => $removed ? ($removedAt[$eid] ?? null) : null,
         ];
     }
     $stmt = $pdo->prepare(
@@ -197,7 +241,8 @@ function tasks_build(PDO $pdo, array $row, array $people, array $checks): array
     $conflictDays = [];
     $notes = [];
     if ($days !== []) {
-        $assigneeIds = array_column($assignees, 'employee_id');
+        // Удалённые исполнители фактов не имеют и в проверках не участвуют.
+        $assigneeIds = array_column(array_filter($assignees, static fn($a) => !$a['removed']), 'employee_id');
         $facts = tasks_matrix_facts($pdo, $assigneeIds, $first, $last);
         // conflict — только у ОТКРЫТОЙ неархивной задачи (AC-4).
         if ($row['status'] === 'open' && (int) $row['archived'] === 0) {
@@ -223,6 +268,8 @@ function tasks_build(PDO $pdo, array $row, array $people, array $checks): array
         'closed_at'     => $row['closed_at'],
         'archived'      => (int) $row['archived'],
         'assignees'     => $assignees,
+        // orphan: нет ни одного действующего исполнителя (все удалены из employees).
+        'orphan'        => array_filter($assignees, static fn($a) => !$a['removed']) === [],
         'watchers'      => $watchers,
         'checklist'     => $checks[$id] ?? [],
         'first_day'     => $first,
@@ -286,6 +333,25 @@ function tasks_assert_employees(PDO $pdo, array $ids): void
             tasks_fail('employee_not_found', 400, ['employee_id' => (string) $id]);
         }
     }
+}
+
+/**
+ * Подмножество id, которые есть в employees (порядок сохраняется).
+ *
+ * @param string[] $ids
+ * @return string[]
+ */
+function tasks_existing_employee_ids(PDO $pdo, array $ids): array
+{
+    $stmt = $pdo->prepare('SELECT 1 FROM employees WHERE id = :id LIMIT 1');
+    $out = [];
+    foreach ($ids as $id) {
+        $stmt->execute([':id' => (string) $id]);
+        if ($stmt->fetch()) {
+            $out[] = (string) $id;
+        }
+    }
+    return $out;
 }
 
 /** Нормализация чек-листа → [{id?:int, text:string, done:int}]. */
@@ -380,6 +446,11 @@ function tasks_version_conflict(PDO $pdo, string $id): void
  */
 function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?string $endAt): string
 {
+    // T1-7 (D-1): удалённые исполнители фактов не имеют — в проверке (и n8n) не участвуют.
+    $assigneeIds = tasks_existing_employee_ids($pdo, $assigneeIds);
+    if ($assigneeIds === []) {
+        return 'ok';
+    }
     $res = tasks_check_period_checked($pdo, $assigneeIds, $startAt, $endAt);
     if (isset($res['error'])) {
         tasks_fail($res['error']);
@@ -412,13 +483,30 @@ function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?stri
 
 function tasks_replace_people(PDO $pdo, string $taskId, array $assignees, array $watchers): void
 {
+    // T1-7 (D-1): ФИО-снимок — из employees; для уже удалённых сохраняется прежний снимок.
+    $st = $pdo->prepare('SELECT employee_id, full_name_snapshot FROM task_assignees WHERE task_id = :t');
+    $st->execute([':t' => $taskId]);
+    $oldSnap = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ($r['full_name_snapshot'] !== null) {
+            $oldSnap[(string) $r['employee_id']] = (string) $r['full_name_snapshot'];
+        }
+    }
+    $nameSt = $pdo->prepare('SELECT full_name FROM employees WHERE id = :id');
+    $snapOf = static function (string $e) use ($nameSt, $oldSnap): ?string {
+        $nameSt->execute([':id' => $e]);
+        $n = $nameSt->fetchColumn();
+        return $n !== false && $n !== null ? (string) $n : ($oldSnap[$e] ?? null);
+    };
     $pdo->prepare('DELETE FROM task_assignees WHERE task_id = :t')->execute([':t' => $taskId]);
-    $ins = $pdo->prepare('INSERT INTO task_assignees (task_id, employee_id, role) VALUES (:t, :e, :r)');
+    $ins = $pdo->prepare(
+        'INSERT INTO task_assignees (task_id, employee_id, role, full_name_snapshot) VALUES (:t, :e, :r, :n)'
+    );
     foreach ($assignees as $e) {
-        $ins->execute([':t' => $taskId, ':e' => $e, ':r' => 'assignee']);
+        $ins->execute([':t' => $taskId, ':e' => $e, ':r' => 'assignee', ':n' => $snapOf((string) $e)]);
     }
     foreach ($watchers as $e) {
-        $ins->execute([':t' => $taskId, ':e' => $e, ':r' => 'watcher']);
+        $ins->execute([':t' => $taskId, ':e' => $e, ':r' => 'watcher', ':n' => $snapOf((string) $e)]);
     }
 }
 
@@ -506,6 +594,49 @@ try {
                 tasks_fail('not_found', 404);
             }
             sendJson(['success' => true, 'task' => $task]);
+        }
+
+        // T1-7 (D-1): открытые неархивные задачи без действующего исполнителя (без фильтра периода).
+        if (isset($_GET['orphans']) && strToBool($_GET['orphans'])) {
+            $stmt = $pdo->prepare(
+                "SELECT t.* FROM tasks t
+                 WHERE t.archived = 0 AND t.status = 'open'
+                   AND NOT EXISTS (SELECT 1 FROM task_assignees ta JOIN employees e ON e.id = ta.employee_id
+                                   WHERE ta.task_id = t.id AND ta.role = 'assignee')
+                 ORDER BY t.start_at, t.id LIMIT " . TASKS_LIST_LIMIT
+            );
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            [$people, $checks] = tasks_load_related($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
+            $tasks = [];
+            foreach ($rows as $r) {
+                $tasks[] = tasks_build($pdo, $r, $people, $checks);
+            }
+            sendJson(['success' => true, 'count' => count($tasks), 'tasks' => $tasks]);
+        }
+
+        // T1-7 (D-1): открытые неархивные задачи, где сотрудник — действующий исполнитель
+        // (подтверждение удаления и окно замены ДО удаления).
+        if (isset($_GET['open_for']) && $_GET['open_for'] !== '') {
+            $stmt = $pdo->prepare(
+                "SELECT t.id, t.title, t.start_at, t.end_at, t.version FROM tasks t
+                 WHERE t.archived = 0 AND t.status = 'open'
+                   AND EXISTS (SELECT 1 FROM task_assignees ta JOIN employees e ON e.id = ta.employee_id
+                               WHERE ta.task_id = t.id AND ta.role = 'assignee' AND ta.employee_id = :emp)
+                 ORDER BY t.start_at, t.id LIMIT " . TASKS_LIST_LIMIT
+            );
+            $stmt->execute([':emp' => (string) $_GET['open_for']]);
+            $list = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $list[] = [
+                    'id'       => (string) $r['id'],
+                    'title'    => (string) $r['title'],
+                    'start_at' => (string) $r['start_at'],
+                    'end_at'   => $r['end_at'],
+                    'version'  => (int) $r['version'],
+                ];
+            }
+            sendJson(['success' => true, 'count' => count($list), 'tasks' => $list]);
         }
 
         $from = $_GET['from'] ?? null;
@@ -819,18 +950,21 @@ try {
         $newWatchers = tasks_norm_ids($body['watchers'], 'watchers');
     }
     $newWatchers = array_values(array_diff($newWatchers, $newAssignees));
-    tasks_assert_employees($pdo, array_merge(
-        array_diff($newAssignees, $curAssignees),
-        array_diff($newWatchers, $curWatchers)
-    ));
-    $newChecklist = array_key_exists('checklist', $body) ? tasks_norm_checklist($body['checklist']) : null;
-
-    // Что изменилось.
     $sameSet = static function (array $a, array $b): bool {
         sort($a);
         sort($b);
         return $a === $b;
     };
+    // T1-7 (D-1): при ИЗМЕНЕНИИ исполнителей все новые id должны существовать (удалённый id → 400
+    // employee_not_found; переназначение = замена удалённого на нового). Без изменения набора
+    // исполнителей удалённые остаются как есть.
+    tasks_assert_employees($pdo, array_merge(
+        $sameSet($newAssignees, $curAssignees) ? [] : $newAssignees,
+        array_diff($newWatchers, $curWatchers)
+    ));
+    $newChecklist = array_key_exists('checklist', $body) ? tasks_norm_checklist($body['checklist']) : null;
+
+    // Что изменилось.
     $changed = [];
     foreach ($new as $k => $v) {
         $old = $k === 'priority' ? (int) $row[$k] : $row[$k];

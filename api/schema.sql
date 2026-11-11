@@ -1,11 +1,11 @@
 -- ============================================================================
 -- Service Center App — SQLite Schema
--- Version: 9
+-- Version: 10
 -- Tables: groups, positions, employees, schedule_entries, holidays,
 --         vacation_balances, users, meta, sync_log, audit_log,
 --         trips, trip_participants, trip_requests,
 --         tasks, task_assignees, task_checklist
---           Блок «Задачи» (schema v9, T1-1)
+--           Блок «Задачи» (schema v9, T1-1; v10, T1-7: task_assignees без FK на employees)
 -- Features: E5-4 automatic audit_log cleanup (>7 days)
 --           Business trips (trips + trip_participants, schema v6)
 --           RPA v1.2 (HelpMe) fields on trips (schema v7, E12-1)
@@ -249,9 +249,11 @@ CREATE TABLE IF NOT EXISTS task_assignees (
     task_id     TEXT NOT NULL,
     employee_id TEXT NOT NULL,
     role        TEXT NOT NULL CHECK (role IN ('assignee','watcher')),
+    full_name_snapshot TEXT,   -- ФИО на момент назначения/переименования (для «исполнитель удалён»)
     PRIMARY KEY (task_id, employee_id, role),
-    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-    FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    -- v10 (T1-7, D-1): БЕЗ FK на employees — удаление сотрудника не стирает назначение;
+    -- «удалён» вычисляется при чтении (employee_id отсутствует в employees).
 );
 CREATE TABLE IF NOT EXISTS task_checklist (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
