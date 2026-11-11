@@ -41,6 +41,8 @@ function makeEl(id) {
   const el = {
     id, style: {}, dataset: {}, innerHTML: '', textContent: '', listeners: {},
     _cls: new Set(),
+    parentNode: null,
+    className: '',
     classList: null,
     addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); },
     querySelector() { return null; },
@@ -70,16 +72,25 @@ function makeEnv(base, cookie) {
   const calls = [];            // все HTTP-вызовы модуля
   let inflight = 0;
   const toasts = [];
+  const events = [];           // document.dispatchEvent (tasks:changed)
+  const body = makeEl('body');
+  body.children = [];
+  body.appendChild = function (el) { this.children.push(el); el.parentNode = this; };
+  body.removeChild = function (el) { this.children = this.children.filter((c) => c !== el); el.parentNode = null; };
   const confirms = { answer: true, asked: [] };
   const win = {};
   const sandbox = {
     window: win, console, setTimeout, clearTimeout, Promise, JSON, Date, Math, String, Number, Array, Object, RegExp, Error, encodeURIComponent,
+    CustomEvent: class { constructor(type) { this.type = type; } },
     document: {
       readyState: 'complete',
       head: makeEl('head'),
+      body,
       getElementById: (id) => els[id] || null,
       createElement: (t) => makeEl(t),
       addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent(ev) { events.push(ev.type); return true; },
     },
     fetch: (url, opt) => {
       opt = opt || {};
@@ -135,9 +146,9 @@ function makeEnv(base, cookie) {
     }
     return { dataset: ds, attrs, checked: /\schecked[\s>]/.test(tag) };
   }
-  function findTag(attr, val, pred) {
+  function findTag(attr, val, pred, html) {
     const re = new RegExp('<[a-zA-Z]+\\b[^>]*\\b' + attr + '="' + val + '"[^>]*>', 'g');
-    const html = root.innerHTML;
+    html = html === undefined ? root.innerHTML : html;
     let m;
     while ((m = re.exec(html)) !== null) {
       const t = parseTag(m[0]);
@@ -161,7 +172,25 @@ function makeEnv(base, cookie) {
   }
   const field = (name, value) => change('data-tk-field', name, value);
   const filter = (name, value, extra) => change('data-tk-filter', name, value, extra);
-  return { sandbox, els, root, T, S: T.__t.S, calls, toasts, confirms, settle, click, change, field, filter, has, count, findTag };
+  // T1-8: окно замены (элемент #tasksReassignModal в document.body)
+  const modalEl = () => body.children.find((c) => c.id === 'tasksReassignModal') || null;
+  const mhtml = () => (modalEl() ? modalEl().innerHTML : '');
+  const mhas = (needle) => mhtml().indexOf(needle) >= 0;
+  const mcount = (needle) => mhtml().split(needle).length - 1;
+  async function mclick(act, pred) {
+    const t = findTag('data-tk-act', act, pred, mhtml());
+    if (!t) throw new Error('кнопка окна data-tk-act="' + act + '" не отрендерена');
+    modalEl().fire('click', { target: { closest: () => ({ dataset: t.dataset }) }, preventDefault() {} });
+    await settle();
+  }
+  async function mchange(attr, val, value, extra) {
+    const t = findTag(attr, val, null, mhtml());
+    if (!t) throw new Error('поле окна ' + attr + '="' + val + '" не отрендерено');
+    modalEl().fire('change', { target: Object.assign({ dataset: t.dataset, value, type: t.attrs.type || 'text', checked: !!(extra && extra.checked) }, extra || {}) });
+    await settle();
+  }
+  return { sandbox, els, root, T, S: T.__t.S, calls, toasts, confirms, settle, click, change, field, filter, has, count, findTag,
+    body, events, modalEl, mhtml, mhas, mcount, mclick, mchange };
 }
 
 // ----------------------------------------------------------------------------
@@ -224,6 +253,69 @@ async function main() {
   check('S6 inline-<script> index.html (' + n + ') проходят проверку синтаксиса', syntaxOk && n > 0, syntaxMsg);
   const chk = cp.spawnSync(process.execPath, ['--check', path.join(ROOT, 'js/tasks.js')]);
   check('S7 node --check js/tasks.js', chk.status === 0, String(chk.stderr));
+  // T1-8: точечная правка #deleteEmp в index.html вызывает экспортированные Tasks.openTasksFor / Tasks.offerReassign
+  const delStart = INDEX.indexOf("document.getElementById('deleteEmp').addEventListener('click'");
+  const delEnd = INDEX.indexOf("document.getElementById('cloneEmp')", delStart);
+  const delSrc = delStart >= 0 && delEnd > delStart ? INDEX.slice(delStart, delEnd) : '';
+  check('S8 index.html #deleteEmp: вызывает Tasks.openTasksFor (до confirm) и Tasks.offerReassign (после save), оба экспортированы',
+    /Tasks\.openTasksFor\(/.test(delSrc) && /Tasks\.offerReassign\(/.test(delSrc) &&
+    delSrc.indexOf('openTasksFor') < delSrc.indexOf('confirm(') && delSrc.indexOf('await save()') < delSrc.indexOf('offerReassign') &&
+    typeof probe.T.openTasksFor === 'function' && typeof probe.T.offerReassign === 'function');
+  const modalActs = ['assignOrphan', 'mAssign', 'mAccept', 'mLater'];
+  check('S9 новые data-tk-act (' + modalActs.join(',') + ') есть в исходнике и имеют обработчики в ACTIONS',
+    modalActs.every((a) => SRC.indexOf('data-tk-act="' + a + '"') >= 0 && typeof ACTIONS[a] === 'function'));
+
+  // ---- 1b. обработчик #deleteEmp (код из index.html, исполняется в vm с заглушками) ---------
+  console.log('-- deleteEmp (код обработчика из index.html)');
+  const DEL_ORIG = 'Удалить сотрудника безвозвратно? Все данные отпусков будут потеряны.';
+  async function runDelete(o, twice) {
+    const handlers = {};
+    const log = { confirms: [], offered: [], saves: 0, refreshed: 0 };
+    const letIdx = INDEX.lastIndexOf('let deleteEmpBusy', delStart);
+    const ctx = {
+      document: { getElementById: (id) => ({ addEventListener: (t, fn) => { handlers[id] = fn; }, classList: { remove() {} } }) },
+      confirm: (q) => { log.confirms.push(q); return o.confirm !== false; },
+      currentId: 7,
+      employees: [{ id: 7, name: 'Иванов И.И.' }, { id: 8, name: 'Другой' }],
+      vacationData: { 2026: { 7: [1], 8: [2] } },
+      editor: { classList: { remove() {} } },
+      render() {}, renderVacationMatrix() {},
+      save: async () => { log.saves++; return o.save || { success: true }; },
+      window: { Tasks: {
+        openTasksFor: async () => { if (o.throws) throw new Error('boom'); return o.info; },
+        offerReassign: (id, name, tasks) => { log.offered.push([id, name, tasks]); },
+        refreshOrphans: () => { log.refreshed++; },
+      } },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(INDEX.slice(letIdx, delEnd), ctx);
+    const p1 = handlers.deleteEmp();
+    const p2 = twice ? handlers.deleteEmp() : null;
+    await p1; if (p2) await p2;
+    log.employees = ctx.employees.map((e) => e.id);
+    log.vac = Object.keys(ctx.vacationData[2026]);
+    return log;
+  }
+  const open3 = { ok: true, count: 3, tasks: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] };
+  let hr = await runDelete({ info: open3 });
+  check('H1 N=3: confirm дополнен «Открытых задач: 3 — останутся без исполнителя.», удаление, окно замены после save() с (id, ФИО, задачи)',
+    hr.confirms.length === 1 && hr.confirms[0] === DEL_ORIG + '\n\nОткрытых задач: 3 — останутся без исполнителя.' &&
+    hr.saves === 1 && hr.employees.join() === '8' && hr.vac.join() === '8' &&
+    hr.offered.length === 1 && hr.offered[0][0] === 7 && hr.offered[0][1] === 'Иванов И.И.' && hr.offered[0][2].length === 3, JSON.stringify(hr));
+  hr = await runDelete({ info: { ok: false, count: 0, tasks: [] } });
+  check('H2 запрос open_for не удался: исходный текст confirm, удаление НЕ блокируется, окна нет',
+    hr.confirms[0] === DEL_ORIG && hr.saves === 1 && hr.employees.join() === '8' && hr.offered.length === 0);
+  hr = await runDelete({ throws: true });
+  check('H3 openTasksFor бросил исключение: исходный текст confirm, удаление проходит', hr.confirms[0] === DEL_ORIG && hr.saves === 1 && hr.offered.length === 0);
+  hr = await runDelete({ info: { ok: true, count: 0, tasks: [] } });
+  check('H4 N=0: текст без строки про задачи, окна замены нет', hr.confirms[0] === DEL_ORIG && hr.saves === 1 && hr.offered.length === 0);
+  hr = await runDelete({ info: open3, confirm: false });
+  check('H5 отказ в confirm: ничего не удалено, save не вызывался, окна нет',
+    hr.saves === 0 && hr.employees.join() === '7,8' && hr.vac.join() === '7,8' && hr.offered.length === 0);
+  hr = await runDelete({ info: open3, save: { success: false, fallback: true } });
+  check('H6 save() не подтвердил удаление на сервере (fallback): окно замены не показывается', hr.saves === 1 && hr.offered.length === 0);
+  hr = await runDelete({ info: open3 }, true);
+  check('H7 двойной клик не запускает удаление дважды', hr.saves === 1 && hr.confirms.length === 1 && hr.offered.length === 1);
 
   // ---- 2. чистые функции ------------------------------------------------------
   console.log('-- unit');
@@ -234,6 +326,19 @@ async function main() {
     new Date(U.weekStart('2026-11-07') + 'T00:00:00Z').getUTCDay() === 1 && U.weekStart('2026-11-07') === '2026-11-02' && U.weekStart('2026-11-08') === '2026-11-02');
   check('U3 normEmpId: 2 → emp_2, emp_5 остаётся', U.normEmpId(2) === 'emp_2' && U.normEmpId('emp_5') === 'emp_5' && U.normEmpId('') === '');
   check('U4 esc экранирует HTML', U.esc('<b onclick="x">&\'') === '&lt;b onclick=&quot;x&quot;&gt;&amp;&#39;');
+  check('U5 plural: 1 открытая задача, 2–4 открытые задачи, 5/11/12 открытых задач, 21 открытая задача',
+    [1, 2, 4, 5, 11, 12, 21, 22].map((k) => U.plural(k, 'a', 'b', 'c')).join('') === 'abbcccab');
+  const gone = (o) => Object.assign({ employee_id: 'x', full_name: 'Иванов И.И.', removed: true, removed_at: null }, o || {});
+  const live = { employee_id: 'y', full_name: 'Петров П.П.', removed: false, removed_at: null };
+  check('U6 isOrphan: только открытая неархивная с orphan:true; закрытая/архивная/смешанная — нет',
+    U.isOrphan({ orphan: true, status: 'open', assignees: [gone()] }) === true &&
+    U.isOrphan({ orphan: true, status: 'closed', assignees: [gone()] }) === false &&
+    U.isOrphan({ orphan: true, status: 'open', archived: 1, assignees: [gone()] }) === false &&
+    U.isOrphan({ orphan: false, status: 'open', assignees: [gone(), live] }) === false);
+  check('U7 removedDate: null/мусор → пусто (никогда «null»/«Invalid Date»), ISO → дд.мм.гггг, берётся самая поздняя',
+    U.removedDate({ assignees: [gone()] }) === '' && U.removedDate({ assignees: [gone({ removed_at: 'не дата' })] }) === '' &&
+    /^\d{2}\.\d{2}\.\d{4}$/.test(U.removedDate({ assignees: [gone({ removed_at: '2026-11-11T13:00:00+00:00' })] })) &&
+    U.removedDate({ assignees: [gone({ removed_at: '2026-11-11T13:00:00+00:00' }), gone({ employee_id: 'z', removed_at: '2026-11-12T13:00:00+00:00' })] }).slice(0, 2) === '12');
 
   // ---- 3. сервер на копии БД --------------------------------------------------
   console.log('-- e2e (php -S на копии БД)');
@@ -456,6 +561,265 @@ async function main() {
     const arch = (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + mk.json.task.id)).json.task;
     check('E40 «В архив» (с подтверждением) → archived=1, из списка исчезает',
       arch.archived === 1 && A.confirms.asked.length === 1 && !A.S.tasks.some((t) => t.id === mk.json.task.id) && A.S.selectedId === null);
+
+    // ---------- D-1 (T1-8): «Исполнитель удалён» + окно замены ----------
+    console.log('-- D-1 (T1-8) «Исполнитель удалён» + окно замены');
+    const NONE = '__none__';
+    const dbx = sdb();
+    const insEmp = dbx.prepare("INSERT OR REPLACE INTO employees (id, full_name, location, sort_order) VALUES (?, ?, 'QA', 0)");
+    insEmp.run('t8_gone', 'Удалённый Первый'); insEmp.run('t8_ok', 'Принимающий Тестович');
+    insEmp.run('t8_sick', 'Больной Тестович'); insEmp.run('t8_tmp', 'Временный Тестович'); insEmp.run('t8_gone2', 'Удалённый Второй');
+    dbx.prepare("INSERT OR REPLACE INTO schedule_entries (employee_id, date, status, comment, approval_status, updated_at, version) VALUES ('t8_sick', '2099-11-03', 'sick', NULL, 'draft', '2099-01-01', 1)").run();
+    dbx.close();
+    const mkT = async (title, extra) => {
+      const r = await http(base, adminCk, 'POST', 'api/tasks.php', Object.assign({ title, start_at: '2099-10-05', assignees: ['t8_gone'] }, extra || {}));
+      if (!r.json.success) throw new Error('mkT ' + title + ' → ' + JSON.stringify(r.json));
+      return r.json.task;
+    };
+    const getT = async (id) => (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + id)).json.task;
+    const tA = await mkT('D1 Сирота A');
+    const tB = await mkT('D1 Сирота B', { start_at: '2099-11-02', end_at: '2099-11-04' });
+    const tM = await mkT('D1 Смешанная', { assignees: ['t8_gone', 't8_ok'] });
+    const tE = await mkT('D1 Конфликт версий', { start_at: '2099-10-06' });
+    const tF = await mkT('D1 Карточка Назначить', { start_at: '2099-10-07' });
+    const tC = await mkT('D1 Закрытая', { start_at: '2099-10-08' });
+    await http(base, adminCk, 'POST', 'api/tasks.php?id=' + tC.id + '&action=close', { version: tC.version });
+
+    A.els.tabTasks.click();
+    await A.settle();
+    const tabHtml = () => A.els.tabTasks.innerHTML;
+    check('D1-1 счётчик ⚠: открытых задач без исполнителя нет → на вкладке «Задачи» счётчика нет', tabHtml().indexOf('tk-orph-cnt') < 0 && tabHtml().indexOf('⚠') < 0, tabHtml());
+    const of = await A.T.openTasksFor('t8_gone');
+    check('D1-2 openTasksFor до удаления: 5 открытых задач (закрытая не считается), ok=true',
+      of.ok === true && of.count === 5 && of.tasks.length === 5 && !of.tasks.some((t) => t.id === tC.id) && of.tasks.every((t) => t.version >= 1), JSON.stringify(of));
+    const offline = makeEnv('http://127.0.0.1:1', '');
+    const of2 = await offline.T.openTasksFor('t8_gone');
+    const of3 = await A.T.openTasksFor('');
+    check('D1-3 openTasksFor при сбое сети/пустом id: ok=false, count=0, без исключения (удаление не блокируется)',
+      of2.ok === false && of2.count === 0 && of3.ok === false);
+
+    const del = await http(base, adminCk, 'DELETE', 'api/employees.php?id=t8_gone', { confirm: true });
+    check('D1-4 сотрудник удалён через API (admin) — задачи остались', del.status === 200 && (await getT(tA.id)) && (await getT(tA.id)).orphan === true, del.status);
+    await A.T.refreshOrphans();
+    await A.settle();
+    check('D1-5 счётчик ⚠ 4 (A, B, E, F без исполнителя; смешанная и закрытая не считаются)', /<span class="tk-orph-cnt"[^>]*>⚠ 4<\/span>/.test(tabHtml()), tabHtml());
+
+    // Список
+    A.els.tabTasks.click();
+    await A.settle();
+    await A.click('setView', (d) => d.view === 'list');
+    await A.click('resetFilters');
+    const rowOf = (id) => (A.root.innerHTML.split('<tr ').filter((r) => r.indexOf('data-id="' + id + '"') >= 0)[0] || '');
+    check('D1-6 Список: у задачи без исполнителя серая плашка «Исполнитель удалён (Удалённый Первый)» и оранжевая полоса (класс tk-orph)',
+      rowOf(tA.id).indexOf('class="tk-row tk-orph"') >= 0 && rowOf(tA.id).indexOf('<span class="tk-plate"') >= 0 &&
+      rowOf(tA.id).indexOf('Исполнитель удалён (Удалённый Первый)') >= 0 && A.count('class="tk-plate"') === 4, A.count('class="tk-plate"'));
+    check('D1-7 Список: 2 исполнителя, удалён один — не «без исполнителя»: нет плашки/полосы, удалённый зачёркнут, действующий — ссылка',
+      rowOf(tM.id).indexOf('tk-orph') < 0 && rowOf(tM.id).indexOf('tk-plate') < 0 &&
+      /<s class="tk-gone"[^>]*>Удалённый Первый<\/s>/.test(rowOf(tM.id)) && rowOf(tM.id).indexOf('data-emp="t8_ok"') >= 0);
+    check('D1-8 Список: закрытая задача удалённого — без пометок (ни плашки, ни полосы, ни зачёркивания), ФИО (snapshot) осталось',
+      rowOf(tC.id).indexOf('tk-orph') < 0 && rowOf(tC.id).indexOf('tk-plate') < 0 && rowOf(tC.id).indexOf('tk-gone') < 0 &&
+      rowOf(tC.id).indexOf('Удалённый Первый') >= 0);
+    check('D1-9 фильтр «Сотрудник» содержит пункт «Без исполнителя»', A.has('<option value="' + NONE + '">Без исполнителя</option>'));
+    await A.filter('emp', NONE);
+    check('D1-10 фильтр «Без исполнителя»: остаются только 4 задачи без исполнителя',
+      A.count('<tr class="tk-row') === 4 && rowOf(tA.id) && rowOf(tB.id) && rowOf(tE.id) && rowOf(tF.id) && !rowOf(tM.id) && !rowOf(tC.id));
+    await A.click('resetFilters');
+
+    // Доска
+    await A.click('setView', (d) => d.view === 'board');
+    const secStart = A.root.innerHTML.indexOf('data-tk-sec="orphans"');
+    const colsStart = A.root.innerHTML.indexOf('class="tk-cols"');
+    const secHtml = secStart >= 0 ? A.root.innerHTML.slice(secStart, colsStart) : '';
+    const openColHtml = A.root.innerHTML.slice(A.root.innerHTML.indexOf('data-tk-col="open"'), A.root.innerHTML.indexOf('data-tk-col="closed"'));
+    check('D1-11 Доска: сверху секция «Без исполнителя» (⚠ 4) с карточками A/B/E/F и плашкой; смешанной в ней нет, она в колонке «Открыта»',
+      secStart >= 0 && secStart < colsStart && secHtml.indexOf('⚠ Без исполнителя · 4') >= 0 && (secHtml.match(/data-tk-act="openTask"/g) || []).length === 4 &&
+      [tA, tB, tE, tF].every((t) => secHtml.indexOf('data-id="' + t.id + '"') >= 0) && secHtml.indexOf('data-id="' + tM.id + '"') < 0 &&
+      secHtml.indexOf('Исполнитель удалён (Удалённый Первый)') >= 0 && openColHtml.indexOf('data-id="' + tM.id + '"') >= 0 && openColHtml.indexOf('data-id="' + tA.id + '"') < 0);
+
+    // Календарь
+    await A.T.open({ employeeId: '', date: '2099-10-05', view: 'calendar' });
+    await A.settle();
+    const tileOf = (id) => (A.root.innerHTML.split('<div class="tk-ev').filter((r) => r.indexOf('data-id="' + id + '"') >= 0)[0] || '');
+    check('D1-12 Календарь: плитка без исполнителя — класс tk-orph (пунктирная оранжевая рамка) и подпись «без исполнителя»; ФИО не показывается',
+      tileOf(tA.id).indexOf('tk-orph') >= 0 && tileOf(tA.id).indexOf('без исполнителя</b>') >= 0 && tileOf(tA.id).indexOf('<b>Удалённый') < 0);
+    check('D1-13 Календарь: у смешанной и закрытой задач плитка без пометок «без исполнителя»',
+      tileOf(tM.id) && tileOf(tM.id).indexOf('tk-orph') < 0 && tileOf(tM.id).indexOf('без исполнителя') < 0 &&
+      tileOf(tC.id) && tileOf(tC.id).indexOf('tk-orph') < 0 && tileOf(tC.id).indexOf('Удалённый Первый') >= 0);
+
+    // Карточка
+    await A.click('openTask', (d) => d.id === tA.id);
+    const detailHtml = () => A.root.innerHTML.slice(A.root.innerHTML.indexOf('<aside class="tk-detail"'));
+    check('D1-14 Карточка: плашка «Исполнитель удалён <дата>» (дата из removed_at), кнопка «Назначить» (admin), подсказка «закрыть можно без исполнителя»',
+      /data-tk-box="orphan"><b>Исполнитель удалён \d{2}\.\d{2}\.\d{4}<\/b>/.test(detailHtml()) && detailHtml().indexOf('data-tk-act="assignOrphan"') >= 0 &&
+      detailHtml().indexOf('Закрыть задачу можно и без исполнителя') >= 0 && detailHtml().indexOf('data-tk-act="closeTask"') >= 0 &&
+      !/null|Invalid Date|undefined/.test(detailHtml()), detailHtml().slice(0, 400));
+    await A.click('openTask', (d) => d.id === tM.id);
+    check('D1-15 Карточка смешанной задачи: удалённый зачёркнут, плашки «без исполнителя» и кнопки «Назначить» нет',
+      /<s class="tk-gone"[^>]*>Удалённый Первый<\/s>/.test(detailHtml()) && detailHtml().indexOf('data-tk-box="orphan"') < 0 && detailHtml().indexOf('assignOrphan') < 0);
+    await A.click('openTask', (d) => d.id === tC.id);
+    check('D1-16 Карточка закрытой задачи: без плашки/зачёркивания, ФИО осталось',
+      detailHtml().indexOf('data-tk-box="orphan"') < 0 && detailHtml().indexOf('tk-gone') < 0 && detailHtml().indexOf('Удалённый Первый') >= 0);
+
+    // removed_at = null / ФИО = null (старые данные)
+    const fake = (id, assignees, orphan) => Object.assign({}, JSON.parse(JSON.stringify(tA)), { id, title: 'Старые данные ' + id, assignees, orphan, status: 'open', archived: 0 });
+    A.S.tasks.push(fake('fake-1', [{ employee_id: 'x1', full_name: null, removed: true, removed_at: null }], true));
+    A.S.tasks.push(fake('fake-2', [{ employee_id: 'x2', full_name: null, removed: true, removed_at: null }, { employee_id: 't8_ok', full_name: 'Принимающий Тестович', removed: false, removed_at: null }], false));
+    A.S.view = 'board'; A.S.selectedId = 'fake-1'; A.T.__t.render();
+    const h1 = A.root.innerHTML;
+    check('D1-17 removed_at=null и ФИО=null: плашка «Исполнитель удалён» без даты и без скобок, ни «null», ни «Invalid Date»',
+      h1.indexOf('<b>Исполнитель удалён</b>') >= 0 && h1.indexOf('>Исполнитель удалён</span>') >= 0 && !/null|Invalid Date|undefined/.test(h1.slice(h1.indexOf('data-tk-sec="orphans"'))), h1.slice(h1.indexOf('data-tk-box="orphan"'), h1.indexOf('data-tk-box="orphan"') + 200));
+    A.S.selectedId = 'fake-2'; A.T.__t.render();
+    check('D1-18 ФИО удалённого пусто у смешанной задачи: показывается «сотрудник удалён» (зачёркнуто), не id',
+      /<s class="tk-gone"[^>]*>сотрудник удалён<\/s>/.test(A.root.innerHTML) && A.root.innerHTML.indexOf('>x2<') < 0);
+    A.S.tasks = A.S.tasks.filter((t) => t.id.indexOf('fake-') !== 0); A.S.selectedId = null;
+
+    // supervisor / viewer: все пометки видны, «Назначить» и окно — нет
+    for (const [label, ck] of [['supervisor', supCk], ['viewer', viewCk]]) {
+      const R = makeEnv(base, ck);
+      R.els.tabTasks.click();
+      await R.settle();
+      const rh = () => R.root.innerHTML;
+      const rtab = R.els.tabTasks.innerHTML;
+      await R.click('openTask', (d) => d.id === tA.id);
+      const rdet = rh().slice(rh().indexOf('<aside class="tk-detail"'));
+      const postsBefore = R.calls.filter((c) => c.method !== 'GET').length;
+      const shown = await R.T.offerReassign('t8_gone', 'Удалённый Первый', of.tasks);
+      await R.settle();
+      R.T.__t.ACTIONS.assignOrphan({ dataset: { id: tA.id } });
+      check('D1-R-' + label + ' видит счётчик ⚠ 4, плашку и дату в карточке; НЕТ «Назначить», окно замены не показывается, запросов записи нет',
+        /⚠ 4<\/span>/.test(rtab) && /data-tk-box="orphan"><b>Исполнитель удалён/.test(rdet) && rdet.indexOf('assignOrphan') < 0 && rdet.indexOf('data-tk-act="closeTask"') < 0 &&
+        shown === false && R.modalEl() === null && R.S.form === null && R.calls.filter((c) => c.method !== 'GET').length === postsBefore, rtab);
+      await R.click('setView', (d) => d.view === 'list');
+      check('D1-R-' + label + '-list в Списке плашки и фильтр «Без исполнителя» видны', R.count('class="tk-plate"') === 4 && R.count('tk-row tk-orph') === 4 && R.has('value="' + NONE + '"'));
+    }
+
+    // «Назначить» в карточке (admin): PUT assignees = только новый, без удалённого id
+    await A.T.open({ view: 'board', taskId: tF.id });
+    await A.settle();
+    await A.click('assignOrphan', (d) => d.id === tF.id);
+    check('D1-19 «Назначить» в карточке: открывается форма, удалённый исполнитель в чипах не показывается', A.S.form && A.S.form.id === tF.id && A.S.form.draft.assignees.length === 0 &&
+      A.has('никого не выбрано') && A.root.innerHTML.indexOf('"t8_gone"') < 0);
+    await A.field('assigneePick', 't8_ok');
+    const putsBefore = A.calls.filter((c) => c.method === 'PUT').length;
+    await A.click('saveForm');
+    const putF = A.calls.filter((c) => c.method === 'PUT').slice(putsBefore)[0];
+    const fAfter = await getT(tF.id);
+    check('D1-20 «Назначить» → PUT с version и assignees=[t8_ok]; задача больше не orphan; счётчик ⚠ 3',
+      putF && putF.body.version === tF.version && JSON.stringify(putF.body.assignees) === '["t8_ok"]' && fAfter.orphan === false &&
+      fAfter.assignees.length === 1 && fAfter.assignees[0].employee_id === 't8_ok' && /⚠ 3<\/span>/.test(tabHtml()) && A.events.indexOf('tasks:changed') >= 0, tabHtml());
+
+    // правка текста смешанной / «без исполнителя» задачи не трогает состав исполнителей
+    await A.T.open({ view: 'board', taskId: tM.id });
+    await A.settle();
+    await A.click('editTask', (d) => d.id === tM.id);
+    await A.field('description', 'Правка без смены исполнителей');
+    let pb = A.calls.filter((c) => c.method === 'PUT').length;
+    await A.click('saveForm');
+    const putM = A.calls.filter((c) => c.method === 'PUT').slice(pb)[0];
+    const mAfter = await getT(tM.id);
+    check('D1-21 правка смешанной задачи: форма не показывает удалённого, PUT без assignees, удалённый остаётся в задаче (snapshot цел)',
+      putM && !('assignees' in putM.body) && mAfter.description === 'Правка без смены исполнителей' && mAfter.assignees.length === 2 && mAfter.assignees.some((a) => a.removed && a.full_name === 'Удалённый Первый'), JSON.stringify(putM && putM.body));
+    await A.T.open({ view: 'board', taskId: tB.id });
+    await A.settle();
+    await A.click('editTask', (d) => d.id === tB.id);
+    await A.field('description', 'Правка сироты');
+    pb = A.calls.filter((c) => c.method === 'PUT').length;
+    await A.click('saveForm');
+    const putB = A.calls.filter((c) => c.method === 'PUT').slice(pb)[0];
+    const bAfter = await getT(tB.id);
+    check('D1-22 правка задачи «без исполнителя» разрешена без выбора исполнителя (PUT без assignees → 200), задача остаётся orphan',
+      putB && !('assignees' in putB.body) && A.S.form === null && bAfter.description === 'Правка сироты' && bAfter.orphan === true, A.S.form && A.S.form.error);
+
+    // окно замены
+    const modalTasks = of.tasks.filter((t) => t.id !== tF.id);
+    const evBefore = A.events.length;
+    const shownA = await A.T.offerReassign('t8_gone', 'Удалённый Первый', modalTasks);
+    await A.settle();
+    const selOpts = (A.mhtml().match(/<select data-tk-mtarget[\s\S]*?<\/select>/) || [''])[0];
+    check('D1-23 окно: «У Удалённый Первый было 4 открытые задачи», 4 задачи с галочками (все отмечены), «Передать: [сотрудник ▾]» только из действующих, кнопки «Назначить» и «Позже»',
+      shownA === true && A.modalEl() && A.mhas('было 4 открытые задачи') && A.mcount('data-tk-mchk=') === 4 && (A.mhtml().match(/data-tk-mchk="[^"]+" checked/g) || []).length === 4 &&
+      selOpts.indexOf('value="t8_ok"') >= 0 && selOpts.indexOf('value="t8_sick"') >= 0 && selOpts.indexOf('value="t8_gone"') < 0 &&
+      A.mhas('data-tk-act="mAssign"') && A.mhas('data-tk-act="mLater"') && A.mhas('>Позже<') && A.mhas('Передать:'), A.mhtml().slice(0, 300));
+    check('D1-24 окно: у смешанной задачи показано, что остаётся другой исполнитель (его не затирают)', A.mhas('Остаётся исполнителем: Принимающий Тестович'));
+    let pc = A.calls.filter((c) => c.method === 'PUT').length;
+    await A.mclick('mAssign');
+    check('D1-25 «Назначить» без выбранного сотрудника: понятная ошибка, запросов записи нет', A.mhas('Выберите сотрудника') && A.calls.filter((c) => c.method === 'PUT').length === pc);
+    await A.mchange('data-tk-mtarget', '1', 't8_sick');
+    // другой пользователь меняет задачу E после открытия окна → 409 при первом PUT
+    const eNow = await getT(tE.id);
+    const bump = await http(base, adminCk, 'PUT', 'api/tasks.php?id=' + tE.id, { version: eNow.version, title: 'D1 Конфликт версий (чужая правка)' });
+    pc = A.calls.filter((c) => c.method === 'PUT').length;
+    const gets0 = A.calls.filter((c) => c.method === 'GET' && c.url.indexOf('id=' + tE.id) >= 0).length;
+    await A.mclick('mAssign');
+    const puts = A.calls.filter((c) => c.method === 'PUT').slice(pc);
+    const putsE = puts.filter((c) => c.url.indexOf(tE.id) >= 0);
+    const putM2 = puts.filter((c) => c.url.indexOf(tM.id) >= 0)[0];
+    const sA = await getT(tA.id), sM = await getT(tM.id), sE = await getT(tE.id), sB = await getT(tB.id);
+    check('D1-26 «Назначить»: PUT по каждой отмеченной задаче с version; A, M, E переназначены на «Больной Тестович», B — нет',
+      bump.status === 200 && puts.length === 5 && puts.every((c) => typeof c.body.version === 'number') &&
+      sA.orphan === false && sA.assignees.length === 1 && sA.assignees[0].employee_id === 't8_sick' &&
+      sE.assignees.length === 1 && sE.assignees[0].employee_id === 't8_sick' && sE.title.indexOf('чужая правка') > 0 &&
+      sB.orphan === true && sB.assignees[0].removed === true, puts.map((c) => c.url + ':' + JSON.stringify(c.body)).join(' | '));
+    check('D1-27 смешанная задача: новый исполнитель добавлен к оставшемуся (assignees = [t8_ok, t8_sick]), удалённый заменён',
+      putM2 && JSON.stringify(putM2.body.assignees) === '["t8_ok","t8_sick"]' && sM.assignees.length === 2 && !sM.assignees.some((a) => a.removed) &&
+      sM.assignees.map((a) => a.employee_id).sort().join() === 't8_ok,t8_sick');
+    check('D1-28 409 VERSION_CONFLICT: задача перечитана и PUT повторён один раз (2 PUT, GET между ними), в итоге назначена',
+      putsE.length === 2 && A.calls.filter((c) => c.method === 'GET' && c.url.indexOf('id=' + tE.id) >= 0).length > gets0 && A.mcount('class="tk-mok"') === 3, putsE.length);
+    const blockedHtml = A.mhtml().slice(A.mhtml().indexOf('tk-mblocked'));
+    check('D1-29 422 sick/trip: задача B НЕ переназначена, в окне причина (дата — ФИО — больничный) и кнопка «Принять предложенную дату»; остальные переназначены',
+      A.mhas('tk-mblocked') && /больничный/.test(blockedHtml) && blockedHtml.indexOf('Больной Тестович') >= 0 && A.mcount('data-tk-act="mAccept"') === 1 &&
+      A.mhas('Принять предложенную дату') && A.mcount('tk-mit-done') === 3, A.mhtml().slice(-700));
+    check('D1-30 после переназначения: событие tasks:changed, счётчик ⚠ 1 (осталась только B)', A.events.length > evBefore && A.events.slice(evBefore).indexOf('tasks:changed') >= 0 && /⚠ 1<\/span>/.test(tabHtml()), tabHtml());
+    await A.mclick('mLater');
+    await A.settle();
+    check('D1-31 «Позже»: окно закрыто, задача B осталась в счётчике ⚠ 1, изменений на сервере нет',
+      A.modalEl() === null && A.S.modal === null && /⚠ 1<\/span>/.test(tabHtml()) && (await getT(tB.id)).orphan === true);
+
+    // «Принять предложенную дату»
+    await A.T.offerReassign('t8_gone', 'Удалённый Первый', [{ id: tB.id, title: tB.title, start_at: tB.start_at, end_at: tB.end_at, version: tB.version }]);
+    await A.settle();
+    check('D1-32 окно для одной задачи: «У … было 1 открытая задача» (склонение)', A.mhas('было 1 открытая задача'));
+    await A.mchange('data-tk-mtarget', '1', 't8_sick');
+    await A.mclick('mAssign');
+    check('D1-33 B снова 422: показана кнопка «Принять предложенную дату», задача не изменена', A.mcount('data-tk-act="mAccept"') === 1 && (await getT(tB.id)).orphan === true);
+    pc = A.calls.filter((c) => c.method === 'PUT').length;
+    await A.mclick('mAccept', (d) => d.id === tB.id);
+    const putAcc = A.calls.filter((c) => c.method === 'PUT').slice(pc).pop();
+    const bFinal = await getT(tB.id);
+    check('D1-34 «Принять предложенную дату»: PUT с предложенным сроком и исполнителем; задача назначена, срок сдвинут за больничный, ⚠ нет',
+      putAcc && putAcc.body.start_at && putAcc.body.end_at && bFinal.orphan === false && bFinal.assignees[0].employee_id === 't8_sick' &&
+      bFinal.start_at.slice(0, 10) > '2099-11-03' && A.mcount('tk-mit-done') === 1 && A.mhas('>Закрыть<') && tabHtml().indexOf('⚠') < 0, JSON.stringify(putAcc && putAcc.body) + ' ' + bFinal.start_at);
+    await A.mclick('mLater');
+    check('D1-35 «Закрыть» после полной обработки: окно закрыто', A.modalEl() === null && A.S.modal === null);
+
+    // получатель удалён, пока окно открыто → 400 employee_not_found внутри окна
+    const tN = await mkT('D1 Для второго окна', { assignees: ['t8_gone2'], start_at: '2099-10-09' });
+    await http(base, adminCk, 'DELETE', 'api/employees.php?id=t8_gone2', { confirm: true });
+    await A.T.offerReassign('t8_gone2', 'Удалённый Второй', [{ id: tN.id, title: tN.title, start_at: tN.start_at, end_at: null, version: tN.version }]);
+    await A.settle();
+    await A.mchange('data-tk-mtarget', '1', 't8_tmp');
+    await http(base, adminCk, 'DELETE', 'api/employees.php?id=t8_tmp', { confirm: true });
+    await A.mclick('mAssign');
+    const optsAfter = (A.mhtml().match(/<select data-tk-mtarget[\s\S]*?<\/select>/) || [''])[0];
+    check('D1-36 получатель удалён, пока окно открыто: 400 employee_not_found показан в окне, задача не изменена, список сотрудников обновлён',
+      A.modalEl() && A.mhas('Выбранный сотрудник не найден') && (await getT(tN.id)).orphan === true && optsAfter.indexOf('t8_tmp') < 0 && A.S.modal.target === '', A.mhtml().slice(0, 300));
+    await A.mclick('mLater');
+
+    // задача закрыта другим пользователем, пока окно открыто: 409 → перечитали → закрыта → не переназначается, без повторного PUT
+    const tK = await mkT('D1 Закроют до назначения', { assignees: ['t8_ok'], start_at: '2099-10-10' });
+    await A.T.offerReassign('t8_ghost', 'Призрак Тестович', [{ id: tK.id, title: tK.title, start_at: tK.start_at, end_at: null, version: tK.version }]);
+    await A.settle();
+    await A.mchange('data-tk-mtarget', '1', 't8_sick');
+    const kNow = await getT(tK.id);
+    await http(base, adminCk, 'POST', 'api/tasks.php?id=' + tK.id + '&action=close', { version: kNow.version });
+    pc = A.calls.filter((c) => c.method === 'PUT').length;
+    await A.mclick('mAssign');
+    const putsK = A.calls.filter((c) => c.method === 'PUT').slice(pc).filter((c) => c.url.indexOf(tK.id) >= 0);
+    const kAfter = await getT(tK.id);
+    check('D1-37 задачу закрыли, пока окно открыто: 409 → перечитана → «уже закрыта», повторного PUT нет, исполнители не тронуты',
+      putsK.length === 1 && A.mhas('Задача уже закрыта или в архиве') && kAfter.status === 'closed' && kAfter.assignees.length === 1 && kAfter.assignees[0].employee_id === 't8_ok' && A.mcount('tk-mit-skipped') === 1);
+    await A.mclick('mLater');
+    check('D1-38 после всех окон счётчик ⚠ = 1 (осталась только задача для удалённого «Второго»)', /⚠ 1<\/span>/.test(tabHtml()), tabHtml());
 
     // ---------- supervisor / viewer ----------
     for (const [label, ck] of [['supervisor', supCk], ['viewer', viewCk]]) {

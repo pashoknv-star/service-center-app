@@ -14,6 +14,11 @@
  * сьют scripts/test_tasks_frontend.js проверяет, что каждое data-tk-act в этом
  * файле имеет обработчик (урок «4× мёртвых кнопок»).
  * Публичный интерфейс — window.Tasks.* и window.openTasksPanel().
+ *
+ * T1-8 (D-1): «Исполнитель удалён» — счётчик ⚠ на вкладке, плашка/полоса в Списке,
+ * секция Доски, плитка Календаря, карточка с «Назначить»; окно замены после удаления
+ * сотрудника: window.Tasks.openTasksFor(empId) (до удаления) и
+ * window.Tasks.offerReassign(empId, fullName, tasks) (после) — вызываются из #deleteEmp (index.html).
  */
 (function () {
   'use strict';
@@ -29,6 +34,8 @@
   var DOW_SHORT = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
   var NOTE_TEXT = { weekend: 'выходной', holiday: 'праздник', vacation: 'отпуск', day_off: 'отгул' };
   var REASON_TEXT = { sick: 'больничный', trip: 'командировка' };
+  var NONE = '__none__';                       // фильтр «Без исполнителя»
+  var GONE_NAME = 'сотрудник удалён';          // ФИО удалённого, если snapshot пуст (старые данные)
 
   var ERR_TEXT = {
     network: 'Нет связи с сервером. Повторите позже.',
@@ -71,7 +78,9 @@
     loadError: null,
     busy: false,
     dragId: null,
-    loadSeq: 0
+    loadSeq: 0,
+    orphanCount: 0,                // T1-8: открытые задачи без исполнителя (?orphans=1)
+    modal: null                    // T1-8: окно замены { empId, fullName, items, target, error, busy }
   };
   var DOM = {};
 
@@ -126,11 +135,48 @@
     return e ? e.name : String(id);
   }
   function assigneesOf(t) { return (t && t.assignees) || []; }
+  function personName(a) {
+    return a.full_name || (a.removed ? GONE_NAME : empName(a.employee_id));
+  }
   function assigneeNames(t) {
-    return assigneesOf(t).map(function (a) { return a.full_name || empName(a.employee_id); });
+    return assigneesOf(t).map(personName);
   }
   function hasAssignee(t, empId) {
-    return assigneesOf(t).some(function (a) { return a.employee_id === empId; });
+    return assigneesOf(t).some(function (a) { return !a.removed && a.employee_id === empId; });
+  }
+  // «без исполнителя»: открытая неархивная задача, у которой не осталось действующих исполнителей.
+  // Закрытые задачи без пометок (ФИО остаётся из snapshot).
+  function isOrphan(t) {
+    return !!(t && t.orphan === true && t.status === 'open' && !t.archived);
+  }
+  function removedNames(t) {
+    return assigneesOf(t).filter(function (a) { return a.removed && a.full_name; })
+      .map(function (a) { return a.full_name; });
+  }
+  // плашка «Исполнитель удалён (<ФИО из snapshot>)»; без ФИО (старые данные) — без скобок.
+  function plateText(t) {
+    var n = removedNames(t);
+    return 'Исполнитель удалён' + (n.length ? ' (' + n.join(', ') + ')' : '');
+  }
+  function plateHtml(t) {
+    return '<span class="tk-plate" title="Сотрудник удалён из справочника — задача осталась без исполнителя">' + esc(plateText(t)) + '</span>';
+  }
+  // removed_at может быть null (audit_log хранится 7 дней) — тогда без даты, никогда «null»/«Invalid Date».
+  function removedDate(t) {
+    var best = null;
+    assigneesOf(t).forEach(function (a) {
+      if (a.removed && a.removed_at && (!best || String(a.removed_at) > String(best))) best = a.removed_at;
+    });
+    if (!best) return '';
+    var d = new Date(best);
+    if (isNaN(d.getTime())) return '';
+    return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
+  }
+  function plural(n, one, few, many) {
+    var m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
   }
   function findTask(id) {
     for (var i = 0; i < S.tasks.length; i++) if (S.tasks[i].id === id) return S.tasks[i];
@@ -177,8 +223,8 @@
       S.user = (r.ok && r.data && r.data.authenticated) ? r.data.user : null;
     });
   }
-  function loadEmployees() {
-    if (S.employees.length) return Promise.resolve();
+  function loadEmployees(force) {
+    if (S.employees.length && !force) return Promise.resolve();
     return api('GET', EMP_API).then(function (r) {
       var arr = Array.isArray(r.data) ? r.data : (r.data.employees || []);
       if (!r.ok || !Array.isArray(arr)) return;
@@ -244,7 +290,8 @@
   }
   function applyFilters(tasks, f, listOnly) {
     return tasks.filter(function (t) {
-      if (f.emp && !hasAssignee(t, f.emp)) return false;
+      if (f.emp === NONE) { if (!isOrphan(t)) return false; }
+      else if (f.emp && !hasAssignee(t, f.emp)) return false;
       if (!listOnly) return true;
       if (f.status && t.status !== f.status) return false;
       if (f.priority && String(t.priority) !== String(f.priority)) return false;
@@ -261,8 +308,10 @@
     });
     return h;
   }
-  function empOptions(selected, allLabel) {
-    return optionsHtml(S.employees.map(function (e) { return { value: e.id, label: e.name }; }), selected, allLabel);
+  function empOptions(selected, allLabel, withNone) {
+    var items = S.employees.map(function (e) { return { value: e.id, label: e.name }; });
+    if (withNone) items.push({ value: NONE, label: 'Без исполнителя' });
+    return optionsHtml(items, selected, allLabel);
   }
   function priorityTag(t) {
     var p = +t.priority;
@@ -294,9 +343,15 @@
   function nameLinks(t) {
     var a = assigneesOf(t);
     if (!a.length) return '<span class="tk-muted">—</span>';
+    if (isOrphan(t)) return plateHtml(t);
+    var open = t.status === 'open' && !t.archived;
     return a.map(function (p) {
+      if (p.removed) {
+        // удалённый: у открытой задачи с другими исполнителями — зачёркнут; у закрытой — без пометок
+        return open ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
+      }
       return '<a href="#" class="tk-name" data-tk-act="filterEmp" data-emp="' + esc(p.employee_id) + '">' +
-        esc(p.full_name || empName(p.employee_id)) + '</a>';
+        esc(personName(p)) + '</a>';
     }).join(', ');
   }
 
@@ -324,7 +379,7 @@
     var f = S.filters;
     var rows = applyFilters(S.tasks, f, true);
     var h = '<div class="tk-filters">' +
-      '<label>Сотрудник <select data-tk-filter="emp">' + empOptions(f.emp, 'Все') + '</select></label>' +
+      '<label>Сотрудник <select data-tk-filter="emp">' + empOptions(f.emp, 'Все', true) + '</select></label>' +
       '<label>Срок <select data-tk-filter="due">' + optionsHtml([
         { value: 'today', label: 'Сегодня' }, { value: 'week', label: 'На этой неделе' }, { value: 'overdue', label: 'Просрочено' }
       ], f.due, 'Любой') + '</select></label>' +
@@ -341,7 +396,7 @@
     }
     h += '<div class="tk-tablewrap"><table class="tk-table"><thead><tr><th>Задача</th><th>Исполнитель</th><th>Срок</th><th>Приор.</th><th>Статус</th></tr></thead><tbody>';
     rows.forEach(function (t) {
-      h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board">' +
+      h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board">' +
         '<td><b>' + esc(t.title) + '</b><div class="tk-badges">' + badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></td>' +
         '<td>' + nameLinks(t) + '</td>' +
         '<td class="tk-nowrap">' + esc(fmtPeriod(t)) + '</td>' +
@@ -353,29 +408,36 @@
 
   function cardHtml(t) {
     var admin = canWrite();
-    return '<div class="tk-card' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.status === 'closed' ? ' tk-dim' : '') + '"' +
+    return '<div class="tk-card' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '"' +
       ' data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board"' + (admin ? ' draggable="true" data-tk-drag="' + esc(t.id) + '"' : '') + '>' +
       '<b>' + esc(t.title) + '</b>' +
-      '<div class="tk-sub">' + esc(assigneeNames(t).join(', ')) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
+      '<div class="tk-sub">' + (isOrphan(t) ? plateHtml(t) : esc(assigneeNames(t).join(', '))) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
       '<div class="tk-badges">' + (+t.priority === 1 ? '<span class="tk-tag tk-hi">высокий</span>' : '<span class="tk-tag">' + esc(PRIORITY_TEXT[t.priority] || '') + '</span>') +
       badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></div>';
   }
 
   function renderBoard() {
     var rows = applyFilters(S.tasks, { emp: S.filters.emp }, false);
-    var open = rows.filter(function (t) { return t.status === 'open'; });
+    var orph = rows.filter(isOrphan);
+    var open = rows.filter(function (t) { return t.status === 'open' && !isOrphan(t); });
     var closed = rows.filter(function (t) { return t.status === 'closed'; }).sort(function (a, b) {
       return String(b.closed_at || '').localeCompare(String(a.closed_at || ''));
     });
-    var h = '<div class="tk-filters"><label>Сотрудник <select data-tk-filter="emp">' + empOptions(S.filters.emp, 'Все') + '</select></label>';
+    var h = '<div class="tk-filters"><label>Сотрудник <select data-tk-filter="emp">' + empOptions(S.filters.emp, 'Все', true) + '</select></label>';
     if (S.filters.emp) h += '<button type="button" class="tk-btn" data-tk-act="clearEmp">× Все сотрудники</button>';
     if (canWrite()) h += '<span class="tk-muted">Перетащите карточку в другую колонку, чтобы закрыть или переоткрыть задачу.</span>';
-    h += '</div><div class="tk-split"><div class="tk-cols">';
+    h += '</div><div class="tk-split"><div class="tk-boardmain">';
+    if (orph.length) {
+      h += '<div class="tk-sec tk-sec-orph" data-tk-sec="orphans"><b>⚠ Без исполнителя · ' + orph.length + '</b>' +
+        '<span class="tk-muted"> — исполнитель удалён, задача ждёт назначения</span>' +
+        '<div class="tk-sec-cards">' + orph.map(cardHtml).join('') + '</div></div>';
+    }
+    h += '<div class="tk-cols">';
     h += '<div class="tk-col" data-tk-col="open"><b>Открыта · ' + open.length + '</b>' +
       (open.map(cardHtml).join('') || '<p class="tk-empty">Нет открытых задач</p>') + '</div>';
     h += '<div class="tk-col" data-tk-col="closed"><b>Закрыта · ' + closed.length + '</b>' +
       (closed.map(cardHtml).join('') || '<p class="tk-empty">Нет закрытых задач</p>') + '</div>';
-    h += '</div>' + renderDetail() + '</div>';
+    h += '</div></div>' + renderDetail() + '</div>';
     return h;
   }
 
@@ -405,14 +467,15 @@
     else if (date === first) when = (st ? st + ' ' : '') + '→';
     else if (date === last) when = '→' + (et ? ' ' + et : '');
     else when = '…продолжение';
+    var orph = isOrphan(t);
     var names = assigneeNames(t).join(', ');
     var vac = (t.notes || []).filter(function (n) { return n.date === date && (n.kind === 'vacation' || n.kind === 'day_off'); });
     var hl = S.cal.emp && hasAssignee(t, S.cal.emp);
     var max = S.cal.mode === 'day' ? 140 : 48;
     return '<div class="tk-ev' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.conflict ? ' tk-conf' : '') +
-      (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" title="' + esc(t.title) + '">' +
+      (orph ? ' tk-orph' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" title="' + esc(t.title + (orph ? ' — ' + plateText(t) : '')) + '">' +
       (when ? '<span class="tk-ev-when">' + esc(when) + '</span> ' : '') +
-      '<b>' + esc(names) + '</b>' +
+      (orph ? '<b class="tk-orph-lbl">без исполнителя</b>' : '<b>' + esc(names) + '</b>') +
       '<div class="tk-ev-desc">' + esc(truncate(t.description || t.title, max)) + '</div>' +
       (vac.length ? '<span class="tk-tag tk-neutral">' + esc(NOTE_TEXT[vac[0].kind]) + '</span>' : '') +
       (t.conflict ? '<span class="tk-tag tk-warn">⚠ конфликт</span>' : '') +
@@ -465,6 +528,14 @@
     h += '<div class="tk-badges">' + priorityTag(t) + badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div>';
     h += '<div class="tk-kv"><span>Срок</span><b>' + esc(fmtPeriod(t)) + '</b></div>';
     h += '<div class="tk-kv"><span>Исполнители</span><div>' + nameLinks(t) + '</div></div>';
+    if (isOrphan(t)) {
+      var rd = removedDate(t);
+      h += '<div class="tk-box tk-box-orph" data-tk-box="orphan"><b>Исполнитель удалён' + (rd ? ' ' + esc(rd) : '') + '</b> — задача без исполнителя.' +
+        (canWrite() && !t.archived
+          ? ' <button type="button" class="tk-btn tk-primary" data-tk-act="assignOrphan" data-id="' + esc(t.id) + '">Назначить</button>'
+          : '') +
+        '<div class="tk-muted">Закрыть задачу можно и без исполнителя.</div></div>';
+    }
     h += '<div class="tk-kv"><span>Описание</span><div class="tk-pre">' + (t.description ? esc(t.description) : '<span class="tk-muted">нет описания</span>') + '</div></div>';
     if (t.checklist && t.checklist.length) {
       h += '<div class="tk-kv"><span>Чек-лист</span><ul class="tk-ck">' + t.checklist.map(function (c) {
@@ -512,8 +583,10 @@
   function draftFromTask(t) {
     return {
       title: t.title || '', description: t.description || '',
-      assignees: assigneesOf(t).map(function (a) { return a.employee_id; }),
-      watchers: (t.watchers || []).map(function (a) { return a.employee_id; }),
+      assignees: assigneesOf(t).filter(function (a) { return !a.removed; }).map(function (a) { return a.employee_id; }),
+      hasRemoved: assigneesOf(t).some(function (a) { return a.removed; }),
+      origActive: assigneesOf(t).filter(function (a) { return !a.removed; }).map(function (a) { return a.employee_id; }),
+      watchers: (t.watchers || []).filter(function (a) { return !a.removed; }).map(function (a) { return a.employee_id; }),
       kind: t.end_at ? 'period' : 'single',
       startDate: dateOf(t.start_at), startTime: timeOf(t.start_at),
       endDate: t.end_at ? dateOf(t.end_at) : dateOf(t.start_at), endTime: timeOf(t.end_at),
@@ -594,7 +667,7 @@
   // ---------------------------------------------------------------- form logic
   function draftError(d) {
     if (!String(d.title).trim()) return ERR_TEXT.title_required;
-    if (!d.assignees.length) return ERR_TEXT.assignees_required;
+    if (!d.assignees.length && !(d.hasRemoved && d.origActive && !d.origActive.length)) return ERR_TEXT.assignees_required;
     if (!parseYmd(d.startDate)) return 'Укажите дату начала.';
     if (d.kind === 'period') {
       if (!parseYmd(d.endDate)) return 'Укажите дату окончания периода.';
@@ -602,6 +675,10 @@
       if (e < s) return ERR_TEXT.end_before_start;
     }
     return '';
+  }
+  function sameSet(a, b) {
+    if (a.length !== b.length) return false;
+    return a.every(function (x) { return b.indexOf(x) >= 0; });
   }
   function buildPayload(d, isNew) {
     var p = {
@@ -618,6 +695,9 @@
         return it;
       })
     };
+    // T1-8: у задачи есть удалённые исполнители и состав действующих не менялся (в т.ч. «без исполнителя») —
+    // assignees не отправляем: сервер оставляет всё как есть (snapshot удалённых сохраняется).
+    if (!isNew && d.hasRemoved && d.origActive && sameSet(d.assignees, d.origActive)) delete p.assignees;
     // watchers намеренно не отправляются: поле хранится на сервере, UI его не меняет.
     return p;
   }
@@ -629,6 +709,25 @@
         document.dispatchEvent(new CustomEvent('tasks:changed'));
       }
     } catch (e) { /* матрица необязательна */ }
+    refreshOrphanCount();
+  }
+
+  // ---------------------------------------------------------------- T1-8: счётчик ⚠ на вкладке
+  var _orphSeq = 0;
+  function renderBadge() {
+    if (!DOM.tab) return;
+    var n = S.orphanCount | 0;
+    DOM.tab.innerHTML = 'Задачи' + (n > 0
+      ? '<span class="tk-orph-cnt" data-tk-badge="orphans" title="Открытых задач без исполнителя: ' + n + '">⚠ ' + n + '</span>' : '');
+  }
+  function refreshOrphanCount() {
+    var seq = ++_orphSeq;
+    return api('GET', API + '?orphans=1').then(function (r) {
+      if (seq !== _orphSeq) return;
+      if (r.status === 0) return;                       // нет связи — оставляем прежнее значение
+      S.orphanCount = (r.ok && r.data && r.data.success) ? (+r.data.count || 0) : 0;
+      renderBadge();
+    });
   }
 
   function handleWriteResult(r, id, okText) {
@@ -759,6 +858,13 @@
     newTask: function () { openForm(null); },
     editTask: function (el) { openForm(el.dataset.id); },
     reassignTask: function (el) { openForm(el.dataset.id, 'assignees'); },
+    assignOrphan: function (el) { openForm(el.dataset.id, 'assignees'); },        // T1-8: «Назначить» в карточке (admin)
+    mAssign: function () { runAssign(null, false); },                              // T1-8: окно замены
+    mAccept: function (el) {
+      var it = modalItem(el.dataset.id);
+      if (it) runAssign(it, true);
+    },
+    mLater: function () { closeModal(); },
     closeTask: function (el) { statusAction(el.dataset.id, 'close'); },
     reopenTask: function (el) { statusAction(el.dataset.id, 'reopen'); },
     archiveTask: function (el) {
@@ -925,9 +1031,11 @@
     var p = panelEl();
     if (p) p.classList.add('tasks-tab-active');
     DOM.root.style.display = 'block';
-    return Promise.all([refreshUser(), loadEmployees()]).then(function () {
+    // справочник перечитываем при каждом открытии: сотрудника могли удалить/добавить после прошлого раза
+    return Promise.all([refreshUser(), loadEmployees(true)]).then(function () {
       if (!S.user) { S.msg = { type: 'error', text: ERR_TEXT.unauthorized }; render(); return; }
       if (!canWrite()) S.form = null;
+      refreshOrphanCount();
       return load();
     });
   }
@@ -953,6 +1061,281 @@
     }
     S.selectedId = opts.taskId || null;
     return activate();
+  }
+
+  // ---------------------------------------------------------------- T1-8: окно замены исполнителя
+  var OPEN_FOR_TIMEOUT_MS = 5000;
+
+  /** Открытые задачи сотрудника (до удаления): Promise<{ok, count, tasks}>; при сбое ok=false (удаление не блокируется). */
+  function openTasksFor(empId) {
+    var id = normEmpId(empId);
+    var fail = { ok: false, count: 0, tasks: [] };
+    if (!id) return Promise.resolve(fail);
+    var timer = null;
+    var timeout = new Promise(function (resolve) {
+      timer = setTimeout(function () { resolve({ ok: false, status: 0, data: {} }); }, OPEN_FOR_TIMEOUT_MS);
+    });
+    return Promise.race([api('GET', API + '?open_for=' + encodeURIComponent(id)), timeout]).then(function (r) {
+      if (timer) clearTimeout(timer);
+      if (r.ok && r.data && r.data.success && Array.isArray(r.data.tasks)) {
+        return { ok: true, count: r.data.tasks.length, tasks: r.data.tasks };
+      }
+      return fail;
+    });
+  }
+
+  function modalItem(id) {
+    var M = S.modal;
+    if (!M) return null;
+    for (var i = 0; i < M.items.length; i++) if (M.items[i].id === id) return M.items[i];
+    return null;
+  }
+  function activeIds(task) {
+    return assigneesOf(task).filter(function (a) { return !a.removed; }).map(function (a) { return a.employee_id; });
+  }
+  // свежая карточка задачи: версия, состав исполнителей, не закрыта ли
+  function readItem(it) {
+    return api('GET', API + '?id=' + encodeURIComponent(it.id)).then(function (r) {
+      var t = r.ok && r.data && r.data.task;
+      if (!t) {
+        it.status = 'error';
+        it.readFailed = true;
+        it.error = r.status === 404 ? ERR_TEXT.not_found : errText(r);
+        it.checked = false;
+        return false;
+      }
+      it.task = t;
+      it.version = t.version;
+      it.others = activeIds(t);
+      if (it.initialOthers === undefined) it.initialOthers = it.others.slice();
+      if (t.status !== 'open' || t.archived) {
+        it.status = 'skipped'; it.note = 'Задача уже закрыта или в архиве — не переназначается.'; it.checked = false;
+      } else if (!it.initialOthers.length && it.others.length) {
+        it.status = 'skipped';
+        it.note = 'Исполнитель уже назначен: ' + it.others.map(empName).join(', ') + '.'; it.checked = false;
+      } else if (it.readFailed) {
+        it.readFailed = false; it.status = 'pending'; it.error = ''; it.checked = true;
+      }
+      return true;
+    });
+  }
+  function itemSuggestion(it) {
+    var b = it.blocked;
+    if (!b || !b.suggested_start) return null;
+    var p = { start_at: dateOf(b.suggested_start) + (timeOf(b.suggested_start) ? 'T' + timeOf(b.suggested_start) : '') };
+    if (it.task && it.task.end_at && b.suggested_end) {
+      p.end_at = dateOf(b.suggested_end) + (timeOf(b.suggested_end) ? 'T' + timeOf(b.suggested_end) : '');
+    }
+    return p;
+  }
+  // одна задача: PUT assignees (+ предложенная дата при accept) с version; 409 → перечитать и повторить один раз
+  function putItem(it, target, accept, retried) {
+    var ids = (it.others || []).filter(function (x) { return x !== target; });
+    ids.push(target);
+    var body = { version: it.version, assignees: ids };
+    if (accept) {
+      var sg = itemSuggestion(it);
+      if (sg) { body.start_at = sg.start_at; if (sg.end_at) body.end_at = sg.end_at; }
+    }
+    return api('PUT', API + '?id=' + encodeURIComponent(it.id), body).then(function (r) {
+      var code = r.data && r.data.error;
+      if (r.ok && r.data && r.data.success) {
+        it.status = 'done'; it.error = ''; it.blocked = null; it.checked = false;
+        it.assignedTo = empName(target);
+        if (r.data.task) { it.task = r.data.task; it.version = r.data.task.version; }
+        return 'done';
+      }
+      if (r.status === 409 && code === 'VERSION_CONFLICT') {
+        if (retried) {
+          it.status = 'error'; it.error = 'Задача изменена другим пользователем — повторите назначение.';
+          return 'error';
+        }
+        return readItem(it).then(function (ok) {
+          if (!ok) return 'error';
+          if (it.status === 'skipped') return 'skipped';
+          return putItem(it, target, accept, true);
+        });
+      }
+      if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') {
+        it.status = 'blocked'; it.error = '';
+        it.blocked = {
+          blocked_days: r.data.blocked_days || [], suggested_start: r.data.suggested_start || null,
+          suggested_end: r.data.suggested_end || null
+        };
+        return 'blocked';
+      }
+      if (code === 'employee_not_found') return 'no_employee';
+      it.status = 'error'; it.error = errText(r);
+      return 'error';
+    });
+  }
+  function runAssign(only, accept) {
+    var M = S.modal;
+    if (!M || M.busy || !canWrite()) return Promise.resolve();
+    if (!M.target) { M.error = 'Выберите сотрудника, которому передать задачи.'; renderModal(); return Promise.resolve(); }
+    var items = only ? [only] : M.items.filter(function (it) {
+      return it.checked && it.status !== 'done' && it.status !== 'skipped';
+    });
+    if (!items.length) { M.error = 'Отметьте хотя бы одну задачу.'; renderModal(); return Promise.resolve(); }
+    M.error = '';
+    M.busy = true;
+    renderModal();
+    var target = M.target, changed = false, noEmp = false;
+    return M.ready.then(function () {
+      return items.reduce(function (p, it) {
+        return p.then(function () {
+          if (noEmp) return null;
+          var go = it.task ? Promise.resolve(true) : readItem(it);
+          return go.then(function (ok) {
+            if (!ok || it.status === 'skipped') return null;
+            return putItem(it, target, accept, false).then(function (res) {
+              if (res === 'done') changed = true;
+              if (res === 'no_employee') noEmp = true;
+            });
+          });
+        });
+      }, Promise.resolve());
+    }).then(function () {
+      M.busy = false;
+      if (noEmp) {
+        M.error = ERR_TEXT.employee_not_found + ' Возможно, его уже удалили — выберите другого.';
+        M.target = '';
+        return loadEmployees(true).then(function () { if (S.modal === M) renderModal(); });
+      }
+      if (changed) {
+        toast('Задачи переназначены', 'success');
+        notifyChanged();
+        if (S.active) load();
+      }
+      if (S.modal === M) renderModal();
+      return null;
+    });
+  }
+
+  function renderModal() {
+    var M = S.modal;
+    if (!M || !DOM.modal) return;
+    var n = M.items.length;
+    var left = M.items.filter(function (it) { return it.status !== 'done' && it.status !== 'skipped'; }).length;
+    var dis = M.busy ? ' disabled' : '';
+    var h = '<div class="tk-modal" role="dialog" aria-modal="true" aria-label="Замена исполнителя">';
+    h += '<h4 class="tk-mtitle">У ' + esc(M.fullName || GONE_NAME) + ' было ' + n + ' ' +
+      plural(n, 'открытая задача', 'открытые задачи', 'открытых задач') + '</h4>';
+    h += '<p class="tk-muted">Сотрудник удалён. Передайте задачи другому исполнителю или нажмите «Позже» — ' +
+      'они останутся без исполнителя (счётчик ⚠ на вкладке «Задачи»).</p>';
+    if (M.error) h += '<div class="tk-msg tk-msg-error" role="alert">' + esc(M.error) + '</div>';
+    h += '<ul class="tk-mlist">';
+    M.items.forEach(function (it) {
+      var finished = it.status === 'done' || it.status === 'skipped';
+      h += '<li class="tk-mit tk-mit-' + esc(it.status) + '" data-tk-mitem="' + esc(it.id) + '"><label>' +
+        '<input type="checkbox" data-tk-mchk="' + esc(it.id) + '"' + (it.checked ? ' checked' : '') + (finished || M.busy ? ' disabled' : '') + '> ' +
+        '<b>' + esc(it.title) + '</b></label> <span class="tk-muted">' + esc(fmtPeriod(it)) + '</span>';
+      if (it.others && it.others.length && it.status !== 'done') {
+        h += '<div class="tk-muted">Остаётся исполнителем: ' + esc(it.others.map(empName).join(', ')) + '</div>';
+      }
+      if (it.status === 'done') h += '<div class="tk-mok">✓ Назначена: ' + esc(it.assignedTo || '') + '</div>';
+      if (it.status === 'skipped') h += '<div class="tk-muted">' + esc(it.note || 'Пропущена.') + '</div>';
+      if (it.status === 'error') h += '<div class="tk-merr" role="alert">' + esc(it.error || 'Ошибка.') + '</div>';
+      if (it.status === 'blocked' && it.blocked) {
+        h += '<div class="tk-box tk-box-warn tk-mblocked"><b>Не переназначена:</b> у выбранного сотрудника больничный или командировка в срок задачи.<ul class="tk-notes">';
+        (it.blocked.blocked_days || []).forEach(function (d) {
+          h += '<li>' + esc(fmtDay(d.date)) + ' — ' + esc(empName(d.employee_id)) + ' (' + esc(REASON_TEXT[d.reason] || d.reason) + ')</li>';
+        });
+        h += '</ul>';
+        if (it.blocked.suggested_start) {
+          var sg = itemSuggestion(it);
+          h += '<div>Ближайший свободный срок: <b>' + esc(fmtDay(dateOf(sg.start_at)) + (timeOf(sg.start_at) ? ' ' + timeOf(sg.start_at) : '') +
+            (sg.end_at ? ' — ' + fmtDay(dateOf(sg.end_at)) + (timeOf(sg.end_at) ? ' ' + timeOf(sg.end_at) : '') : '')) + '</b> ' +
+            '<button type="button" class="tk-btn tk-primary" data-tk-act="mAccept" data-id="' + esc(it.id) + '"' + dis + '>Принять предложенную дату</button></div>';
+        } else {
+          h += '<div>Подходящую дату подобрать не удалось — выберите другого сотрудника или измените срок в карточке задачи.</div>';
+        }
+        h += '</div>';
+      }
+      h += '</li>';
+    });
+    h += '</ul>';
+    h += '<div class="tk-mrow"><label>Передать: <select data-tk-mtarget="1"' + dis + '>' +
+      empOptions(M.target, '— выберите сотрудника —') + '</select></label></div>';
+    h += '<div class="tk-actions"><button type="button" class="tk-btn tk-primary" data-tk-act="mAssign"' + dis + '>Назначить</button>' +
+      '<button type="button" class="tk-btn" data-tk-act="mLater"' + dis + '>' + (left ? 'Позже' : 'Закрыть') + '</button></div></div>';
+    DOM.modal.innerHTML = h;
+  }
+
+  function onModalChange(ev) {
+    var t = ev.target, M = S.modal;
+    if (!t || !t.dataset || !M || M.busy) return;
+    if (t.dataset.tkMtarget !== undefined) {
+      M.target = t.value;
+      M.error = '';
+      // причина блокировки относилась к прежнему сотруднику — сбрасываем
+      M.items.forEach(function (it) { if (it.status === 'blocked' || it.status === 'error') { it.status = 'pending'; it.blocked = null; it.error = ''; } });
+      renderModal();
+      return;
+    }
+    if (t.dataset.tkMchk !== undefined) {
+      var it = modalItem(t.dataset.tkMchk);
+      if (it) it.checked = !!t.checked;
+    }
+  }
+  function onModalKey(ev) {
+    if (ev && ev.key === 'Escape' && S.modal && !S.modal.busy) closeModal();
+  }
+  function closeModal() {
+    var M = S.modal;
+    if (!M || M.busy) return;
+    S.modal = null;
+    var el = DOM.modal;
+    DOM.modal = null;
+    if (el) {
+      if (el.parentNode && el.parentNode.removeChild) el.parentNode.removeChild(el);
+      else if (el.remove) el.remove();
+    }
+    if (typeof document.removeEventListener === 'function') document.removeEventListener('keydown', onModalKey);
+    refreshOrphanCount();
+  }
+
+  /**
+   * Окно замены после удаления сотрудника (вызывается из #deleteEmp, index.html).
+   * tasks — результат openTasksFor(empId).tasks, снятый ДО удаления. Только admin; остальным — ничего.
+   * «Назначить» — PUT по каждой отмеченной задаче; «Позже» — закрыть (задачи остаются в счётчике ⚠).
+   */
+  function offerReassign(empId, fullName, tasks) {
+    var list = (tasks || []).filter(function (t) { return t && t.id; });
+    refreshOrphanCount();                              // задачи сотрудника уже без исполнителя
+    if (!list.length) return Promise.resolve(false);
+    return refreshUser().then(function () {
+      if (!canWrite()) return false;
+      return loadEmployees(true).then(function () {
+        var gone = normEmpId(empId);
+        // сервер мог не применить удаление (stale-защита save.php) — тогда окно не показываем
+        if (S.employees.some(function (e) { return e.id === gone; })) return false;
+        S.employees = S.employees.filter(function (e) { return e.id !== gone; });
+        S.empById = {};
+        S.employees.forEach(function (e) { S.empById[e.id] = e; });
+        if (S.modal) closeModal();
+        var M = S.modal = {
+          empId: gone, fullName: fullName || '', target: '', error: '', busy: false, ready: null,
+          items: list.map(function (t) {
+            return { id: String(t.id), title: t.title || '', start_at: t.start_at, end_at: t.end_at || null,
+              version: t.version, checked: true, status: 'pending', error: '', blocked: null, others: [], task: null };
+          })
+        };
+        var el = document.createElement('div');
+        el.id = 'tasksReassignModal';
+        el.className = 'tk-modal-back';
+        el.addEventListener('click', onClick);
+        el.addEventListener('change', onModalChange);
+        DOM.modal = el;
+        renderModal();
+        (document.body || document.documentElement).appendChild(el);
+        if (typeof document.addEventListener === 'function') document.addEventListener('keydown', onModalKey);
+        M.ready = Promise.all(M.items.map(function (it) { return readItem(it); })).then(function () {
+          if (S.modal === M) renderModal();
+        });
+        return M.ready.then(function () { return true; });
+      });
+    });
   }
 
   function css() {
@@ -1028,6 +1411,25 @@
       '.tk-radio label,.tk-check{margin-right:14px;color:var(--text);font-size:13px;text-transform:none}' +
       '.tk-dt{margin-top:6px}.tk-dt span{display:inline-block;min-width:54px;color:var(--accent)}' +
       '.tk-ckrow{display:flex;gap:6px;align-items:center;margin-bottom:4px}.tk-ckrow input[type=text]{flex:1}' +
+      // T1-8: «Исполнитель удалён»
+      '.tk-orph-cnt{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;background:var(--rt-orange);color:#fff;font-size:11px;font-weight:700;line-height:16px;vertical-align:middle}' +
+      '.tk-plate{display:inline-block;background:#e4e6eb;color:#555;border-radius:10px;padding:1px 8px;font-size:12px}' +
+      '.tk-row.tk-orph>td:first-child{box-shadow:inset 4px 0 0 var(--rt-orange)}' +
+      '.tk-gone{color:var(--accent);text-decoration:line-through}' +
+      '.tk-boardmain{flex:1 1 auto;min-width:0}' +
+      '.tk-sec{border:1px solid var(--rt-orange);border-radius:8px;padding:6px 8px;margin-bottom:12px;background:rgba(255,79,18,.05)}' +
+      '.tk-sec-cards{display:flex;gap:8px;flex-wrap:wrap}.tk-sec-cards .tk-card{flex:1 1 220px;max-width:320px}' +
+      '.tk-card.tk-orph{border-left:4px solid var(--rt-orange)}' +
+      '.tk-ev.tk-orph{border:1.5px dashed var(--rt-orange);background:rgba(255,79,18,.06)}' +
+      '.tk-orph-lbl{color:var(--rt-orange)}' +
+      '.tk-box-orph{border-color:var(--rt-orange);background:rgba(255,79,18,.08)}' +
+      '.tk-modal-back{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:20000;display:flex;align-items:center;justify-content:center}' +
+      '.tk-modal{background:#fff;border-radius:12px;width:560px;max-width:calc(100% - 24px);max-height:86vh;overflow:auto;padding:16px 18px;color:var(--text);font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.35)}' +
+      '.tk-mtitle{margin:0 0 6px;font-size:16px}' +
+      '.tk-mlist{list-style:none;margin:8px 0;padding:0}' +
+      '.tk-mit{border:1px solid var(--divider);border-radius:8px;padding:6px 10px;margin-bottom:6px}' +
+      '.tk-mit-done{background:rgba(76,175,80,.08)}.tk-mok{color:#2e7d32}.tk-merr{color:#a3261b}' +
+      '.tk-mrow{margin:10px 0}.tk-mrow select{border:1px solid var(--divider);border-radius:6px;padding:4px 6px;font:inherit;background:#fff;color:var(--text)}' +
       '@media (max-width:760px){#tasksView{padding:8px}.tk-split{flex-direction:column}.tk-detail{flex:1 1 auto;width:100%}' +
       '.tk-cols{width:100%;flex-direction:column}.tk-wk{width:100%;overflow-x:auto}.tk-wk-c{min-height:90px}}';
   }
@@ -1073,6 +1475,10 @@
     DOM.root.addEventListener('dragstart', onDragStart);
     DOM.root.addEventListener('dragover', onDragOver);
     DOM.root.addEventListener('drop', onDrop);
+    // T1-8: счётчик ⚠ на вкладке — при старте и при каждом открытии панели отпусков
+    var trg = document.getElementById('vacationTrigger');
+    if (trg) trg.addEventListener('click', function () { refreshOrphanCount(); });
+    refreshOrphanCount();
   }
   function autoInit() {
     if (document.readyState !== 'loading') init();
@@ -1086,12 +1492,16 @@
     deactivate: deactivate,
     reload: load,
     canWrite: canWrite,
+    openTasksFor: openTasksFor,           // T1-8: до удаления сотрудника (index.html #deleteEmp)
+    offerReassign: offerReassign,         // T1-8: после удаления (index.html #deleteEmp)
+    refreshOrphans: refreshOrphanCount,
     isActive: function () { return S.active; },
     // для тестов (scripts/test_tasks_frontend.js); в UI не используется
     __t: {
       S: S, ACTIONS: ACTIONS, render: render, onClick: onClick, onChange: onChange, onDrop: onDrop, onDragStart: onDragStart,
       truncate: truncate, weekStart: weekStart, addDays: addDays, fmtPeriod: fmtPeriod, normEmpId: normEmpId,
-      applyFilters: applyFilters, buildPayload: buildPayload, draftError: draftError, esc: esc
+      applyFilters: applyFilters, buildPayload: buildPayload, draftError: draftError, esc: esc,
+      isOrphan: isOrphan, removedDate: removedDate, plural: plural, modalEl: function () { return DOM.modal; }
     }
   };
   window.openTasksPanel = openTasksPanel;

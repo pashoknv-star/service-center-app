@@ -4364,9 +4364,23 @@
       render();
       save();
     });
-    document.getElementById('deleteEmp').addEventListener('click', () => {
-      if (!confirm('Удалить сотрудника безвозвратно? Все данные отпусков будут потеряны.')) return;
+    let deleteEmpBusy = false;
+    document.getElementById('deleteEmp').addEventListener('click', async () => {
+      if (deleteEmpBusy) return;
+      deleteEmpBusy = true;
+      try {
       const removedId = currentId;
+      const removedEmp = employees.find(x => x.id == removedId);
+      const removedName = removedEmp ? removedEmp.name : '';
+      // T1-8 (D-1): открытые задачи сотрудника — до подтверждения (сбой запроса удаление не блокирует).
+      let openInfo = null;
+      try {
+        if (window.Tasks && typeof window.Tasks.openTasksFor === 'function') openInfo = await window.Tasks.openTasksFor(removedId);
+      } catch (e) { openInfo = null; }
+      const openCount = openInfo && openInfo.ok ? (openInfo.count | 0) : 0;
+      let confirmText = 'Удалить сотрудника безвозвратно? Все данные отпусков будут потеряны.';
+      if (openCount > 0) confirmText += '\n\nОткрытых задач: ' + openCount + ' — останутся без исполнителя.';
+      if (!confirm(confirmText)) return;
       employees = employees.filter(x => x.id != removedId);
       // Удалить vacationData по всем годам
       Object.keys(vacationData).forEach(year => {
@@ -4377,7 +4391,15 @@
       editor.classList.remove('open');
       render();
       renderVacationMatrix();
-      save();
+      const saved = await save();
+      // T1-8: окно замены — только после реального удаления на сервере (не при sync/импорте, не при сбое сохранения).
+      if (openCount > 0 && saved && saved.success !== false && !saved.fallback && !saved.localOnly &&
+          window.Tasks && typeof window.Tasks.offerReassign === 'function') {
+        window.Tasks.offerReassign(removedId, removedName, openInfo.tasks);
+      } else if (window.Tasks && typeof window.Tasks.refreshOrphans === 'function') {
+        window.Tasks.refreshOrphans();
+      }
+      } finally { deleteEmpBusy = false; }
     });
     document.getElementById('cloneEmp').addEventListener('click', () => {
       const donor = employees.find(x => x.id == currentId);
