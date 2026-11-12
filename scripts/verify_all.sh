@@ -15,7 +15,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=46 [tasksui]=135 [tasksmx]=71 [tasksn8n]=25 [taskscal]=110 )
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=46 [tasksui]=187 [tasksmx]=71 [tasksn8n]=25 [taskscal]=110 )
 ALL_SUITES=(smoke tasks tasksn8n tasksui tasksmx taskscal e51 e52 hygiene trips syntax phplint pii)
 SUITE_TIMEOUT=600
 
