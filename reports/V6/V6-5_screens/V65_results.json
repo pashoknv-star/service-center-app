@@ -1,0 +1,305 @@
+{
+ "checks": [
+  {
+   "name": "1280 P2-1 в плитке Доски ФИО — кнопка filterEmp (цвет ссылки, указатель, пунктир)",
+   "ok": true
+  },
+  {
+   "name": "1280 P2-1 клик по ФИО в плитке → «Список», ровно один фильтр (emp=emp_101), карточка не открыта",
+   "ok": true
+  },
+  {
+   "name": "1280 P2-1 клик по плитке (не по ФИО) по-прежнему открывает карточку",
+   "ok": true
+  },
+  {
+   "name": "1280 P2-1 drag&drop: перетаскивание, начатое С ФИО, переносит плитку «Открыта» → «Закрыта» (на сервере status=closed), список не открылся",
+   "ok": true
+  },
+  {
+   "name": "1280 P2-1 drag&drop обратно (с заголовка плитки) «Закрыта» → «Открыта» работает",
+   "ok": true
+  },
+  {
+   "name": "1280 P2-2 «Неделя»: 4 узкие плитки (≥3 дорожек), у каждой nowrap + overflow:hidden + text-overflow:ellipsis, перенос по буквам отсутствует, в высоту одна строка текста",
+   "ok": true
+  },
+  {
+   "name": "1280 P2-2 полная тема в title узкой плитки; у обычных плиток (1–2 дорожки, не «короткие») стиль прежний (перенос разрешён, без ellipsis)",
+   "ok": true
+  },
+  {
+   "name": "1280 P2-2 «День» не затронут: нет tk-ev-n, white-space не nowrap у плиток из нескольких строк",
+   "ok": true
+  },
+  {
+   "name": "375 P2-1 в плитке Доски ФИО — кнопка filterEmp (цвет ссылки, указатель, пунктир)",
+   "ok": true
+  },
+  {
+   "name": "375 P2-1 клик по ФИО в плитке → «Список», ровно один фильтр (emp=emp_101), карточка не открыта",
+   "ok": true
+  },
+  {
+   "name": "375 P2-1 клик по плитке (не по ФИО) по-прежнему открывает карточку",
+   "ok": true
+  },
+  {
+   "name": "375 P2-1 drag&drop: перетаскивание, начатое С ФИО, переносит плитку «Открыта» → «Закрыта» (на сервере status=closed), список не открылся",
+   "ok": true
+  },
+  {
+   "name": "375 P2-1 drag&drop обратно (с заголовка плитки) «Закрыта» → «Открыта» работает",
+   "ok": true
+  },
+  {
+   "name": "375 P2-2 «Неделя»: 4 узкие плитки (≥3 дорожек), у каждой nowrap + overflow:hidden + text-overflow:ellipsis, перенос по буквам отсутствует, в высоту одна строка текста",
+   "ok": true
+  },
+  {
+   "name": "375 P2-2 полная тема в title узкой плитки; у обычных плиток (1–2 дорожки, не «короткие») стиль прежний (перенос разрешён, без ellipsis)",
+   "ok": true
+  },
+  {
+   "name": "375 P2-2 «День» не затронут: нет tk-ev-n, white-space не nowrap у плиток из нескольких строк",
+   "ok": true
+  },
+  {
+   "name": "в консоли страницы нет исключений",
+   "ok": true
+  }
+ ],
+ "browser": "HeadlessChrome/145.0.7632.6",
+ "nameTile_1280": {
+  "text": "Директор Тестов Павел Игоревич",
+  "tag": "SPAN",
+  "role": "button",
+  "emp": "emp_101",
+  "color": "rgb(0, 136, 204)",
+  "cursor": "pointer",
+  "bb": "dotted"
+ },
+ "weekTiles_1280": {
+  "tiles": [
+   {
+    "text": "Планёрка отдела",
+    "title": "Планёрка отдела",
+    "cls": "tk-ev tk-ev-t tk-ev-n",
+    "w": 19.3,
+    "h": 72,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   },
+   {
+    "text": "Согласование договора",
+    "title": "Согласование договора",
+    "cls": "tk-ev tk-ev-t tk-ev-n",
+    "w": 19.3,
+    "h": 72,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   },
+   {
+    "text": "Совещание у директора",
+    "title": "Совещание у директора",
+    "cls": "tk-ev tk-ev-t tk-ev-n",
+    "w": 19.3,
+    "h": 48,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   },
+   {
+    "text": "Звонок клиенту",
+    "title": "Звонок клиенту",
+    "cls": "tk-ev tk-ev-t tk-ev-s tk-ev-n",
+    "w": 19.3,
+    "h": 36,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   }
+  ],
+  "normal": [
+   {
+    "text": "10:00–11:00 Закрытая задача",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "14:00–15:00 Приём у директора",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "12:00–13:00 Обед с партнёрами",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "15:00 Только время начала",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "11:00–12:00 Задача осиротеет0",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "14:00–15:00 Тема <b>x</b> & \"к",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "10:00–11:00 Задача на больничн",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "10:00–11:00 Планирование без о",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   }
+  ]
+ },
+ "nameTile_375": {
+  "text": "Директор Тестов Павел Игоревич",
+  "tag": "SPAN",
+  "role": "button",
+  "emp": "emp_101",
+  "color": "rgb(0, 136, 204)",
+  "cursor": "pointer",
+  "bb": "dotted"
+ },
+ "weekTiles_375": {
+  "tiles": [
+   {
+    "text": "Планёрка отдела",
+    "title": "Планёрка отдела",
+    "cls": "tk-ev tk-ev-t tk-ev-n",
+    "w": 17.8,
+    "h": 72,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   },
+   {
+    "text": "Согласование договора",
+    "title": "Согласование договора",
+    "cls": "tk-ev tk-ev-t tk-ev-n",
+    "w": 17.8,
+    "h": 72,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   },
+   {
+    "text": "Совещание у директора",
+    "title": "Совещание у директора",
+    "cls": "tk-ev tk-ev-t tk-ev-n",
+    "w": 17.8,
+    "h": 48,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   },
+   {
+    "text": "Звонок клиенту",
+    "title": "Звонок клиенту",
+    "cls": "tk-ev tk-ev-t tk-ev-s tk-ev-n",
+    "w": 17.8,
+    "h": 36,
+    "ws": "nowrap",
+    "ov": "hidden",
+    "to": "ellipsis",
+    "wb": "normal",
+    "lines": 1,
+    "clipped": false
+   }
+  ],
+  "normal": [
+   {
+    "text": "10:00–11:00 Закрытая задача",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "14:00–15:00 Приём у директора",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "12:00–13:00 Обед с партнёрами",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "15:00 Только время начала",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "11:00–12:00 Задача осиротеет0",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "14:00–15:00 Тема <b>x</b> & \"к",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "10:00–11:00 Задача на больничн",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   },
+   {
+    "text": "10:00–11:00 Планирование без о",
+    "ws": "normal",
+    "wb": "normal",
+    "to": "clip"
+   }
+  ]
+ },
+ "passed": 17,
+ "failed": 0
+}

@@ -358,11 +358,14 @@
     if (t.status === 'closed') h += '<span class="tk-tag tk-closed">закрыта</span>';
     return h;
   }
-  // подстрока карточки Доски: имена без ссылок; удалённый исполнитель открытой задачи зачёркнут (как в Списке/карточке)
+  // подстрока карточки Доски: ФИО — ссылка «Список по сотруднику» (V6-5, P2-1; span[role=button], не <a>: <a> внутри draggable-карточки
+  // перехватывает перетаскивание, как и <button>, см. tagBtn); удалённый исполнитель открытой задачи зачёркнут (как в Списке/карточке)
   function nameStrike(t) {
     var open = t.status === 'open' && !t.archived;
     return assigneesOf(t).map(function (p) {
-      return (p.removed && open) ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
+      if (p.removed) return open ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
+      return '<span role="button" tabindex="0" class="tk-name tk-namebtn" data-tk-act="filterEmp" data-emp="' + esc(p.employee_id) + '"' +
+        ' title="Показать в Списке все задачи сотрудника">' + esc(personName(p)) + '</span>';
     }).join(', ');
   }
   // V6-1 (R-8): «!» у исполнителя, который в дни задачи в отпуске/отгуле (notes[]) или на больничном/в командировке (conflict_days[])
@@ -1238,7 +1241,7 @@
   function onKeyTag(ev) {
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
     var t = ev.target;
-    var el = t && t.closest ? t.closest('.tk-tagbtn[data-tk-act]') : null;
+    var el = t && t.closest ? t.closest('.tk-tagbtn[data-tk-act], .tk-namebtn[data-tk-act]') : null;
     if (!el) return;
     if (ev.preventDefault) ev.preventDefault();
     onClick({ target: el, preventDefault: function () {} });
@@ -1690,7 +1693,7 @@
       '.tk-table th,.tk-table td{border-bottom:1px solid var(--divider);padding:6px 8px;text-align:left;vertical-align:top}' +
       '.tk-row{cursor:pointer}.tk-row:hover{background:rgba(0,136,204,.06)}' +
       '.tk-nowrap{white-space:nowrap}' +
-      '.tk-name{color:var(--rt-blue);text-decoration:none;border-bottom:1px dotted var(--rt-blue)}' +
+      '.tk-name{color:var(--rt-blue);text-decoration:none;border-bottom:1px dotted var(--rt-blue)}.tk-namebtn{cursor:pointer}' +
       '.tk-hi{color:var(--rt-orange);font-weight:600}' +
       '.tk-dim{opacity:.6}' +
       '.tk-tag{display:inline-block;font-size:11px;border:1px solid var(--divider);border-radius:10px;padding:0 7px;margin:2px 4px 0 0;background:#fff}' +
@@ -1749,7 +1752,7 @@
       '.tk-ev{background:rgba(0,136,204,.14);border-left:3px solid var(--rt-blue);border-radius:4px;padding:3px 5px;margin-bottom:4px;font-size:11px;cursor:pointer;overflow:hidden}' +
       '.tk-ev.tk-ev-t{position:absolute;z-index:2;margin:0 0 0 1px;padding:1px 4px;line-height:14px;background:#d9edf7;box-shadow:0 0 0 1px #fff}' +
       '.tk-ev.tk-ev-s{white-space:nowrap;text-overflow:ellipsis}' +
-      '.tk-ev.tk-ev-n{padding:1px 2px;word-break:break-word}.tk-ev.tk-ev-n .tk-ev-when{display:none}' +
+      '.tk-ev.tk-ev-n{padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tk-ev.tk-ev-n .tk-ev-when{display:none}' +
       '.tk-ev.tk-ev-ad{margin-bottom:2px;padding:1px 4px;line-height:15px;white-space:nowrap;text-overflow:ellipsis}' +
       '.tk-ev.tk-conf{border-left-color:var(--sick-red);background:rgba(244,67,54,.1)}' +
       '.tk-ev.tk-ev-t.tk-conf{background:#fde3e0}' +

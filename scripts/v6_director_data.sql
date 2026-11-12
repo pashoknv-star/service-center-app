@@ -86,6 +86,7 @@ SELECT 'task_assignees closed/archived' AS what, COUNT(*) AS n
 -- @@APPLY  (всё ниже, до конца файла, DRY-RUN-вариант отрезает командой sed)
 -- ==== APPLY ===============================================================
 -- ---------------------------------------------------------------------------
+.timeout 5000
 .bail on
 PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;

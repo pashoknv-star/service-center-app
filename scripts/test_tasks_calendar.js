@@ -417,6 +417,12 @@ async function main() {
     (() => { const a = [q1, q2, q3].sort((x1, x2) => x1.left - x2.left); return a[0].left + a[0].w <= a[1].left + 0.0001 && a[1].left + a[1].w <= a[2].left + 0.0001; })());
   check('R11-5 узкие плитки недели (3+ дорожек) помечены tk-ev-n (скрыто время, остаётся тема; время — в подсказке); широкие и режим «День» — нет',
     [q1, q2, q3].every((q) => /tk-ev-n/.test(q.cls)) && !/tk-ev-n/.test(tile(wed, 'n1').cls) && /09:00–10:00/.test(q1.title));
+  const nCss = (/\.tk-ev\.tk-ev-n\{([^}]*)\}/.exec(SRC) || [])[1] || '';
+  check('R11-7 V6-5 (P2-2) узкая плитка недели: тема в одну строку с «…» (white-space:nowrap; overflow:hidden; text-overflow:ellipsis), без переноса по буквам (нет word-break); полная тема — в title',
+    /white-space:nowrap/.test(nCss) && /overflow:hidden/.test(nCss) && /text-overflow:ellipsis/.test(nCss) && !/word-break|overflow-wrap/.test(nCss) &&
+    [[q1, 'Один'], [q2, 'Два'], [q3, 'Три']].every((p) => p[0].title.split('\n')[0] === p[1]), nCss);
+  check('R11-8 V6-5: правило нарезки действует только на .tk-ev-n — обычная плитка (.tk-ev-t) и «День» не получают nowrap/ellipsis; word-break:break-word в плитках нет',
+    !/\.tk-ev\.tk-ev-t\{[^}]*(nowrap|ellipsis)/.test(SRC) && !/\.tk-ev[^{]*\{[^}]*word-break/.test(SRC) && !/tk-ev-n/.test(tile(wed, 'n1').cls));
   P.S.cal.mode = 'day'; P.U.render();
   check('R11-6 режим «День»: те же 3 дорожки, но время на плитках не скрывается (нет tk-ev-n)',
     (() => { const b = bodyTilesByDay(P)[wed]; return b.filter((q) => q.cols === 3).length === 3 && b.every((q) => !/tk-ev-n/.test(q.cls)); })());

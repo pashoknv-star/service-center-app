@@ -46,8 +46,10 @@ sqlite3 $WWW/data/app.db "SELECT value FROM meta WHERE key='schema_version'; SEL
 
 ### 3. Фото — на сервер (до APPLY: путь в БД не должен указывать в пустоту)
 ```bash
-# с рабочей машины, из корня репозитория (пароль вводит владелец/сессия, не в команде):
-scp reports/V6/assets/director_avatar.jpg <SSH_USER>@<HOST>:$WWW/images/photo_1794600000_d1ec7040.jpg
+# с рабочей машины, из корня репозитория. Порт SSH 1024 и пути — из DEPLOY_HOSTLAND.md; все значения подставлены, переменных нет.
+# Пароль SSH вводит владелец в сессии, в команде его нет:
+scp -P 1024 reports/V6/assets/director_avatar.jpg host1882970@serv18.hostland.ru:/home/host1882970/host1882970.hostland.pro/htdocs/www/images/photo_1794600000_d1ec7040.jpg
+# дальше — в SSH-сессии на сервере (там $WWW задана, см. шаг 1)
 # на сервере: права как у загрузок (api/upload.php делает chmod 0644) — ТОЛЬКО этот файл; каталог images/ и ACL не трогать
 chmod 644 $WWW/images/photo_1794600000_d1ec7040.jpg
 curl -sI <BASE>/images/photo_1794600000_d1ec7040.jpg | head -3        # 200, Content-Type: image/jpeg
@@ -69,7 +71,9 @@ sed '/^-- @@APPLY/,$d' v6_director_data.sql | sqlite3 -readonly $WWW/data/app.db
 sqlite3 $WWW/data/app.db < ~/v6-3/v6_director_data.sql
 # в конце вывода: «APPLIED: 1 сотрудник обновлён»; «остаток Костецкий… = 0»; foreign_key_check пуст; integrity_check = ok
 ```
-Один запуск = одна транзакция (`BEGIN IMMEDIATE … COMMIT`, `.bail on`: при любой ошибке транзакция откатывается, БД не меняется).
+Один запуск = одна транзакция (`BEGIN IMMEDIATE … COMMIT`, `.timeout 5000` — ждёт блокировку до 5 с при параллельной записи PHP, `.bail on`: при любой ошибке транзакция откатывается, БД не меняется).
+
+**После APPLY: Ctrl+F5 во всех открытых окнах** (матрица в уже открытых окнах не перерисовывается сама — до смены года показывала бы старое ФИО; плитка зоны и Доска обновляются сами).
 
 ### 6. Проверки после
 ```bash

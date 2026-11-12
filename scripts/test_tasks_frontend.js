@@ -725,7 +725,7 @@ async function main() {
       secHtml.indexOf('Исполнитель удалён (Удалённый Первый)') >= 0 && openColHtml.indexOf('data-id="' + tM.id + '"') >= 0 && openColHtml.indexOf('data-id="' + tA.id + '"') < 0);
     const cardOf = (html, id) => (html.split('<div class="tk-card').filter((r) => r.indexOf('data-id="' + id + '"') >= 0)[0] || '');
     check('P3-3 Доска: в мини-карточке смешанной задачи удалённый исполнитель зачёркнут (<s class="tk-gone">Удалённый Первый</s>), действующий — обычным текстом; у задач без исполнителя — плашка, без зачёркивания',
-      /Принимающий Тестович, <s class="tk-gone"[^>]*>Удалённый Первый<\/s>/.test(cardOf(openColHtml, tM.id)) &&
+      />Принимающий Тестович<\/span>, <s class="tk-gone"[^>]*>Удалённый Первый<\/s>/.test(cardOf(openColHtml, tM.id)) &&
       cardOf(secHtml, tA.id).indexOf('tk-plate') >= 0 && cardOf(secHtml, tA.id).indexOf('<s class="tk-gone"') < 0, cardOf(openColHtml, tM.id).slice(0, 300));
 
     // Календарь
@@ -1182,6 +1182,28 @@ async function main() {
     await A.click('filterEmp', (d) => d.emp === 'v61_a');
     check('V6-1 R-14 клик по ФИО в самом Списке: остаётся «Список», лишние фильтры сброшены', A.S.view === 'list' && A.S.filters.status === '' && A.S.filters.emp === 'v61_a');
 
+    // V6-5 (P2-1): ФИО в плитке Доски — ссылка «Список по сотруднику» (span[role=button], внутри draggable-карточки)
+    await A.click('resetFilters');
+    await A.T.open({ view: 'board' });
+    await A.settle();
+    const v65TileOf = (id) => (A.root.innerHTML.split('<div class="tk-card').filter((r) => r.indexOf('data-id="' + id + '"') >= 0)[0] || '');
+    const tileX = v65TileOf(vX.id);
+    check('V6-5 P2-1 плитка Доски: ФИО — span[role=button].tk-name[data-tk-act=filterEmp][data-emp] (не <a>, не ломает draggable), есть title',
+      /<div class="tk-sub"><span role="button" tabindex="0" class="tk-name tk-namebtn" data-tk-act="filterEmp" data-emp="v61_a" title="[^"]+">/.test(tileX) && tileX.indexOf('draggable="true"') >= 0 && tileX.indexOf('<a ') < 0, tileX.slice(0, 400));
+    check('V6-5 P2-1 CSS: у .tk-namebtn курсор-указатель', /\.tk-namebtn\{cursor:pointer\}/.test(SRC));
+    check('V6-5 P2-1 drag&drop плитки не затронут: draggable/data-tk-drag — на корне карточки, а не на ФИО',
+      /draggable="true" data-tk-drag="/.test(tileX.split('<b>')[0]) && !/data-tk-drag/.test(tileX.split('<b>')[1]));
+    await A.click('filterEmp', (d) => d.emp === 'v61_a');
+    check('V6-5 P2-1 клик по ФИО в плитке Доски → «Список», ровно один фильтр (emp), карточка не открыта (selectedId пуст)',
+      A.S.view === 'list' && A.S.filters.emp === 'v61_a' && !A.S.filters.status && !A.S.filters.priority && !A.S.filters.label && !A.S.filters.due && A.S.selectedId === null, JSON.stringify(A.S.filters));
+    // клавиатура: Enter на ФИО-кнопке = клик
+    await A.T.open({ view: 'board' });
+    await A.settle();
+    const nmEl = { dataset: { tkAct: 'filterEmp', emp: 'v61_b' } }; nmEl.closest = () => nmEl;
+    A.root.fire('keydown', { key: 'Enter', target: { closest: (sel) => (/tk-namebtn/.test(sel) ? nmEl : null) }, preventDefault() {} });
+    await A.settle();
+    check('V6-5 P2-1 ФИО-кнопка доступна с клавиатуры (Enter) — то же действие', A.S.view === 'list' && A.S.filters.emp === 'v61_b', JSON.stringify(A.S.filters));
+
     // R-7 + R-15: карточка с отпуском
     await A.click('resetFilters');
     await A.T.open({ view: 'board', taskId: vX.id });
@@ -1263,6 +1285,10 @@ async function main() {
       await R.click('sortBy', (d) => d.key === 'priority'); await R.click('sortBy', (d) => d.key === 'priority'); flow.push(R.S.sort.key === '');
       check('R-' + label + '-6 V6-1: клики по метке/приоритету/статусу/ФИО ведут в «Список» с фильтром, сортировка работает; кнопок правки и «Переназначить» нет',
         flow.every(Boolean) && seen.length === 0, flow.join(',') + ' ' + seen.join(',') + ' ' + JSON.stringify(R.S.filters) + R.S.view);
+      // V6-5 (P2-1): ФИО в плитке Доски кликабельно и без прав записи (плитка не draggable)
+      await R.T.open({ view: 'board' }); await R.settle();
+      check('R-' + label + '-7 V6-5: в плитке Доски ФИО — кнопка filterEmp, клик → «Список» по сотруднику; плитка без draggable',
+        R.has('class="tk-name tk-namebtn" data-tk-act="filterEmp"') && !R.has('draggable') && (await R.click('filterEmp', (d) => d.emp === e1), R.S.view === 'list' && R.S.filters.emp === e1), JSON.stringify(R.S.filters) + R.S.view);
       // принудительные вызовы обработчиков записи — защита в самом модуле
       const postsBefore = R.calls.filter((c) => c.method !== 'GET').length;
       R.T.__t.ACTIONS.newTask({ dataset: {} });
