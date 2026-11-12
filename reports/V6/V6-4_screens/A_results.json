@@ -1,0 +1,226 @@
+{
+ "checks": [
+  {
+   "name": "1280 плитка называется «Директор СЦ» (в DOM, а не «В2С»)",
+   "ok": true
+  },
+  {
+   "name": "1280 на боковой плашке бриллианты: 5–9 слоёв (inline-SVG), без анимации, pointer-events:none",
+   "ok": true
+  },
+  {
+   "name": "1280 в зоне 3 один сотрудник с фото (img)",
+   "ok": true
+  },
+  {
+   "name": "1280 остальные зоны не золотые (у соседней зоны нет золотого градиента)",
+   "ok": true
+  },
+  {
+   "name": "1280 матрица: группа «Директор СЦ» — первая, строка директора — первая",
+   "ok": true
+  },
+  {
+   "name": "1280 openMatrixAt(директор): строка подсвечена (mx-flash) и это строка директора",
+   "ok": true
+  },
+  {
+   "name": "1280 подсветка снимается через ~2 с, золотая строка остаётся",
+   "ok": true
+  },
+  {
+   "name": "1280 openMatrixAt(обычный сотрудник Ivanov): подсвечена его строка, без золотого класса",
+   "ok": true
+  },
+  {
+   "name": "1280 ячейка отпуска директора того же цвета, что у обычного сотрудника",
+   "ok": true
+  },
+  {
+   "name": "1280 обычная ячейка директора слегка золотая (фон-градиент), обычного — без",
+   "ok": true
+  },
+  {
+   "name": "1280 иконки задач (tasks_matrix) на строке директора есть, рамки срока есть",
+   "ok": true
+  },
+  {
+   "name": "1280 клик по иконке задачи на золотой строке → «Задачи» (календарь) на сотрудника-директора",
+   "ok": true
+  },
+  {
+   "name": "375 плитка называется «Директор СЦ» (в DOM, а не «В2С»)",
+   "ok": true
+  },
+  {
+   "name": "375 на боковой плашке бриллианты: 5–9 слоёв (inline-SVG), без анимации, pointer-events:none",
+   "ok": true
+  },
+  {
+   "name": "375 в зоне 3 один сотрудник с фото (img)",
+   "ok": true
+  },
+  {
+   "name": "375 остальные зоны не золотые (у соседней зоны нет золотого градиента)",
+   "ok": true
+  },
+  {
+   "name": "375 матрица: группа «Директор СЦ» — первая, строка директора — первая",
+   "ok": true
+  },
+  {
+   "name": "375 openMatrixAt(директор): строка подсвечена (mx-flash) и это строка директора",
+   "ok": true
+  },
+  {
+   "name": "375 подсветка снимается через ~2 с, золотая строка остаётся",
+   "ok": true
+  },
+  {
+   "name": "375 openMatrixAt(обычный сотрудник Ivanov): подсвечена его строка, без золотого класса",
+   "ok": true
+  },
+  {
+   "name": "375 ячейка отпуска директора того же цвета, что у обычного сотрудника",
+   "ok": true
+  },
+  {
+   "name": "375 обычная ячейка директора слегка золотая (фон-градиент), обычного — без",
+   "ok": true
+  },
+  {
+   "name": "375 иконки задач (tasks_matrix) на строке директора есть, рамки срока есть",
+   "ok": true
+  },
+  {
+   "name": "нет необработанных исключений на странице",
+   "ok": true
+  }
+ ],
+ "browser": "HeadlessChrome/145.0.7632.6",
+ "zone3_1280": {
+  "title": "Директор СЦ",
+  "titleColor": "rgb(58, 42, 6)",
+  "countColor": "rgb(74, 54, 10)",
+  "ztBg": "linear-gradient(rgb(226, 198, 119) 0%, rgb(211, 179, 99) 45%, rgb(193, 159, 77) 100%)",
+  "ztW": 54,
+  "zBg": "linear-gradient(135deg, rgb(253, 249, 238) 0%, rgb(246, 236, 208) 55%, rgb(239, 224, 180) 100%)",
+  "zBorder": "rgb(196, 160, 80)",
+  "gemLayers": 7,
+  "gemSizes": "7px 7px, 5px 5px, 6px 6px, 5px 5px, 8px 8px, 6px 6px, 5px 5px",
+  "beforeAnim": "none",
+  "beforePE": "none",
+  "beforeW": "53px",
+  "otherBg": "none",
+  "otherTitle": "rgb(119, 0, 255)",
+  "emp": 1,
+  "empName": "Директор Тестов Павел Игоревич",
+  "imgSrcPrefix": "data:image/jpeg;base64,/9j//gA"
+ },
+ "matrix_1280": {
+  "groups": [
+   "Директор СЦ",
+   "Группа клиентского сервиса",
+   "Группа эксплуатации",
+   "Группа сопровождения"
+  ],
+  "firstEmp": "Директор Тестов Павел Игоревич",
+  "firstEmpId": "101",
+  "dirRows": [
+   "Директор Тестов Павел Игоревич"
+  ],
+  "dirGroupRows": 1,
+  "totalEmpRows": 8
+ },
+ "cells_1280": {
+  "dirVac": {
+   "bg": "rgb(76, 175, 80)",
+   "bgi": "none",
+   "cls": "day-cell-data type-vacation approved range-start tk-fr tk-fr-l tk-fr-r"
+  },
+  "ivVac": {
+   "bg": "rgb(76, 175, 80)",
+   "bgi": "none",
+   "cls": "day-cell-data type-vacation approved range-start tk-fr tk-fr-l tk-fr-r"
+  },
+  "dirNorm": {
+   "bg": "rgba(0, 0, 0, 0)",
+   "bgi": "linear-gradient(rgba(184, 146, 58, 0.08), rgba(184, 146, 58, 0.08))",
+   "cls": "day-cell-data"
+  },
+  "ivNorm": {
+   "bg": "rgba(0, 0, 0, 0)",
+   "bgi": "none",
+   "cls": "day-cell-data"
+  },
+  "dirName": "rgb(248, 241, 223)",
+  "ivName": "rgb(250, 247, 255)",
+  "dirIcon": true,
+  "dirFrames": 3,
+  "dirIcons": 3
+ },
+ "zone3_375": {
+  "title": "Директор СЦ",
+  "titleColor": "rgb(58, 42, 6)",
+  "countColor": "rgb(74, 54, 10)",
+  "ztBg": "linear-gradient(rgb(226, 198, 119) 0%, rgb(211, 179, 99) 45%, rgb(193, 159, 77) 100%)",
+  "ztW": 36,
+  "zBg": "linear-gradient(135deg, rgb(253, 249, 238) 0%, rgb(246, 236, 208) 55%, rgb(239, 224, 180) 100%)",
+  "zBorder": "rgb(196, 160, 80)",
+  "gemLayers": 7,
+  "gemSizes": "5px 5px, 4px 4px, 5px 5px, 4px 4px, 6px 6px, 5px 5px, 4px 4px",
+  "beforeAnim": "none",
+  "beforePE": "none",
+  "beforeW": "35px",
+  "otherBg": "none",
+  "otherTitle": "rgb(119, 0, 255)",
+  "emp": 1,
+  "empName": "Директор Тестов Павел Игоревич",
+  "imgSrcPrefix": "data:image/jpeg;base64,/9j//gA"
+ },
+ "matrix_375": {
+  "groups": [
+   "Директор СЦ",
+   "Группа клиентского сервиса",
+   "Группа эксплуатации",
+   "Группа сопровождения"
+  ],
+  "firstEmp": "Директор Тестов Павел Игоревич",
+  "firstEmpId": "101",
+  "dirRows": [
+   "Директор Тестов Павел Игоревич"
+  ],
+  "dirGroupRows": 1,
+  "totalEmpRows": 8
+ },
+ "cells_375": {
+  "dirVac": {
+   "bg": "rgb(76, 175, 80)",
+   "bgi": "none",
+   "cls": "day-cell-data type-vacation approved range-start tk-fr tk-fr-l tk-fr-r"
+  },
+  "ivVac": {
+   "bg": "rgb(76, 175, 80)",
+   "bgi": "none",
+   "cls": "day-cell-data type-vacation approved range-start tk-fr tk-fr-l tk-fr-r"
+  },
+  "dirNorm": {
+   "bg": "rgba(0, 0, 0, 0)",
+   "bgi": "linear-gradient(rgba(184, 146, 58, 0.08), rgba(184, 146, 58, 0.08))",
+   "cls": "day-cell-data"
+  },
+  "ivNorm": {
+   "bg": "rgba(0, 0, 0, 0)",
+   "bgi": "none",
+   "cls": "day-cell-data"
+  },
+  "dirName": "rgb(248, 241, 223)",
+  "ivName": "rgb(250, 247, 255)",
+  "dirIcon": true,
+  "dirFrames": 3,
+  "dirIcons": 3
+ },
+ "exceptions": [],
+ "passed": 24,
+ "failed": 0
+}
