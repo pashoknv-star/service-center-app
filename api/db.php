@@ -32,7 +32,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 10;
+    private const SCHEMA_VERSION = 11;
 
     private static ?Database $instance = null;
 
@@ -322,6 +322,15 @@ final class Database
         // + full_name_snapshot (ФИО на момент назначения/переименования).
         if ($current < 10) {
             $this->rebuildTaskAssigneesV10();
+        }
+
+        // --- v10 → v11 (V6-3, R-2): зона 3 переименована «В2С» → «Директор СЦ» ---
+        // Только группа g3 и только пока у неё старое имя: любое другое имя (в т.ч. уже
+        // новое или правка владельца) не трогается; остальные группы не затрагиваются; повтор — no-op.
+        if ($current < 11) {
+            $this->pdo->exec(
+                "UPDATE groups SET name = 'Директор СЦ' WHERE id = 'g3' AND name = 'В2С'"
+            );
         }
 
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---

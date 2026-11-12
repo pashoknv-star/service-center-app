@@ -98,21 +98,22 @@ $pdo = $db->getPDO();
 $pdo->exec('PRAGMA busy_timeout = 5000');
 $verBefore = $db->getSchemaVersion();
 $snapBefore = snapshotTables($pdo, ['audit_log', 'meta']);
+$groupsBefore = $pdo->query('SELECT id, name, sort_order FROM groups ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
 $metaBefore = $pdo->query("SELECT key, value FROM meta WHERE key != 'schema_version' ORDER BY key")->fetchAll(PDO::FETCH_ASSOC);
 
 out('=== TASKS TEST START ===');
 
-$run('M1 миграция: схема < 9 → 10 (v10, T1-7), три таблицы созданы', function () use ($db, $pdo, $verBefore) {
+$run('M1 миграция: схема < 9 → 11 (v10 T1-7, v11 V6-3), три таблицы созданы', function () use ($db, $pdo, $verBefore) {
     ok($verBefore < 9, 'ожидалась исходная схема < 9, а не ' . $verBefore);
     $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('tasks','task_assignees','task_checklist')")
         ->fetchAll(PDO::FETCH_COLUMN);
     ok(count($has) === 0, 'таблицы задач уже есть до миграции');
     $db->migrate();
-    eq($db->getSchemaVersion(), 10, 'schema_version');
+    eq($db->getSchemaVersion(), 11, 'schema_version');
     $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('tasks','task_assignees','task_checklist') ORDER BY name")
         ->fetchAll(PDO::FETCH_COLUMN);
     eq($has, ['task_assignees', 'task_checklist', 'tasks'], 'tables');
-    return 'v' . $verBefore . '→v10';
+    return 'v' . $verBefore . '→v11';
 });
 
 $run('M2 миграция: колонки и индексы по TZ §1', function () use ($pdo) {
@@ -150,12 +151,24 @@ $run('M2 миграция: колонки и индексы по TZ §1', functi
     return 'cols+indexes+CHECK+без FK на employees';
 });
 
-$run('M3 миграция: существующие данные не тронуты', function () use ($pdo, $snapBefore, $metaBefore) {
+$run('M3 миграция: существующие данные не тронуты', function () use ($pdo, $snapBefore, $metaBefore, $groupsBefore) {
     $snapAfter = snapshotTables($pdo, ['audit_log', 'meta', 'tasks', 'task_assignees', 'task_checklist']);
     foreach ($snapBefore as $t => $s) {
         ok(isset($snapAfter[$t]), 'таблица пропала: ' . $t);
+        if ($t === 'groups') {
+            continue; // v11 (V6-3) переименовывает g3 — проверяется ниже и в M6
+        }
         eq($snapAfter[$t], $s, 'таблица ' . $t);
     }
+    // groups: изменилась ТОЛЬКО g3 «В2С» → «Директор СЦ» (v11), остальные группы побайтово те же.
+    $groupsAfter = $pdo->query('SELECT id, name, sort_order FROM groups ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+    $expectGroups = array_map(function ($g) {
+        if ($g['id'] === 'g3' && $g['name'] === 'В2С') {
+            $g['name'] = 'Директор СЦ';
+        }
+        return $g;
+    }, $groupsBefore);
+    eq($groupsAfter, $expectGroups, 'groups: только g3 переименована');
     $metaAfter = $pdo->query("SELECT key, value FROM meta WHERE key != 'schema_version' ORDER BY key")->fetchAll(PDO::FETCH_ASSOC);
     eq($metaAfter, $metaBefore, 'meta');
     return count($snapBefore) . ' таблиц побайтово равны';
@@ -163,14 +176,14 @@ $run('M3 миграция: существующие данные не трону
 
 $run('M4 миграция идемпотентна (повтор + откат версии на 8 с данными задач)', function () use ($db, $pdo) {
     $db->migrate();
-    eq($db->getSchemaVersion(), 10, 'повторная миграция');
+    eq($db->getSchemaVersion(), 11, 'повторная миграция');
     $pdo->exec("INSERT INTO tasks (id, title, start_at) VALUES ('tt_keep', 'keep', '2030-01-02')");
     $pdo->exec("UPDATE meta SET value = '8' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 10, 'миграция с v8');
+    eq($db->getSchemaVersion(), 11, 'миграция с v8');
     eq((int) $pdo->query("SELECT COUNT(*) FROM tasks WHERE id = 'tt_keep'")->fetchColumn(), 1, 'строка задачи сохранена');
     $pdo->exec("DELETE FROM tasks WHERE id = 'tt_keep'");
-    return 'v10→v10, v8→v10';
+    return 'v11→v11, v8→v11';
 });
 
 // Фикстуры: сотрудники (с «секретными» phone/photo — проверка приватности ответов).
@@ -195,6 +208,39 @@ $addTrip = function (string $emp, string $from, string $to, string $status = 'co
     return $tid;
 };
 
+// --- Миграция v10 → v11 (V6-3, R-2): g3 «В2С» → «Директор СЦ» -------------------
+$run('M6 миграция v10→v11: g3 «В2С»→«Директор СЦ»; прочие группы и данные не тронуты; повтор и чужое имя — no-op', function () use ($db, $pdo) {
+    $snapNoGroups = snapshotTables($pdo, ['audit_log', 'meta', 'groups']);
+    $others = $pdo->query("SELECT id, name, sort_order FROM groups WHERE id != 'g3' ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    // состояние v10: у g3 старое имя
+    $pdo->exec("UPDATE groups SET name = 'В2С' WHERE id = 'g3'");
+    $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
+    $db->migrate();
+    eq($db->getSchemaVersion(), 11, 'schema_version');
+    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Директор СЦ', 'g3 переименована');
+    eq($pdo->query("SELECT COUNT(*) FROM groups WHERE name = 'В2С'")->fetchColumn() + 0, 0, 'старого имени не осталось');
+    eq($pdo->query("SELECT id, name, sort_order FROM groups WHERE id != 'g3' ORDER BY id")->fetchAll(PDO::FETCH_ASSOC), $others, 'прочие группы не тронуты');
+    eq(snapshotTables($pdo, ['audit_log', 'meta', 'groups']), $snapNoGroups, 'остальные таблицы побайтово равны');
+    // повтор (версия снова 10) — no-op
+    $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
+    $db->migrate();
+    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Директор СЦ', 'повтор: имя то же');
+    // чужое имя g3 (правка владельца) не перетирается, и «В2С» у другой группы — тоже
+    $pdo->exec("UPDATE groups SET name = 'Мой отдел' WHERE id = 'g3'");
+    $g4name = $pdo->query("SELECT name FROM groups WHERE id = 'g4'")->fetchColumn();
+    $pdo->exec("UPDATE groups SET name = 'В2С' WHERE id = 'g4'");
+    $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
+    $db->migrate();
+    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Мой отдел', 'иное имя g3 не тронуто');
+    eq($pdo->query("SELECT name FROM groups WHERE id = 'g4'")->fetchColumn(), 'В2С', 'другая группа не тронута');
+    // вернуть как было
+    $pdo->exec("UPDATE groups SET name = 'Директор СЦ' WHERE id = 'g3'");
+    $pdo->prepare("UPDATE groups SET name = :n WHERE id = 'g4'")->execute([':n' => $g4name]);
+    eq($pdo->query('PRAGMA integrity_check')->fetchColumn(), 'ok', 'integrity_check');
+    eq($pdo->query('PRAGMA foreign_key_check')->fetchAll(), [], 'foreign_key_check пуст');
+    return 'g3 renamed, повтор/чужое имя — no-op';
+});
+
 // --- Миграция v9 → v10 (T1-7, D-1) -----------------------------------------
 $run('M5 миграция v9→v10: task_assignees без FK на employees + full_name_snapshot; данные на месте; повтор идемпотентен', function () use ($db, $pdo) {
     foreach ([['tt_m1', 'Миграц Первый'], ['tt_m2', 'Миграц Второй']] as [$i, $n]) {
@@ -217,7 +263,7 @@ $run('M5 миграция v9→v10: task_assignees без FK на employees + fu
     $fkBefore = (int) $pdo->query('PRAGMA foreign_keys')->fetchColumn();
     $pdo->exec("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 10, 'schema_version');
+    eq($db->getSchemaVersion(), 11, 'schema_version');
     eq(tcols($pdo, 'task_assignees'), ['task_id', 'employee_id', 'role', 'full_name_snapshot'], 'cols');
     $fks = $pdo->query('PRAGMA foreign_key_list(task_assignees)')->fetchAll(PDO::FETCH_ASSOC);
     eq(array_map(fn($f) => [$f['table'], $f['on_delete']], $fks), [['tasks', 'CASCADE']], 'FK только на tasks');
@@ -232,7 +278,7 @@ $run('M5 миграция v9→v10: task_assignees без FK на employees + fu
     // Повторный запуск (версия снова 9) — таблица уже v10, ничего не меняется.
     $pdo->exec("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 10, 'schema_version после повтора');
+    eq($db->getSchemaVersion(), 11, 'schema_version после повтора');
     $again = $pdo->query('SELECT task_id, employee_id, role, full_name_snapshot FROM task_assignees ORDER BY task_id, employee_id, role')->fetchAll(PDO::FETCH_ASSOC);
     eq(count($again), 3, 'число строк после повтора');
     eq($again[0]['full_name_snapshot'], 'Миграц Первый', 'snapshot после повтора');

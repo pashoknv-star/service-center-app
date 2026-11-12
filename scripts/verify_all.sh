@@ -15,8 +15,8 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=46 [tasksui]=135 [tasksmx]=71 [tasksn8n]=25 )
-ALL_SUITES=(smoke tasks tasksn8n tasksui tasksmx e51 e52 hygiene trips syntax phplint pii)
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=47 [tasksui]=135 [tasksmx]=71 [tasksn8n]=25 [director]=70 )
+ALL_SUITES=(smoke tasks tasksn8n tasksui tasksmx director e51 e52 hygiene trips syntax phplint pii)
 SUITE_TIMEOUT=600
 
 if [ $# -gt 0 ]; then SUITES=("$@"); else SUITES=("${ALL_SUITES[@]}"); fi
@@ -56,8 +56,8 @@ run_suite() {
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
              CNT=${p:-'-'}
              if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; fi ;;
-    e51|e52|hygiene|tasksui|tasksmx)
-             local js; case $s in e51) js=scripts/test_e51_pick_geometry.js;; e52) js=scripts/test_e52_pick_semantics.js;; hygiene) js=scripts/test_r4_hygiene.js;; tasksui) js=scripts/test_tasks_frontend.js;; tasksmx) js=scripts/test_tasks_matrix.js;; esac
+    e51|e52|hygiene|tasksui|tasksmx|director)
+             local js; case $s in e51) js=scripts/test_e51_pick_geometry.js;; e52) js=scripts/test_e52_pick_semantics.js;; hygiene) js=scripts/test_r4_hygiene.js;; tasksui) js=scripts/test_tasks_frontend.js;; tasksmx) js=scripts/test_tasks_matrix.js;; director) js=scripts/test_v6_director.js;; esac
              timeout $SUITE_TIMEOUT node "$js" >"$log" 2>&1; rc=$?
              out=$(grep -Eo 'RESULT: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
