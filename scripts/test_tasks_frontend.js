@@ -463,10 +463,12 @@ async function main() {
     const tiles = A.count('class="tk-ev');
     check('E19 openTasksPanel({employeeId, date, view:"calendar"}): неделя с этим днём, плитки сотрудника подсвечены',
       A.S.view === 'calendar' && A.S.cal.anchor === sat && A.S.cal.emp === e1 && tiles >= 3 && A.has('tk-hl') && A.els.vacationPanel._cls.has('open'), 'tiles=' + tiles);
-    const tileHtml = (/<div class="tk-ev[^"]*"[\s\S]*?<div class="tk-ev-desc">[^<]*<\/div>/.exec(A.root.innerHTML) || [''])[0];
-    const descM = /<div class="tk-ev-desc">([^<]*)<\/div>/.exec(A.root.innerHTML);
-    check('E20 плитка = ФИО + описание, длинное описание обрезано с «…»',
-      tileHtml.indexOf(A.S.employees.find((e) => e.id === e1).name) >= 0 && descM && descM[1].slice(-1) === '…' && descM[1].length <= 48 && longDesc.indexOf(descM[1].slice(0, 20)) === 0, descM && descM[1]);
+    // V6-2 (R-6): плитка = время + тема; ФИО и описание из плитки убраны, исполнители — в подсказке (title)
+    const evTile = (A.root.innerHTML.split('<div class="tk-ev ').filter((r) => r.indexOf('data-id="' + tid + '"') >= 0)[0] || '');
+    const evVisible = evTile.slice(0, evTile.indexOf('</div>')).replace(/ title="[^"]*"/g, '');
+    check('E20 плитка = время + тема (жирно); ФИО и описание не показываются, исполнитель — в подсказке (title)',
+      evVisible.indexOf('<b class="tk-ev-title">E2E задача</b>') >= 0 && evVisible.indexOf(A.S.employees.find((e) => e.id === e1).name) < 0 &&
+      evVisible.indexOf('Подготовить') < 0 && evTile.indexOf('Исполнители: ' + A.S.employees.find((e) => e.id === e1).name) >= 0, evTile.slice(0, 300));
     await A.filter('calOnly', '', { checked: true });
     check('E21 «только выбранный» оставляет плитки сотрудника; снятие возвращает всех',
       A.S.cal.only === true && A.count('class="tk-ev') >= 1);
@@ -651,8 +653,8 @@ async function main() {
     await A.T.open({ employeeId: '', date: '2099-10-05', view: 'calendar' });
     await A.settle();
     const tileOf = (id) => (A.root.innerHTML.split('<div class="tk-ev').filter((r) => r.indexOf('data-id="' + id + '"') >= 0)[0] || '');
-    check('D1-12 Календарь: плитка без исполнителя — класс tk-orph (пунктирная оранжевая рамка) и подпись «без исполнителя»; ФИО не показывается',
-      tileOf(tA.id).indexOf('tk-orph') >= 0 && tileOf(tA.id).indexOf('без исполнителя</b>') >= 0 && tileOf(tA.id).indexOf('<b>Удалённый') < 0);
+    check('D1-12 Календарь: плитка без исполнителя — класс tk-orph (пунктирная оранжевая рамка) и значок «Без исполнителя» (V6-2 R-6: компактно, без текста на плитке); ФИО не показывается',
+      tileOf(tA.id).indexOf('tk-orph') >= 0 && tileOf(tA.id).indexOf('tk-ic-orph" title="Без исполнителя"') >= 0 && tileOf(tA.id).indexOf('<b>Удалённый') < 0);
     check('D1-13 Календарь: у смешанной и закрытой задач плитка без пометок «без исполнителя»',
       tileOf(tM.id) && tileOf(tM.id).indexOf('tk-orph') < 0 && tileOf(tM.id).indexOf('без исполнителя') < 0 &&
       tileOf(tC.id) && tileOf(tC.id).indexOf('tk-orph') < 0 && tileOf(tC.id).indexOf('Удалённый Первый') >= 0);
