@@ -19,9 +19,16 @@ cleanup() {
 # Set trap for cleanup
 trap cleanup EXIT
 
-# Start PHP server on port 8091
-echo "Starting PHP server on port 8091..."
-php -S 127.0.0.1:8091 router.php &
+# Start PHP server on a free port (V6: parallel worktrees must not collide on a fixed 8091)
+PORT="${TRIPS_TEST_PORT:-}"
+if [ -z "$PORT" ]; then
+    for p in $(seq 8091 8191); do
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then PORT=$p; break; fi
+    done
+fi
+[ -n "$PORT" ] || { echo "No free port in 8091-8191"; exit 1; }
+echo "Starting PHP server on port $PORT..."
+php -S 127.0.0.1:$PORT router.php &
 PHP_PID=$!
 echo "PHP server started with PID: $PHP_PID"
 
@@ -29,7 +36,7 @@ echo "PHP server started with PID: $PHP_PID"
 sleep 2
 
 # Test variables
-BASE_URL="http://127.0.0.1:8091"
+BASE_URL="http://127.0.0.1:$PORT"
 JAR_FILE="test_cookies.jar"
 SUMMARY=""
 
