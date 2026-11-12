@@ -3096,6 +3096,60 @@
       matrixWrapper.scrollTop = 0;
     }
 
+    // V6-1 (R-15): из карточки задачи — на вкладку «Матрица отпусков», показать год даты, прокрутить к дате,
+    // строку сотрудника — в видимую область и мягко подсветить ~2 с. Строка ищется по id сотрудника
+    // (td.name-col[data-emp-id]), не по индексу: порядок строк матрицы меняется (V6-3).
+    // opts: { employeeId: 'emp_5' | 5, date: 'YYYY-MM-DD' }. Возвращает Promise<{ year, row, cell }>.
+    var matrixFlashTimer = null;
+    window.openMatrixAt = async function(opts) {
+      opts = opts || {};
+      var dm = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(opts.date || ''));
+      var empKey = String(opts.employeeId == null ? '' : opts.employeeId).replace(/^emp_/, '');
+      if (!/^[\w-]*$/.test(empKey)) empKey = '';
+      if (!vacationPanel.classList.contains('open')) vacationTrigger.click();
+      var tabM = document.getElementById('tabMatrix');
+      if (tabM) tabM.click();            // уходим с вкладки «Задачи»/«Командировки» (их обработчики прячут свои панели)
+      matrixWrapper.style.display = 'block';
+      if (!document.getElementById('openMatrixAtStyle')) {
+        var st = document.createElement('style');
+        st.id = 'openMatrixAtStyle';
+        st.textContent = '@keyframes mxRowFlash{0%,60%{background-color:rgba(255,193,7,.55)}100%{background-color:rgba(255,193,7,0)}}' +
+          'tr.mx-flash>td.name-col{animation:mxRowFlash 2s ease-out;box-shadow:inset 3px 0 0 #ff8a00}' +
+          'tr.mx-flash>td.day-cell-data{box-shadow:inset 0 2px 0 rgba(255,138,0,.85),inset 0 -2px 0 rgba(255,138,0,.85)}';
+        document.head.appendChild(st);
+      }
+      var year = dm ? parseInt(dm[1], 10) : currentYear;
+      if (year !== currentYear) {
+        currentYear = year;
+        renderVacationMatrix();
+        try { await HolidaysCalendar.load(currentYear); } catch (e) { /* без производственного календаря — только выходные */ }
+        renderVacationMatrix();
+      }
+      var row = null, cell = null;
+      var nameCell = empKey ? matrixBody.querySelector('.name-col[data-emp-id="' + empKey + '"]') : null;
+      if (nameCell) row = nameCell.closest('tr');
+      if (dm) {
+        var doy = Math.round((Date.UTC(year, parseInt(dm[2], 10) - 1, parseInt(dm[3], 10)) - Date.UTC(year, 0, 1)) / 86400000) + 1;
+        cell = (row && row.querySelector('.day-cell-data[data-day="' + doy + '"]')) ||
+               matrixBody.querySelector('.day-cell-data[data-day="' + doy + '"]');
+      }
+      if (cell) {
+        // центр дат — в области справа от закреплённой колонки с ФИО (на 375 px она занимает больше половины ширины)
+        var nameW = ((nameCell || matrixBody.querySelector('.name-col')) || {}).offsetWidth || 0;
+        matrixWrapper.scrollLeft = Math.max(0, cell.offsetLeft + cell.offsetWidth / 2 - nameW - (matrixWrapper.clientWidth - nameW) / 2);
+      }
+      if (row) {
+        var wr = matrixWrapper.getBoundingClientRect(), rr = row.getBoundingClientRect();
+        matrixWrapper.scrollTop = Math.max(0, matrixWrapper.scrollTop + (rr.top - wr.top) - (matrixWrapper.clientHeight - rr.height) / 2);
+        matrixBody.querySelectorAll('tr.mx-flash').forEach(function(r) { r.classList.remove('mx-flash'); });
+        void row.offsetWidth;            // перезапуск анимации при повторном вызове
+        row.classList.add('mx-flash');
+        clearTimeout(matrixFlashTimer);
+        matrixFlashTimer = setTimeout(function() { row.classList.remove('mx-flash'); }, 2100);
+      }
+      return { year: year, row: row, cell: cell };
+    };
+
     // With a card open, any matrix click except a calendar cell returns to the full view.
     matrixWrapper.addEventListener('click', function(event) {
       if (vacationPanel.classList.contains('employee-card-open') && !event.target.closest('.day-cell-data')) {

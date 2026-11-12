@@ -81,7 +81,8 @@
     loadSeq: 0,
     orphanCount: 0,                // T1-8: открытые задачи без исполнителя (?orphans=1)
     modal: null,                   // T1-8: окно замены { empId, fullName, items, target, error, busy }
-    dirty: false                   // T1-11: sync принёс изменения, пока панель/форма закрыта — перечитать при возврате
+    dirty: false,                  // T1-11: sync принёс изменения, пока панель/форма закрыта — перечитать при возврате
+    sort: { key: '', dir: '' }     // V6-1 (R-17): сортировка Списка: key = priority|status, dir = asc|desc; '' = без сортировки
   };
   var DOM = {};
 
@@ -316,9 +317,23 @@
     if (withNone) items.push({ value: NONE, label: 'Без исполнителя' });
     return optionsHtml(items, selected, allLabel);
   }
-  function priorityTag(t) {
+  // V6-1 (R-12…R-14): тег-фильтр — кнопка, ведущая в «Список» с одним фильтром (ACTIONS.filterBy)
+  function tagBtn(cls, text, field, value, hint) {
+    // span[role=button], а не <button>: внутри draggable-карточки Доски кнопка в Firefox не даёт тащить карточку; Enter/Space — onKeyTag
+    return '<span role="button" tabindex="0" class="tk-tag tk-tagbtn' + (cls ? ' ' + cls : '') + '" data-tk-act="filterBy" data-f="' + field +
+      '" data-v="' + esc(value) + '" title="' + esc(hint) + '">' + esc(text) + '</span>';
+  }
+  function priorityTag(t, link) {
     var p = +t.priority;
-    return '<span class="tk-tag' + (p === 1 ? ' tk-hi' : '') + '">' + esc(PRIORITY_TEXT[p] || p) + '</span>';
+    var text = PRIORITY_TEXT[p] || p;
+    if (link) return tagBtn(p === 1 ? 'tk-hi' : '', text, 'priority', String(t.priority), 'Показать в Списке все задачи с приоритетом «' + text + '»');
+    return '<span class="tk-tag' + (p === 1 ? ' tk-hi' : '') + '">' + esc(text) + '</span>';
+  }
+  function statusTag(t, link) {
+    var closed = t.status === 'closed';
+    var text = closed ? 'Закрыта' : 'Открыта';
+    if (link) return tagBtn(closed ? 'tk-closed' : '', text, 'status', closed ? 'closed' : 'open', 'Показать в Списке все задачи со статусом «' + text + '»');
+    return '<span class="tk-tag' + (closed ? ' tk-closed' : '') + '">' + text + '</span>';
   }
   function conflictReasons(t) {
     var seen = {}, out = [];
@@ -327,9 +342,9 @@
     });
     return out;
   }
-  function badgesHtml(t) {
+  function badgesHtml(t, link) {
     var h = '';
-    if (t.label) h += '<span class="tk-tag">' + esc(t.label) + '</span>';
+    if (t.label) h += link ? tagBtn('', t.label, 'label', t.label, 'Показать в Списке все задачи с меткой «' + t.label + '»') : '<span class="tk-tag">' + esc(t.label) + '</span>';
     if (t.checklist && t.checklist.length) {
       var done = t.checklist.filter(function (c) { return c.done; }).length;
       h += '<span class="tk-tag">☑ ' + done + '/' + t.checklist.length + '</span>';
@@ -350,7 +365,61 @@
       return (p.removed && open) ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
     }).join(', ');
   }
-  function nameLinks(t) {
+  // V6-1 (R-8): «!» у исполнителя, который в дни задачи в отпуске/отгуле (notes[]) или на больничном/в командировке (conflict_days[])
+  var RISK_ORDER = ['vacation', 'day_off', 'sick', 'trip'];
+  function riskText(t, empId) {
+    var by = { vacation: [], day_off: [], sick: [], trip: [] };
+    (t.notes || []).forEach(function (n) {
+      if (n.employee_id === empId && (n.kind === 'vacation' || n.kind === 'day_off') && parseYmd(n.date)) by[n.kind].push(n.date);
+    });
+    (t.conflict_days || []).forEach(function (c) {
+      if (c.employee_id === empId && by[c.reason] && parseYmd(c.date)) by[c.reason].push(c.date);
+    });
+    var parts = [];
+    RISK_ORDER.forEach(function (k) {
+      var ds = by[k].filter(function (d, i, arr) { return arr.indexOf(d) === i; }).sort();
+      if (!ds.length) return;
+      var ranges = [], from = ds[0], prev = ds[0];
+      for (var i = 1; i <= ds.length; i++) {
+        if (i < ds.length && ds[i] === addDays(prev, 1)) { prev = ds[i]; continue; }
+        ranges.push(from === prev ? fmtDm(from) : fmtDm(from) + '–' + fmtDm(prev));
+        from = prev = ds[i];
+      }
+      parts.push((NOTE_TEXT[k] || REASON_TEXT[k] || k) + ' ' + ranges.join(', '));
+    });
+    return parts.join('; ');
+  }
+  function warnIcon(t, empId) {
+    var txt = riskText(t, empId);
+    if (!txt) return '';
+    return '<span class="tk-warnico" role="img" aria-label="' + esc(txt) + '" title="' + esc(txt) + '">!</span>';
+  }
+  // V6-1 (R-17): стабильная сортировка Списка по приоритету/статусу; вторичный порядок — исходный
+  function sortRows(rows) {
+    var k = S.sort.key, dir = S.sort.dir === 'desc' ? -1 : 1;
+    if (!k || !S.sort.dir) return rows;
+    var val = function (t) {
+      if (k === 'priority') { var p = +t.priority; return p >= 1 && p <= 3 ? p : 9; }
+      return t.status === 'closed' ? 1 : 0;
+    };
+    return rows.map(function (t, i) { return { t: t, i: i, v: val(t) }; }).sort(function (a, b) {
+      return a.v === b.v ? a.i - b.i : (a.v - b.v) * dir;
+    }).map(function (x) { return x.t; });
+  }
+  function sortTh(key, label) {
+    var on = S.sort.key === key && S.sort.dir;
+    var arrow = on ? (S.sort.dir === 'desc' ? '↓' : '↑') : '↕';
+    var hint = key === 'priority' ? 'от высокого к низкому / обратно' : 'Открыта → Закрыта / обратно';
+    return '<th class="tk-sortable" aria-sort="' + (on ? (S.sort.dir === 'desc' ? 'descending' : 'ascending') : 'none') + '">' +
+      '<button type="button" class="tk-sortbtn' + (on ? ' tk-sorted' : '') + '" data-tk-act="sortBy" data-key="' + key + '" title="Сортировка: ' + hint + ' / без сортировки">' +
+      esc(label) + '<span class="tk-arr' + (on ? '' : ' tk-arr-off') + '" aria-hidden="true">' + arrow + '</span></button></th>';
+  }
+  function descCell(t) {
+    var full = String(t.description == null ? '' : t.description).trim();
+    if (!full) return '<td class="tk-desc"><span class="tk-muted">—</span></td>';
+    return '<td class="tk-desc" title="' + esc(full) + '">' + esc(truncate(full, 80)) + '</td>';
+  }
+  function nameLinks(t, warn) {
     var a = assigneesOf(t);
     if (!a.length) return '<span class="tk-muted">—</span>';
     if (isOrphan(t)) return plateHtml(t);
@@ -361,7 +430,7 @@
         return open ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
       }
       return '<a href="#" class="tk-name" data-tk-act="filterEmp" data-emp="' + esc(p.employee_id) + '">' +
-        esc(personName(p)) + '</a>';
+        esc(personName(p)) + '</a>' + (warn ? warnIcon(t, p.employee_id) : '');
     }).join(', ');
   }
 
@@ -387,7 +456,7 @@
 
   function renderList() {
     var f = S.filters;
-    var rows = applyFilters(S.tasks, f, true);
+    var rows = sortRows(applyFilters(S.tasks, f, true));
     var h = '<div class="tk-filters">' +
       '<label>Сотрудник <select data-tk-filter="emp">' + empOptions(f.emp, 'Все', true) + '</select></label>' +
       '<label>Срок <select data-tk-filter="due">' + optionsHtml([
@@ -404,11 +473,11 @@
     if (!rows.length) {
       return h + '<p class="tk-empty">' + (S.loading ? 'Загрузка…' : 'Задач нет.') + '</p>';
     }
-    h += '<div class="tk-tablewrap"><table class="tk-table"><thead><tr><th>Задача</th><th>Исполнитель</th><th>Срок</th><th>Приор.</th><th>Статус</th></tr></thead><tbody>';
+    h += '<div class="tk-tablewrap"><table class="tk-table"><thead><tr><th>Задача</th><th>Исполнитель</th><th>Описание</th><th>Срок</th>' + sortTh('priority', 'Приор.') + sortTh('status', 'Статус') + '</tr></thead><tbody>';
     rows.forEach(function (t) {
       h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board">' +
         '<td><b>' + esc(t.title) + '</b><div class="tk-badges">' + badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></td>' +
-        '<td>' + nameLinks(t) + '</td>' +
+        '<td>' + nameLinks(t, true) + '</td>' + descCell(t) +
         '<td class="tk-nowrap">' + esc(fmtPeriod(t)) + '</td>' +
         '<td class="' + (+t.priority === 1 ? 'tk-hi' : '') + '">' + esc(PRIORITY_TEXT[t.priority] || t.priority) + '</td>' +
         '<td>' + (t.status === 'closed' ? 'Закрыта' : 'Открыта') + '</td></tr>';
@@ -422,8 +491,8 @@
       ' data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board"' + (admin ? ' draggable="true" data-tk-drag="' + esc(t.id) + '"' : '') + '>' +
       '<b>' + esc(t.title) + '</b>' +
       '<div class="tk-sub">' + (isOrphan(t) ? plateHtml(t) : nameStrike(t)) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
-      '<div class="tk-badges">' + (+t.priority === 1 ? '<span class="tk-tag tk-hi">высокий</span>' : '<span class="tk-tag">' + esc(PRIORITY_TEXT[t.priority] || '') + '</span>') +
-      badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></div>';
+      '<div class="tk-badges">' + statusTag(t, true) + priorityTag(t, true) +
+      badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></div>';
   }
 
   function renderBoard() {
@@ -436,7 +505,7 @@
     var h = '<div class="tk-filters"><label>Сотрудник <select data-tk-filter="emp">' + empOptions(S.filters.emp, 'Все', true) + '</select></label>';
     if (S.filters.emp) h += '<button type="button" class="tk-btn" data-tk-act="clearEmp">× Все сотрудники</button>';
     if (canWrite()) h += '<span class="tk-muted">Перетащите карточку в другую колонку, чтобы закрыть или переоткрыть задачу.</span>';
-    h += '</div><div class="tk-split"><div class="tk-boardmain">';
+    h += '</div><div class="tk-split tk-split-board"><div class="tk-boardmain">';
     if (orph.length) {
       h += '<div class="tk-sec tk-sec-orph" data-tk-sec="orphans"><b>⚠ Без исполнителя · ' + orph.length + '</b>' +
         '<span class="tk-muted"> — исполнитель удалён, задача ждёт назначения</span>' +
@@ -534,8 +603,8 @@
     var t = S.selectedId ? findTask(S.selectedId) : null;
     if (!t) return '<aside class="tk-detail"><p class="tk-empty">Выберите задачу, чтобы увидеть карточку.</p></aside>';
     var h = '<aside class="tk-detail"><div class="tk-dhead"><b class="tk-dtitle">' + esc(t.title) + '</b>' +
-      '<span class="tk-tag' + (t.status === 'closed' ? ' tk-closed' : '') + '">' + (t.status === 'closed' ? 'Закрыта' : 'Открыта') + '</span></div>';
-    h += '<div class="tk-badges">' + priorityTag(t) + badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div>';
+      statusTag(t, true) + '</div>';
+    h += '<div class="tk-badges">' + priorityTag(t, true) + badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div>';
     h += '<div class="tk-kv"><span>Срок</span><b>' + esc(fmtPeriod(t)) + '</b></div>';
     h += '<div class="tk-kv"><span>Исполнители</span><div>' + nameLinks(t) + '</div></div>';
     if (isOrphan(t)) {
@@ -564,15 +633,24 @@
     var notes = (t.notes || []);
     if (notes.length) {
       h += '<div class="tk-box"><b>Пометки</b> <span class="tk-muted">(справочно, без ограничений)</span><ul class="tk-notes">' + notes.map(function (n) {
-        var who = n.employee_id ? empName(n.employee_id) + ': ' : '';
-        return '<li>' + esc(fmtDay(n.date)) + ' — ' + esc(who + (NOTE_TEXT[n.kind] || n.kind) + (n.kind === 'holiday' && n.label ? ' (' + n.label + ')' : '')) + '</li>';
+        var what = (NOTE_TEXT[n.kind] || n.kind) + (n.kind === 'holiday' && n.label ? ' (' + n.label + ')' : '');
+        if (n.kind === 'vacation' || n.kind === 'day_off') {
+          // V6-1 (R-7): яркая оранжевая плашка с косой штриховкой; (R-15): ФИО — ссылка на матрицу отпусков на эту дату
+          var nm = n.employee_id ? empName(n.employee_id) : '';
+          var who = !n.employee_id ? '' : (S.empById[n.employee_id]
+            ? '<a href="#" class="tk-name tk-name-vac" data-tk-act="openMatrix" data-emp="' + esc(n.employee_id) + '" data-date="' + esc(n.date) +
+              '" title="Открыть матрицу отпусков на эту дату">' + esc(nm) + '</a>' + esc(': ')
+            : esc(nm + ': '));
+          return '<li class="tk-note-vac" data-tk-note="' + esc(n.kind) + '">' + esc(fmtDay(n.date)) + ' — ' + who + esc(what) + '</li>';
+        }
+        var who2 = n.employee_id ? empName(n.employee_id) + ': ' : '';
+        return '<li>' + esc(fmtDay(n.date)) + ' — ' + esc(who2 + what) + '</li>';
       }).join('') + '</ul></div>';
     }
     if (t.archived) h += '<div class="tk-box">Задача в архиве.</div>';
     if (canWrite() && !t.archived) {
       h += '<div class="tk-actions">' +
         '<button type="button" class="tk-btn tk-primary" data-tk-act="editTask" data-id="' + esc(t.id) + '">Править</button>' +
-        '<button type="button" class="tk-btn" data-tk-act="reassignTask" data-id="' + esc(t.id) + '">Переназначить</button>' +
         (t.status === 'open'
           ? '<button type="button" class="tk-btn" data-tk-act="closeTask" data-id="' + esc(t.id) + '">Закрыть</button>'
           : '<button type="button" class="tk-btn" data-tk-act="reopenTask" data-id="' + esc(t.id) + '">Переоткрыть</button>') +
@@ -855,6 +933,16 @@
     }
   }
 
+  // V6-1: переход в «Список» с одним фильтром (метка/приоритет/статус/сотрудник): остальные фильтры сброшены, выбор снят
+  function goList(only) {
+    S.filters = { emp: '', due: '', priority: '', label: '', status: '' };
+    Object.keys(only).forEach(function (k) { S.filters[k] = only[k]; });
+    S.selectedId = null;
+    S.msg = null;
+    S.form = null;
+    if (S.view !== 'list') { S.view = 'list'; load(); } else { render(); }
+  }
+
   var ACTIONS = {
     dismissMsg: function () { S.msg = null; render(); },
     setView: function (el) {
@@ -879,16 +967,39 @@
       }
     },
     filterEmp: function (el, ev) {
+      // V6-1 (R-14): клик по ФИО → «Список», все строки этого сотрудника, остальные фильтры сброшены
       if (ev && ev.preventDefault) ev.preventDefault();
-      S.filters.emp = el.dataset.emp || '';
-      S.selectedId = null;
-      S.msg = null;
-      if (S.view !== 'board') { S.view = 'board'; load(); } else { render(); }
+      goList({ emp: el.dataset.emp || '' });
+    },
+    // V6-1 (R-12/R-13): метка / приоритет / статус → «Список» с одним этим фильтром
+    filterBy: function (el, ev) {
+      if (ev && ev.preventDefault) ev.preventDefault();
+      var f = el.dataset.f;
+      if (f !== 'label' && f !== 'priority' && f !== 'status') return;
+      var o = {};
+      o[f] = el.dataset.v == null ? '' : String(el.dataset.v);
+      goList(o);
+    },
+    // V6-1 (R-17): ↑ → ↓ → без сортировки; смена колонки начинает с ↑; фильтры не трогаем
+    sortBy: function (el) {
+      var key = el.dataset.key;
+      if (key !== 'priority' && key !== 'status') return;
+      if (S.sort.key !== key || !S.sort.dir) S.sort = { key: key, dir: 'asc' };
+      else if (S.sort.dir === 'asc') S.sort = { key: key, dir: 'desc' };
+      else S.sort = { key: '', dir: '' };
+      render();
+      var b = DOM.root && DOM.root.querySelector ? DOM.root.querySelector('[data-tk-act="sortBy"][data-key="' + key + '"]') : null;
+      if (b && b.focus) b.focus();
+    },
+    // V6-1 (R-15): ФИО в пометке отпуска/отгула → матрица отпусков на эту дату (index.html: window.openMatrixAt)
+    openMatrix: function (el, ev) {
+      if (ev && ev.preventDefault) ev.preventDefault();
+      if (typeof window.openMatrixAt !== 'function') { toast('Матрица отпусков недоступна', 'error'); return; }
+      window.openMatrixAt({ employeeId: el.dataset.emp || '', date: el.dataset.date || '' });
     },
     clearEmp: function () { S.filters.emp = ''; render(); },
     newTask: function () { openForm(null); },
     editTask: function (el) { openForm(el.dataset.id); },
-    reassignTask: function (el) { openForm(el.dataset.id, 'assignees'); },
     assignOrphan: function (el) { openForm(el.dataset.id, 'assignees'); },        // T1-8: «Назначить» в карточке (admin)
     mAssign: function () { runAssign(null, false); },                              // T1-8: окно замены
     mAccept: function (el) {
@@ -962,6 +1073,15 @@
     var fn = ACTIONS[el.dataset.tkAct];
     if (typeof fn !== 'function') { console.warn(LOG, 'нет обработчика для', el.dataset.tkAct); return; }
     fn(el, ev);
+  }
+  // V6-1: теги-фильтры — span[role=button]; с клавиатуры (Enter/Space) работают как клик
+  function onKeyTag(ev) {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    var t = ev.target;
+    var el = t && t.closest ? t.closest('.tk-tagbtn[data-tk-act]') : null;
+    if (!el) return;
+    if (ev.preventDefault) ev.preventDefault();
+    onClick({ target: el, preventDefault: function () {} });
   }
   function onChange(ev) {
     var t = ev.target;
@@ -1481,12 +1601,50 @@
       '.tk-cols{width:100%;flex-direction:column}.tk-wk{width:100%;overflow-x:auto}.tk-wk-c{min-height:90px}}';
   }
 
+  // V6-1: стили Списка/Доски/карточки отдельным блоком (не правим общий css(): параллельные V6-2/V6-3 трогают соседние строки)
+  function cssV61() {
+    return '' +
+      // R-4: Доска — три колонки равной ширины (Открыта / Закрыта / карточка); «Без исполнителя» — на всю ширину над ними
+      '.tk-split-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:stretch}' +
+      '.tk-split-board>.tk-boardmain,.tk-split-board .tk-cols{display:contents}' +
+      '.tk-split-board .tk-sec{grid-column:1/-1;margin-bottom:0}' +
+      '.tk-split-board .tk-col,.tk-split-board .tk-detail{box-sizing:border-box;min-width:0;min-height:120px;padding:6px 8px;flex:none;width:auto;overflow-wrap:anywhere}' +
+      '.tk-split-board .tk-card{padding:5px 8px;margin:4px 0;font-size:12px}' +
+      '.tk-split-board .tk-sub{font-size:11px;margin:1px 0}' +
+      '.tk-split-board .tk-detail{font-size:12px}' +
+      '.tk-split-board .tk-col>b{font-size:12px}' +
+      // R-12/13: теги-фильтры
+      '.tk-tagbtn{cursor:pointer}.tk-tagbtn:hover,.tk-tagbtn:focus-visible{background:rgba(0,136,204,.12);border-color:var(--rt-blue);outline:0}' +
+      // R-5: шапка Списка, зебра
+      '.tk-tablewrap{overflow:auto;max-height:calc(100vh - 230px);min-height:160px;border:1px solid #b9c6da;border-radius:8px}' +
+      '.tk-table{border-collapse:separate;border-spacing:0}' +
+      '.tk-table th{position:sticky;top:0;z-index:2;background:#dde6f3;color:#12203a;font-weight:700;font-size:12px;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;' +
+        'padding:8px;border-bottom:2px solid #1a2b49;border-right:1px solid #b9c6da}' +
+      '.tk-table th:last-child{border-right:0}' +
+      '.tk-table tbody tr:nth-child(even){background:#f1f5fb}' +
+      '.tk-table tbody tr.tk-row:hover{background:#e0eefa}' +
+      '.tk-sortbtn{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;padding:0;margin:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer}' +
+      '.tk-sortbtn:hover,.tk-sortbtn:focus-visible{text-decoration:underline;outline:0}' +
+      '.tk-sortbtn.tk-sorted{color:#0b4f8a}.tk-arr{font-size:13px;line-height:1}.tk-arr-off{opacity:.5}' +
+      // R-16: колонка «Описание»
+      '.tk-desc{min-width:150px;max-width:260px;overflow-wrap:anywhere;color:var(--text)}' +
+      // R-8: «!» у исполнителя
+      '.tk-warnico{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-left:4px;border-radius:50%;background:#ff8a00;color:#1a2b49;' +
+        'font:700 10px/1 sans-serif;vertical-align:middle;cursor:help}' +
+      // R-7: пометки отпуска/отгула — яркая оранжевая плашка с мелкой бледной косой штриховкой
+      '.tk-notes li.tk-note-vac{list-style:none;margin:3px 0 3px -16px;padding:3px 8px;border-radius:6px;border:1px solid #e07800;color:#1a2b49;font-weight:600;' +
+        'background:repeating-linear-gradient(45deg,rgba(255,255,255,.3) 0,rgba(255,255,255,.3) 1.5px,rgba(255,255,255,0) 1.5px,rgba(255,255,255,0) 4px),#ff8a00}' +
+      '.tk-note-vac a.tk-name-vac{color:#1a2b49;border-bottom:0;text-decoration:underline;font-weight:700}' +
+      '.tk-note-vac a.tk-name-vac:hover{background:rgba(255,255,255,.45)}' +
+      '@media (max-width:760px){.tk-split-board{grid-template-columns:minmax(0,1fr)}.tk-tablewrap{max-height:calc(100vh - 260px)}}';
+  }
+
   // ---------------------------------------------------------------- init
   function injectStyles() {
     if (document.getElementById('tasksModuleStyles')) return;
     var st = document.createElement('style');
     st.id = 'tasksModuleStyles';
-    st.textContent = css();
+    st.textContent = css() + cssV61();
     document.head.appendChild(st);
   }
   function init() {
@@ -1515,6 +1673,7 @@
       });
     }
     DOM.root.addEventListener('click', onClick);
+    DOM.root.addEventListener('keydown', onKeyTag);
     DOM.root.addEventListener('change', onChange);
     DOM.root.addEventListener('input', onInput);
     // Enter в поле формы не должен перезагружать страницу; сохранение — только кнопкой.

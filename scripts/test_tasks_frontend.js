@@ -223,6 +223,8 @@ async function http(base, cookie, method, url, body) {
 }
 
 // ----------------------------------------------------------------------------
+function unescTitle(x) { return x.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'); }
+
 async function main() {
   console.log('=== T1-2 TASKS PANEL FRONTEND TEST ===');
 
@@ -324,6 +326,78 @@ async function main() {
   hr = await runDelete({ info: open3 }, true);
   check('H7 двойной клик не запускает удаление дважды', hr.saves === 1 && hr.confirms.length === 1 && hr.offered.length === 1);
 
+  // ---- 1c. V6-1 R-15: window.openMatrixAt (код из index.html в vm с заглушками DOM) ----
+  console.log('-- openMatrixAt (код из index.html)');
+  const omStart = INDEX.indexOf('var matrixFlashTimer = null;');
+  const omRet = INDEX.indexOf('return { year: year, row: row, cell: cell };', omStart);
+  const omEnd = omRet > 0 ? INDEX.indexOf('\n    };', omRet) + 7 : -1;
+  async function runOpenMatrix(opts, rowIds, startYear, panelOpen, nameW) {
+    const log = { clicks: [], renders: 0, holidays: [], timers: [], styleAdded: 0 };
+    const mkSet = () => { const st = new Set(); return { add: (c) => st.add(c), remove: (c) => st.delete(c), contains: (c) => st.has(c), has: (c) => st.has(c) }; };
+    const rows = rowIds.map((id, i) => {
+      const r = { id, cls: mkSet(), offsetWidth: 5, rectTop: 100 + i * 700, classList: null };
+      r.classList = r.cls;
+      r.getBoundingClientRect = () => ({ top: r.rectTop, height: 20 });
+      r.querySelector = (sel) => { const m = /data-day="(\d+)"/.exec(sel); return m ? { offsetLeft: +m[1] * 20, offsetWidth: 20, rowId: id } : null; };
+      return r;
+    });
+    const sel = [];
+    const matrixBody = {
+      querySelector: (q) => {
+        sel.push(q);
+        let m = /^\.name-col\[data-emp-id="([\w-]+)"\]$/.exec(q);
+        if (q === '.name-col') return { offsetWidth: nameW || 0 };
+        if (m) { const r = rows.find((x) => String(x.id) === m[1]); return r ? { closest: () => r, offsetWidth: nameW || 0 } : null; }
+        m = /data-day="(\d+)"/.exec(q);
+        return m ? { offsetLeft: +m[1] * 20, offsetWidth: 20, rowId: 'any' } : null;
+      },
+      querySelectorAll: (q) => (q === 'tr.mx-flash' ? rows.filter((r) => r.cls.has('mx-flash')) : []),
+    };
+    const matrixWrapper = { style: {}, scrollLeft: 0, scrollTop: 0, clientWidth: 1000, clientHeight: 400, getBoundingClientRect: () => ({ top: 100 }) };
+    const ctx = {
+      window: {}, vacationPanel: { classList: mkSet() }, vacationTrigger: { click: () => { log.clicks.push('trigger'); } },
+      matrixBody, matrixWrapper,
+      document: {
+        getElementById: (id) => (id === 'tabMatrix' ? { click: () => log.clicks.push('tabMatrix') } : null),
+        createElement: () => ({}), head: { appendChild: () => { log.styleAdded++; } },
+      },
+      HolidaysCalendar: { load: async (y) => { log.holidays.push(y); } },
+      renderVacationMatrix: () => { log.renders++; },
+      setTimeout: (fn, ms) => { log.timers.push({ fn, ms }); return log.timers.length; }, clearTimeout: () => {},
+      Date, Math, parseInt, String, RegExp,
+    };
+    if (panelOpen) ctx.vacationPanel.classList.add('open');
+    vm.createContext(ctx);
+    vm.runInContext('var currentYear = ' + startYear + ';\n' + INDEX.slice(omStart, omEnd), ctx);
+    const res = await ctx.window.openMatrixAt(opts);
+    log.res = res; log.rows = rows; log.matrixWrapper = matrixWrapper; log.sel = sel; log.year = vm.runInContext('currentYear', ctx);
+    return log;
+  }
+  check('OM0 index.html: код openMatrixAt найден для разбора', omStart > 0 && omEnd > omStart);
+  if (omStart > 0 && omEnd > omStart) {
+    let om = await runOpenMatrix({ employeeId: 'emp_5', date: '2099-12-03' }, [9, 5, 7], 2026, false);
+    check('OM1 R-15 openMatrixAt: открывает панель отпусков (если закрыта) и вкладку «Матрица»; год даты 2099 → перерисовка + загрузка календаря',
+      om.clicks.join() === 'trigger,tabMatrix' && om.year === 2099 && om.renders === 2 && om.holidays.join() === '2099' && om.matrixWrapper.style.display === 'block', JSON.stringify([om.clicks, om.year, om.renders]));
+    check('OM2 R-15 строка найдена по id сотрудника (при перемешанном порядке строк), прокрутка по горизонтали к дате (337-й день, по центру), вертикаль — к строке',
+      om.res.row && om.res.row.id === 5 && om.matrixWrapper.scrollLeft === 337 * 20 - (1000 - 20) / 2 && om.matrixWrapper.scrollTop > 0 &&
+      om.sel.some((q) => q === '.name-col[data-emp-id="5"]'), JSON.stringify([om.res.row && om.res.row.id, om.matrixWrapper.scrollLeft, om.matrixWrapper.scrollTop]));
+    const flashed = om.rows.filter((r) => r.cls.has('mx-flash')).map((r) => r.id);
+    check('OM3 R-15 строка подсвечена (mx-flash) только у нужного сотрудника; через ~2 с подсветка снимается', flashed.join() === '5' && om.timers.length === 1 && om.timers[0].ms >= 2000 && om.timers[0].ms <= 2500 &&
+      (om.timers[0].fn(), om.rows.every((r) => !r.cls.has('mx-flash'))));
+    om = await runOpenMatrix({ employeeId: 'emp_5', date: '2099-12-03' }, [9, 5, 7], 2099, true, 200);
+    check('OM3b R-15 закреплённая колонка ФИО (200 px) не закрывает дату: центр дат считается в области справа от неё',
+      om.matrixWrapper.scrollLeft === 337 * 20 + 10 - 200 - (1000 - 200) / 2, om.matrixWrapper.scrollLeft);
+    om = await runOpenMatrix({ employeeId: 7, date: '2026-03-01' }, [9, 5, 7], 2026, true);
+    check('OM4 R-15 тот же год: без перерисовки; панель уже открыта (триггер не нажимается); employeeId числом (7) находит строку; 1 марта 2026 = 60-й день',
+      om.clicks.join() === 'tabMatrix' && om.renders === 0 && om.res.row && om.res.row.id === 7 && om.matrixWrapper.scrollLeft === 60 * 20 - 490);
+    om = await runOpenMatrix({ employeeId: 'no_such', date: '2026-01-01' }, [9, 5], 2026, true);
+    check('OM5 R-15 сотрудник не в матрице → без исключения и без подсветки; к дате всё равно прокручено', om.res.row === null && om.rows.every((r) => !r.cls.has('mx-flash')) && om.matrixWrapper.scrollLeft === Math.max(0, 20 - 490) + 0);
+    om = await runOpenMatrix({ employeeId: '5"] x[a="', date: '2026-02-01' }, [5], 2026, true);
+    check('OM6 R-15 id с кавычками/скобками не попадает в селектор (защита от инъекции), исключения нет', om.res.row === null && !om.sel.some((q) => /x\[a=/.test(q)));
+    om = await runOpenMatrix({ employeeId: 'emp_5', date: 'мусор' }, [5], 2026, true);
+    check('OM7 R-15 некорректная дата: год не меняется, строка подсвечивается, без исключения', om.year === 2026 && om.res.row && om.res.row.id === 5 && om.res.cell === null);
+  }
+
   // ---- 2. чистые функции ------------------------------------------------------
   console.log('-- unit');
   const U = probe.T.__t;
@@ -422,8 +496,9 @@ async function main() {
     check('E7 на сервере: исполнители 2, период Пт 09:00 — Пн 18:00, чек-лист 2 (1 выполнен), приоритет 1, метка',
       srvTask && srvTask.assignees.length === 2 && srvTask.start_at === fri + 'T09:00' && srvTask.end_at === mon + 'T18:00' &&
       srvTask.checklist.length === 2 && srvTask.checklist[1].done === true && srvTask.priority === 1 && srvTask.label === 'e2e');
-    check('E8 список: колонки Задача/Исполнитель/Срок/Приор./Статус, приоритет «высокий» выделен, ФИО — ссылки',
-      ['Задача', 'Исполнитель', 'Срок', 'Приор.', 'Статус'].every((c) => A.has('<th>' + c + '</th>')) && A.has('tk-hi') && A.count('data-tk-act="filterEmp"') === 2);
+    check('E8 список: колонки Задача/Исполнитель/Описание/Срок + сортируемые Приор./Статус, приоритет «высокий» выделен, ФИО — ссылки',
+      ['Задача', 'Исполнитель', 'Описание', 'Срок'].every((c) => A.has('<th>' + c + '</th>')) &&
+      A.has('data-tk-act="sortBy" data-key="priority"') && A.has('data-tk-act="sortBy" data-key="status"') && A.has('tk-hi') && A.count('data-tk-act="filterEmp"') === 2);
     // фильтры списка
     await A.filter('priority', '3');
     check('E9 фильтр «приоритет = низкий» скрывает задачу, «Сбросить» возвращает', !A.has('E2E задача') && (await A.click('resetFilters'), A.has('E2E задача')));
@@ -437,14 +512,16 @@ async function main() {
     check('E12 фильтр по метке находит задачу', A.has('E2E задача'));
     await A.click('resetFilters');
 
-    // клик по фамилии → доска по сотруднику
+    // клик по фамилии → «Список» по сотруднику (V6-1 R-14; раньше вёл на Доску)
     await A.click('filterEmp', (d) => d.emp === e1);
-    check('E13 клик по фамилии → «Доска», отфильтрована по сотруднику (Открыта · 1 / Закрыта · 0)',
-      A.S.view === 'board' && A.S.filters.emp === e1 && A.has('Открыта · 1') && A.has('Закрыта · 0') && A.has('data-tk-col="open"') && A.has('data-tk-col="closed"'));
+    check('E13 клик по фамилии → «Список», отфильтрован по сотруднику, остальные фильтры пусты (R-14)',
+      A.S.view === 'list' && A.S.filters.emp === e1 && !A.S.filters.priority && !A.S.filters.label && !A.S.filters.status && !A.S.filters.due && A.has('E2E задача') && A.has('class="tk-table"'));
     await A.filter('emp', e3);
-    check('E14 доска по другому сотруднику: Открыта · 0', A.has('Открыта · 0'));
-    await A.click('clearEmp');
+    check('E14 список по другому сотруднику: задачи нет', !A.has('E2E задача'));
+    await A.click('resetFilters');
+    await A.click('setView', (d) => d.view === 'board');
     check('E15 карточка на доске draggable только для admin', A.has('draggable="true"') && A.has('data-tk-drag="' + tid + '"'));
+    await A.click('setView', (d) => d.view === 'list');
 
     // клик по задаче в списке → доска с выделенной карточкой
     await A.click('setView', (d) => d.view === 'list');
@@ -506,8 +583,10 @@ async function main() {
     check('E31 перетаскивание обратно в «Открыта» переоткрывает', (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + tid)).json.task.status === 'open');
 
     // правка + переназначение
-    await A.click('reassignTask', (d) => d.id === tid);
-    check('E32 «Переназначить» открывает форму с текущими исполнителями', A.S.form && A.S.form.id === tid && A.S.form.draft.assignees.length === 2 && A.has('Редактирование задачи'));
+    check('E32a R-1: кнопки «Переназначить» и действия reassignTask больше нет (ни в карточке, ни в ACTIONS)',
+      !A.has('reassignTask') && !A.has('Переназначить') && A.has('data-tk-act="editTask"') && typeof A.T.__t.ACTIONS.reassignTask === 'undefined' && !/reassignTask/.test(SRC));
+    await A.click('editTask', (d) => d.id === tid);
+    check('E32 «Править» открывает форму с текущими исполнителями (замена исполнителей — через неё)', A.S.form && A.S.form.id === tid && A.S.form.draft.assignees.length === 2 && A.has('Редактирование задачи'));
     await A.click('removeAssignee', (d) => d.emp === e2);
     await A.field('title', 'E2E задача (правка)');
     await A.click('saveForm');
@@ -949,6 +1028,206 @@ async function main() {
     await R.settle();
     check('P3-4h при следующем открытии панели отложенное обновление выполнено (GET api/tasks.php), флаг сброшен', R.S.dirty === false && getsOf(R, r2).some((s) => s === 'GET api/tasks.php'), getsOf(R, r2).join(' | '));
 
+    // ---------- V6-1: Список / Доска / карточка (R-1, R-4, R-5, R-7, R-8, R-12…R-17) ----------
+    console.log('-- V6-1 Список/Доска/карточка');
+    const dbv = sdb();
+    const insV = dbv.prepare("INSERT OR REPLACE INTO employees (id, full_name, location, sort_order) VALUES (?, ?, 'QA', 0)");
+    insV.run('v61_a', 'Отпускник Тестович'); insV.run('v61_b', 'Здоровый Тестович'); insV.run('v61_s', 'Сортировка Тестович');
+    insV.run('v61_x', 'Взлом <b>Тегович</b>');
+    dbv.close();
+    const mkV = async (title, extra) => {
+      const r = await http(base, adminCk, 'POST', 'api/tasks.php', Object.assign({ title, start_at: '2099-12-01', end_at: '2099-12-12', assignees: ['v61_s'] }, extra || {}));
+      if (!r.json.success) throw new Error('mkV ' + title + ' → ' + JSON.stringify(r.json));
+      return r.json.task;
+    };
+    const LONG = 'Подготовить сводный отчёт по итогам квартала, согласовать с руководителями групп и разослать <b>всем</b> участникам до конца периода (хвост-хвост-хвост)';
+    const LABEL = 'v61 "метка"<i>';
+    const vX = await mkV('V61 Отпуск и больничный', { description: LONG, label: LABEL, priority: 1, assignees: ['v61_a'] });
+    const vY = await mkV('V61 Здоровый', { priority: 3, label: 'v61b', assignees: ['v61_b'] });
+    // пометки живут в матрице: вносим после создания задачи (как в E38)
+    const dbw = sdb();
+    const insE = dbw.prepare("INSERT OR REPLACE INTO schedule_entries (employee_id, date, status, comment, approval_status, updated_at, version) VALUES (?, ?, ?, NULL, 'draft', '2099-01-01', 1)");
+    [['2099-12-02', 'vacation'], ['2099-12-03', 'vacation'], ['2099-12-04', 'vacation'], ['2099-12-08', 'day_off'], ['2099-12-10', 'sick'], ['2099-12-12', 'trip']]
+      .forEach((x) => insE.run('v61_a', x[0], x[1]));
+    dbw.close();
+    // три задачи одного сотрудника для проверки сортировки: исходный порядок = порядок ответа API
+    const vS1 = await mkV('V61 s1 обычный открыт', { priority: 2 });
+    const vS2 = await mkV('V61 s2 высокий закрыт', { priority: 1 });
+    const vS3 = await mkV('V61 s3 низкий открыт', { priority: 3 });
+    const vS4 = await mkV('V61 s4 высокий открыт', { priority: 1 });
+    await http(base, adminCk, 'POST', 'api/tasks.php?id=' + vS2.id + '&action=close', { version: vS2.version });
+    const hasMatrixCalls = [];
+    A.sandbox.window.openMatrixAt = (o) => { hasMatrixCalls.push(o); return Promise.resolve({}); };
+    await A.T.open({ view: 'list' });
+    await A.settle();
+    const rowTitles = (E) => (E.root.innerHTML.match(/<tr class="tk-row[^>]*>\s*<td><b>[^<]*<\/b>/g) || []).map((x) => /<b>([^<]*)<\/b>/.exec(x)[1]);
+    const v61Row = (E, id) => { const m = new RegExp('<tr class="tk-row[^>]*data-id="' + id + '"[\\s\\S]*?</tr>').exec(E.root.innerHTML); return m ? m[0] : ''; };
+
+    // R-1 (кроме E32a): «Назначить» у задач без исполнителя и окно замены остались
+    check('V6-1 R-1 «Назначить» (assignOrphan) и окно замены (mAssign/mAccept/mLater) на месте, «Править» одна',
+      ['assignOrphan', 'mAssign', 'mAccept', 'mLater', 'editTask'].every((a) => typeof A.T.__t.ACTIONS[a] === 'function') && SRC.indexOf('data-tk-act="assignOrphan"') >= 0);
+
+    // R-16: колонка «Описание» сразу после «Исполнитель»
+    const hdr = /<thead><tr>([\s\S]*?)<\/tr><\/thead>/.exec(A.root.innerHTML)[1];
+    check('V6-1 R-16 в шапке «Описание» стоит сразу после «Исполнитель»', /<th>Исполнитель<\/th><th>Описание<\/th>/.test(hdr), hdr);
+    const rX = v61Row(A, vX.id), rY = v61Row(A, vY.id);
+    const descX = /<td class="tk-desc" title="([^"]*)">([^<]*)<\/td>/.exec(rX);
+    check('V6-1 R-16 длинное описание: ≤80 символов с «…», полный текст в title (экранирован), без сырых тегов',
+      descX && descX[2].length <= 80 && descX[2].slice(-1) === '…' && unescTitle(descX[1]) === LONG && rX.indexOf('<b>всем</b>') < 0 && rX.indexOf('&lt;b&gt;всем') >= 0, descX && descX[2]);
+    check('V6-1 R-16 пустое описание → «—» (без title)', /<td class="tk-desc"><span class="tk-muted">—<\/span><\/td>/.test(rY));
+    // колонка стоит именно после исполнителя в строке
+    const cells = rX.split('</td>');
+    check('V6-1 R-16 в строке: 2-я ячейка — исполнитель, 3-я — описание', cells[1].indexOf('Отпускник Тестович') >= 0 && cells[2].indexOf('tk-desc') >= 0, cells[2]);
+
+    // R-8: «!» рядом с ФИО
+    const wi = /<span class="tk-warnico"[^>]*title="([^"]*)"[^>]*>!<\/span>/.exec(rX);
+    check('V6-1 R-8 у исполнителя в отпуске/отгуле/больничном/командировке — «!» с причинами и датами в title',
+      wi && unescTitle(wi[1]) === 'отпуск 02.12–04.12; отгул 08.12; больничный 10.12; командировка 12.12' && cells[1].indexOf('tk-warnico') >= 0, wi && wi[1]);
+    check('V6-1 R-8 у исполнителя без пометок «!» нет', rY.indexOf('tk-warnico') < 0);
+    // удалённый исполнитель: «!» не показывается, даже если по его employee_id есть пометки
+    const keepTasks = A.S.tasks;
+    A.S.tasks = [Object.assign({}, A.S.tasks.find((t) => t.id === vX.id), { assignees: [{ employee_id: 'v61_a', full_name: 'Отпускник Тестович', removed: true, removed_at: null }, { employee_id: 'v61_b', removed: false }] })];
+    A.T.__t.render();
+    check('V6-1 R-8 удалённому исполнителю «!» не показывается; у действующего без пометок — тоже нет', A.count('tk-warnico') === 0 && A.has('<s class="tk-gone"'));
+    A.S.tasks = keepTasks; A.T.__t.render();
+    check('V6-1 R-8 клик по «!»/ФИО не ломает строку: «!» внутри строки с openTask (клик по строке открывает карточку)', /data-tk-act="openTask"/.test(rX) && rX.indexOf('tk-warnico') > 0);
+
+    // R-17: сортировка
+    await A.filter('emp', 'v61_s');
+    const ORIG = rowTitles(A);
+    check('V6-1 R-17 исходный порядок: 4 задачи сотрудника, сортировка выключена, в шапке нейтральный «↕»',
+      ORIG.length === 4 && A.S.sort.key === '' && A.count('tk-arr-off') === 2 && A.count('aria-sort="none"') === 2, ORIG.join('|'));
+    await A.click('sortBy', (d) => d.key === 'priority');
+    const asc = rowTitles(A);
+    check('V6-1 R-17 «Приор.» ↑: высокий → обычный → низкий; внутри равного приоритета — исходный порядок; стрелка ↑ и aria-sort',
+      asc.join('|') === [ORIG.find((t) => /s2/.test(t)), ORIG.find((t) => /s4/.test(t))].sort((a, b) => ORIG.indexOf(a) - ORIG.indexOf(b)).concat(ORIG.filter((t) => /s1/.test(t)), ORIG.filter((t) => /s3/.test(t))).join('|') &&
+      A.S.sort.key === 'priority' && A.S.sort.dir === 'asc' && A.has('data-key="priority" title') && /aria-sort="ascending"[^>]*><button[^>]*data-key="priority"[^>]*>Приор\.<span class="tk-arr"[^>]*>↑</.test(A.root.innerHTML), asc.join('|'));
+    check('V6-1 R-17 сортировка не сбрасывает фильтры (emp остался)', A.S.filters.emp === 'v61_s');
+    await A.click('sortBy', (d) => d.key === 'priority');
+    const desc = rowTitles(A);
+    check('V6-1 R-17 «Приор.» ↓: низкий → обычный → высокий; стрелка ↓',
+      desc[0].indexOf('s3') > 0 && desc[1].indexOf('s1') > 0 && A.S.sort.dir === 'desc' && />Приор\.<span class="tk-arr"[^>]*>↓</.test(A.root.innerHTML), desc.join('|'));
+    await A.click('sortBy', (d) => d.key === 'priority');
+    check('V6-1 R-17 третий клик — без сортировки: исходный порядок, стрелки нет', rowTitles(A).join('|') === ORIG.join('|') && A.S.sort.key === '' && A.S.sort.dir === '');
+    await A.click('sortBy', (d) => d.key === 'status');
+    const st1 = rowTitles(A);
+    check('V6-1 R-17 «Статус» ↑: открытые, затем закрытая (вторичный порядок — исходный); «Приор.» без стрелки',
+      st1[3].indexOf('s2') > 0 && st1.slice(0, 3).join('|') === ORIG.filter((t) => !/s2/.test(t)).join('|') && A.S.sort.key === 'status' && />Статус<span class="tk-arr"[^>]*>↑</.test(A.root.innerHTML) && />Приор\.<span class="tk-arr tk-arr-off"/.test(A.root.innerHTML), st1.join('|'));
+    await A.click('sortBy', (d) => d.key === 'status');
+    check('V6-1 R-17 «Статус» ↓: закрытая первой', rowTitles(A)[0].indexOf('s2') > 0 && A.S.sort.dir === 'desc');
+    await A.click('sortBy', (d) => d.key === 'priority');
+    check('V6-1 R-17 переключение на другую колонку начинает с ↑ (одна активная сортировка)', A.S.sort.key === 'priority' && A.S.sort.dir === 'asc');
+    await A.click('setView', (d) => d.view === 'board');
+    await A.click('setView', (d) => d.view === 'list');
+    check('V6-1 R-17 состояние сортировки держится в S при смене вида (до перезагрузки), а «Сбросить» сбрасывает только фильтры',
+      A.S.sort.key === 'priority' && (await A.click('resetFilters'), A.S.sort.key === 'priority' && A.S.filters.emp === ''));
+    await A.click('sortBy', (d) => d.key === 'priority'); await A.click('sortBy', (d) => d.key === 'priority');   // ↓ → выкл
+
+    // R-5: оформление шапки и зебры (CSS-текст из модуля + контраст)
+    const lum = (hex) => { const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+    const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+    const thCss = /\.tk-table th\{([^}]*)\}/.exec(SRC)[1];
+    const thBg = /background:(#[0-9a-f]{6})/i.exec(thCss)[1], thFg = /;color:(#[0-9a-f]{6})/i.exec(thCss)[1];
+    const zebra = /\.tk-table tbody tr:nth-child\(even\)\{background:(#[0-9a-f]{6})\}/i.exec(SRC);
+    check('V6-1 R-5 шапка: жирная, с фоном, явной нижней границей, sticky; контраст текста ≥ 4.5:1',
+      /font-weight:700/.test(thCss) && /position:sticky;top:0/.test(thCss) && /border-bottom:2px solid/.test(thCss) && contrast(thBg, thFg) >= 4.5, thBg + ' ' + thFg + ' ' + contrast(thBg, thFg).toFixed(2));
+    check('V6-1 R-5 зебра строк (чётные строки), контраст текста строки (#1A2B49) на зебре ≥ 4.5:1; sticky работает: у .tk-tablewrap есть max-height (своя прокрутка)',
+      zebra && contrast(zebra[1], '#1A2B49') >= 4.5 && /\.tk-tablewrap\{[^}]*max-height:/.test(SRC), zebra && zebra[1]);
+
+    // R-12 / R-13: клик по метке, приоритету, статусу (плитка Доски и карточка)
+    await A.click('resetFilters');
+    await A.filter('emp', 'v61_a');
+    await A.click('setView', (d) => d.view === 'board');
+    check('V6-1 R-12/13 плитка Доски: метка, приоритет и статус — кликабельные теги (filterBy), метка экранирована',
+      A.has('data-f="label" data-v="' + A.T.__t.esc(LABEL) + '"') && A.has('data-f="priority" data-v="1"') && A.has('data-f="status" data-v="open"') && A.has('role="button"'));
+    await A.click('filterBy', (d) => d.f === 'label');
+    check('V6-1 R-12 клик по метке плитки → «Список», фильтры сброшены, filters.label = метка (спецсимволы целы), строка этой метки видна',
+      A.S.view === 'list' && A.S.filters.label === LABEL && !A.S.filters.emp && !A.S.filters.priority && !A.S.filters.status && !A.S.filters.due && A.has('V61 Отпуск и больничный') && !A.has('V61 Здоровый'), JSON.stringify(A.S.filters));
+    await A.T.open({ view: 'board', taskId: vY.id });
+    await A.settle();
+    check('V6-1 R-12/13 карточка .tk-detail: те же теги (метка, приоритет, статус) кликабельны',
+      /<aside class="tk-detail">[\s\S]*data-f="status"[\s\S]*data-f="priority" data-v="3"[\s\S]*data-f="label" data-v="v61b"/.test(A.root.innerHTML));
+    A.S.filters.priority = '2'; A.S.filters.status = 'closed';   // «грязные» фильтры: клик должен их сбросить
+    await A.click('filterBy', (d) => d.f === 'priority' && d.v === '3' && A.root.innerHTML.indexOf('class="tk-detail"') >= 0);
+    check('V6-1 R-13 клик по приоритету в карточке → «Список», filters.priority = 3, остальные сброшены (и «грязный» status тоже)',
+      A.S.view === 'list' && A.S.filters.priority === '3' && A.S.filters.status === '' && A.S.filters.label === '' && A.has('V61 Здоровый') && !A.has('V61 Отпуск и больничный'), JSON.stringify(A.S.filters));
+    await A.T.open({ view: 'board', taskId: vS2.id });
+    await A.settle();
+    await A.click('filterBy', (d) => d.f === 'status' && d.v === 'closed');
+    check('V6-1 R-13 клик по статусу «Закрыта» → «Список», filters.status = closed; закрытая видна, открытая — нет',
+      A.S.view === 'list' && A.S.filters.status === 'closed' && A.has('V61 s2 высокий закрыт') && !A.has('V61 s1 обычный открыт'), JSON.stringify(A.S.filters));
+    A.T.__t.ACTIONS.filterBy({ dataset: { f: 'emp', v: 'x' } });
+    check('V6-1 R-12 filterBy принимает только label/priority/status (чужие поля игнорируются)', A.S.filters.emp === '' && A.S.filters.status === 'closed');
+    // клавиатура: Enter/Space на теге = клик
+    await A.click('resetFilters');
+    await A.T.open({ view: 'board', taskId: vS1.id });
+    await A.settle();
+    const kt = A.findTag('data-tk-act', 'filterBy', (d) => d.f === 'priority');
+    const ktEl = { dataset: kt.dataset, closest() { return ktEl; } };
+    A.root.fire('keydown', { key: 'Enter', target: ktEl, preventDefault() {} });
+    await A.settle();
+    check('V6-1 R-13 тег доступен с клавиатуры (Enter) — то же действие', A.S.view === 'list' && A.S.filters.priority === '2', JSON.stringify(A.S.filters));
+
+    // R-14: ФИО → «Список» (из Списка, Доски и карточки), остальные фильтры сброшены
+    await A.T.open({ view: 'board', taskId: vX.id });
+    await A.settle();
+    A.S.filters.priority = '3'; A.S.filters.label = 'zzz';
+    const insideDetail = /<aside class="tk-detail">[\s\S]*data-tk-act="filterEmp" data-emp="v61_a"/.test(A.root.innerHTML);
+    await A.click('filterEmp', (d) => d.emp === 'v61_a');
+    check('V6-1 R-14 клик по ФИО в карточке Доски → «Список», filters.emp = id, остальные фильтры сброшены, выбор карточки снят',
+      insideDetail && A.S.view === 'list' && A.S.filters.emp === 'v61_a' && A.S.filters.priority === '' && A.S.filters.label === '' && A.S.selectedId === null && A.has('V61 Отпуск и больничный'), JSON.stringify(A.S.filters));
+    A.S.filters.status = 'open'; A.T.__t.render();
+    await A.click('filterEmp', (d) => d.emp === 'v61_a');
+    check('V6-1 R-14 клик по ФИО в самом Списке: остаётся «Список», лишние фильтры сброшены', A.S.view === 'list' && A.S.filters.status === '' && A.S.filters.emp === 'v61_a');
+
+    // R-7 + R-15: карточка с отпуском
+    await A.click('resetFilters');
+    await A.T.open({ view: 'board', taskId: vX.id });
+    await A.settle();
+    const det = A.root.innerHTML.slice(A.root.innerHTML.indexOf('<aside class="tk-detail">'));
+    const vacLis = det.match(/<li class="tk-note-vac"[^>]*>[\s\S]*?<\/li>/g) || [];
+    check('V6-1 R-7 в «Пометках» строки vacation/day_off — плашки .tk-note-vac (3 отпуска + 1 отгул); праздники/выходные — обычные <li> без плашки',
+      vacLis.length === 4 && /data-tk-note="day_off"/.test(vacLis.join('')) && (det.match(/<li>/g) || []).length >= 2 && !/<li class="tk-note-vac"[^>]*>[^<]*(выходной|праздник)/.test(det), vacLis.length + ' ' + ((det.match(/<li>/g) || []).length));
+    const vacCss = /\.tk-notes li\.tk-note-vac\{([^}]*)\}/.exec(SRC)[1];
+    check('V6-1 R-7 CSS плашки: яркий оранжевый (#ff8a00) + repeating-linear-gradient(45deg, мелкая бледная штриховка ≤ 5px шаг); контраст текста ≥ 4.5:1',
+      (() => { const g = /repeating-linear-gradient\(45deg,rgba\(255,255,255,(\.\d+)\) 0,rgba\(255,255,255,\.\d+\) ([\d.]+)px,rgba\(255,255,255,0\) [\d.]+px,rgba\(255,255,255,0\) ([\d.]+)px\)/.exec(vacCss); return !!g && +g[1] <= 0.4 && +g[3] <= 5; })() && /#ff8a00/i.test(vacCss) &&
+      contrast('#ff8a00', '#1a2b49') >= 4.5, contrast('#ff8a00', '#1a2b49').toFixed(2));
+    const openLink = A.findTag('data-tk-act', 'openMatrix', null, vacLis[0]);
+    check('V6-1 R-15 ФИО в пометке отпуска — ссылка openMatrix с id сотрудника и датой пометки',
+      openLink && openLink.dataset.emp === 'v61_a' && openLink.dataset.date === '2099-12-02' && /<a [^>]*>Отпускник Тестович<\/a>/.test(vacLis[0]), vacLis[0]);
+    const dayOffLink = A.findTag('data-tk-act', 'openMatrix', (d) => d.date === '2099-12-08');
+    check('V6-1 R-15 у отгула ссылка тоже есть (дата отгула)', !!dayOffLink && dayOffLink.dataset.emp === 'v61_a');
+    await A.click('openMatrix', (d) => d.date === '2099-12-03');
+    check('V6-1 R-15 клик → window.openMatrixAt({employeeId, date}) вызван ровно один раз с id сотрудника и датой пометки',
+      hasMatrixCalls.length === 1 && hasMatrixCalls[0].employeeId === 'v61_a' && hasMatrixCalls[0].date === '2099-12-03', JSON.stringify(hasMatrixCalls));
+    // имя сотрудника с HTML — экранировано в пометке и в «!»
+    const vZ = await mkV('V61 html-имя', { assignees: ['v61_x'] });
+    const dbq = sdb();
+    dbq.prepare("INSERT OR REPLACE INTO schedule_entries (employee_id, date, status, comment, approval_status, updated_at, version) VALUES ('v61_x', '2099-12-05', 'vacation', NULL, 'draft', '2099-01-01', 1)").run();
+    dbq.close();
+    await A.T.open({ view: 'board', taskId: vZ.id });
+    await A.settle();
+    check('V6-1 R-7/R-15 имя сотрудника с HTML в пометке экранировано (нет сырого <b>Тегович</b>)',
+      A.has('Взлом &lt;b&gt;Тегович&lt;/b&gt;') && !A.has('<b>Тегович</b>'));
+    // неопознанный сотрудник (нет в справочнике) — без ссылки
+    A.S.tasks = A.S.tasks.map((t) => t.id === vZ.id ? Object.assign({}, t, { notes: [{ date: '2099-12-05', employee_id: 'ghost_1', kind: 'vacation', label: null }] }) : t);
+    A.T.__t.render();
+    check('V6-1 R-15 сотрудник не найден в справочнике → плашка без ссылки (нет «мёртвого» клика)', A.has('tk-note-vac') && !A.has('data-tk-act="openMatrix"'));
+    // экспорт openMatrixAt в index.html — одна вставка, ищет строку по id (не по индексу), без правок стилей матрицы
+    check('V6-1 R-15 index.html: ровно одно определение window.openMatrixAt; строка ищется по [data-emp-id]/[data-emp], не по индексу',
+      (INDEX.match(/window\.openMatrixAt\s*=/g) || []).length === 1 && /\.name-col\[data-emp-id="' \+ empKey/.test(INDEX) && !/rows\[\s*\w+\s*\]/.test(INDEX.slice(INDEX.indexOf('window.openMatrixAt ='), INDEX.indexOf('return { year: year, row: row, cell: cell }'))));
+
+    // R-4: Доска — три колонки равной ширины
+    await A.click('setView', (d) => d.view === 'board');
+    const bh = A.root.innerHTML;
+    check('V6-1 R-4 Доска: сетка tk-split-board, внутри колонки Открыта, Закрыта и карточка .tk-detail (3 элемента на одном уровне сетки)',
+      /class="tk-split tk-split-board"/.test(bh) && /data-tk-col="open"/.test(bh) && /data-tk-col="closed"/.test(bh) && /<aside class="tk-detail">/.test(bh));
+    check('V6-1 R-4 CSS: 3 равные колонки repeat(3,minmax(0,1fr)), «Без исполнителя» на всю ширину (grid-column:1/-1), ≤760px — одна колонка',
+      /\.tk-split-board\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/.test(SRC) && /\.tk-split-board \.tk-sec\{grid-column:1\/-1/.test(SRC) &&
+      /@media \(max-width:760px\)\{\.tk-split-board\{grid-template-columns:minmax\(0,1fr\)\}/.test(SRC));
+    check('V6-1 R-4 Календарь не затронут: renderCalendar по-прежнему на .tk-split (flex), без tk-split-board',
+      !/renderCalendar[\s\S]{0,2500}tk-split-board/.test(SRC.slice(SRC.indexOf('function renderCalendar'), SRC.indexOf('function renderDetail'))));
+
     // ---------- supervisor / viewer ----------
     for (const [label, ck] of [['supervisor', supCk], ['viewer', viewCk]]) {
       const R = makeEnv(base, ck);
@@ -969,6 +1248,19 @@ async function main() {
       await R.settle();
       scan();
       check('R-' + label + '-3 календарь + карточка: элементов записи нет, плитки и карточка читаются', seen.length === 0 && R.count('class="tk-ev') >= 3 && R.has('Шаг два'), seen.join(','));
+      // V6-1 (R-12…R-14, R-17): клики-фильтры и сортировка доступны без прав записи
+      const flow = [];
+      await R.T.open({ view: 'board', taskId: tid }); await R.settle(); scan();
+      await R.click('filterBy', (d) => d.f === 'label' && d.v === 'e2e'); scan(); flow.push(R.S.view === 'list' && R.S.filters.label === 'e2e' && R.has('tk-table'));
+      await R.T.open({ view: 'board', taskId: tid }); await R.settle();
+      await R.click('filterBy', (d) => d.f === 'priority' && d.v === '1'); scan(); flow.push(R.S.view === 'list' && R.S.filters.priority === '1' && !R.S.filters.label);
+      await R.T.open({ view: 'board', taskId: tid }); await R.settle();
+      await R.click('filterBy', (d) => d.f === 'status'); scan(); flow.push(R.S.view === 'list' && R.S.filters.status === 'open' && !R.S.filters.priority);
+      await R.click('filterEmp', (d) => d.emp === e1); scan(); flow.push(R.S.view === 'list' && R.S.filters.emp === e1 && !R.S.filters.status);
+      await R.click('sortBy', (d) => d.key === 'priority'); scan(); flow.push(R.S.sort.key === 'priority' && R.S.sort.dir === 'asc' && R.S.filters.emp === e1);
+      await R.click('sortBy', (d) => d.key === 'priority'); await R.click('sortBy', (d) => d.key === 'priority'); flow.push(R.S.sort.key === '');
+      check('R-' + label + '-6 V6-1: клики по метке/приоритету/статусу/ФИО ведут в «Список» с фильтром, сортировка работает; кнопок правки и «Переназначить» нет',
+        flow.every(Boolean) && seen.length === 0, flow.join(',') + ' ' + seen.join(',') + ' ' + JSON.stringify(R.S.filters) + R.S.view);
       // принудительные вызовы обработчиков записи — защита в самом модуле
       const postsBefore = R.calls.filter((c) => c.method !== 'GET').length;
       R.T.__t.ACTIONS.newTask({ dataset: {} });
