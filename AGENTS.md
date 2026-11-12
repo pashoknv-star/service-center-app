@@ -30,7 +30,7 @@ These instructions apply to this project. Keep them operational and concise; dur
 - **Одна команда:** `bash scripts/verify_all.sh` (все сьюты) или `bash scripts/verify_all.sh e51 e52` (выборочно). Exit 0 и строка `GATE: PASS` — gate пройден; exit 1 — провал; exit 2 — прогон не начат (например, незакоммиченная `data/app.db`). В квитанцию и ревью прикладывать итоговую таблицу скрипта целиком.
 - Задача или фаза считается выполненной **только** при зелёном прогоне: код выхода 0 и итоговая строка без падений (`RESULTS: N passed, 0 failed`, `RESULT: N passed, 0 failed`, `ALL TESTS PASSED`, `OK`). Без вывода прогона статус done / «готово» не ставится, Kanban-задача не закрывается.
 - Во время итераций — только релевантный сьют (см. ниже). Перед закрытием фазы и перед деплоем — **все** сьюты из таблицы.
-- Эталон числа тестов — массив `BASELINE` в `scripts/verify_all.sh` (единственный источник; на 2026-11-12 (V6-1..V6-3): smoke 84, e51 23, e52 41, hygiene 19, trips 7, tasks 47, tasksn8n 25, tasksui 187, tasksmx 71, taskscal 110, director 70). Тестов меньше эталона — FAIL. Добавили тесты — поднять `BASELINE` в том же коммите.
+- Эталон числа тестов — массив `BASELINE` в `scripts/verify_all.sh` (единственный источник; на 2026-11-13 (V6-1..V6-5): smoke 84, e51 23, e52 41, hygiene 19, trips 7, tasks 47, tasksn8n 25, tasksui 194, tasksmx 71, taskscal 112, director 70). Тестов меньше эталона — FAIL. Добавили тесты — поднять `BASELINE` в том же коммите.
 - Ручные команды по сьютам (для отладки одного падения):
 
 | Сьют | Команда | Критерий |
