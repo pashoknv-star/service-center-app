@@ -71,7 +71,7 @@
     view: 'list',                 // list | board | calendar
     filters: { emp: '', due: '', priority: '', label: '', status: '' },
     selectedId: null,
-    cal: { mode: 'week', anchor: null, emp: '', only: false },
+    cal: { mode: 'week', anchor: null, emp: '', only: false, adAll: false, scrollTop: null, scrollLeft: 0, fresh: false },
     form: null,                   // { id, version, draft, blocked, error } | null
     msg: null,                    // { type: 'error'|'ok'|'info', text }
     loading: false,
@@ -470,30 +470,130 @@
     }
     return '';
   }
-  function tileHtml(t, date) {
+  // ---- V6-2: календарь по часам (Неделя / День), как в Outlook
+  var CAL_HOUR_PX = 48;            // высота часа; 24 равные строки = 1152 px (полчаса = 24 px)
+  var CAL_SLOT_MIN = 30;           // шаг ячейки (клик → форма)
+  var CAL_MIN_DUR = 30;            // минимальная длительность плитки, мин
+  var CAL_DEF_DUR = 60;            // задача только с началом = 1 час
+  var CAL_SCROLL_H = 8;            // при открытии прокрутка к 08:00
+  var CAL_AD_MAX = 3;              // плиток в полосе «Весь день» до «+N ещё»
+  var CAL_GUT_PX = 46;             // колонка часов
+  var CAL_COL_MIN_PX = 96;         // минимальная ширина колонки дня (на узком экране — горизонтальная прокрутка)
+
+  function minOf(hm) {
+    var m = /^(\d{2}):(\d{2})/.exec(String(hm || ''));
+    return m ? (+m[1]) * 60 + (+m[2]) : null;
+  }
+  function hhmm(min) { return pad(Math.floor(min / 60)) + ':' + pad(min % 60); }
+  function round4(x) { return Math.round(x * 10000) / 10000; }
+
+  // R-3: список времени «—, 00:00, 00:30 … 23:30»; некратное 30 мин значение остаётся отдельным выбранным пунктом.
+  function timeOptionsHtml(value) {
+    var v = String(value || ''), items = [{ value: '', label: '—' }], m, i;
+    for (m = 0; m < 1440; m += CAL_SLOT_MIN) items.push({ value: hhmm(m), label: hhmm(m) });
+    if (v && !items.some(function (it) { return it.value === v; })) {
+      for (i = 1; i < items.length && items[i].value < v; i++) { /* позиция по порядку */ }
+      items.splice(i, 0, { value: v, label: v });
+    }
+    return optionsHtml(items, v);
+  }
+  function timeSelectHtml(field, value) {
+    return '<select class="tk-time" data-tk-field="' + field + '">' + timeOptionsHtml(value) + '</select>';
+  }
+
+  // R-9: интервал плитки в минутах от 00:00 для задачи одного дня со временем начала; иначе null («Весь день»).
+  function calSlotOf(t) {
+    if (t.first_day !== t.last_day) return null;
+    var s = minOf(timeOf(t.start_at));
+    if (s == null) return null;
+    var e = t.end_at ? minOf(timeOf(t.end_at)) : null;
+    if (e == null) e = s + CAL_DEF_DUR;
+    if (e < s + CAL_MIN_DUR) e = s + CAL_MIN_DUR;
+    if (e > 1440) e = 1440;
+    return { s: s, e: e };
+  }
+
+  // R-11: классическая раскладка колонок (Outlook/Google). items: [{s, e, k}] (минуты, e > s; k — ключ для стабильной сортировки).
+  // Группа = транзитивно пересекающиеся интервалы; внутри группы — жадное назначение дорожки;
+  // все плитки группы получают cols = число дорожек группы. Касание концов (e == s) — не пересечение.
+  function calLayout(items) {
+    var sorted = items.slice().sort(function (a, b) { return a.s - b.s || b.e - a.e || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0); });
+    var cluster = [], colEnd = [], clusterEnd = -1;
+    function flush() {
+      for (var i = 0; i < cluster.length; i++) cluster[i].cols = colEnd.length;
+      cluster = []; colEnd = []; clusterEnd = -1;
+    }
+    sorted.forEach(function (it) {
+      if (cluster.length && it.s >= clusterEnd) flush();
+      var c = 0;
+      while (c < colEnd.length && colEnd[c] > it.s) c++;
+      colEnd[c] = it.e;
+      it.col = c;
+      cluster.push(it);
+      if (it.e > clusterEnd) clusterEnd = it.e;
+    });
+    flush();
+    return sorted;
+  }
+
+  // R-10: черновик новой задачи по клику на ячейку (день, начало в минутах): «Период» в пределах дня, конец = +1 ч.
+  // Выбран «Период», а не «Срок (один день)»: у однодневного срока есть только начало, конец (время) задать нельзя.
+  function calSlotDraft(date, startMin) {
+    var endMin = startMin + 60;
+    return { kind: 'period', startDate: date, startTime: hhmm(startMin), endDate: date, endTime: endMin >= 1440 ? '23:59' : hhmm(endMin) };
+  }
+
+  function tileWhen(t, date) {
     var first = t.first_day, last = t.last_day, st = timeOf(t.start_at), et = timeOf(t.end_at);
-    var when;
-    if (first === last) when = st ? st + (et ? '–' + et : '') : '';
-    else if (date === first) when = (st ? st + ' ' : '') + '→';
-    else if (date === last) when = '→' + (et ? ' ' + et : '');
-    else when = '…продолжение';
-    var orph = isOrphan(t);
+    if (first === last) return st ? st + (et ? '–' + et : '') : '';
+    if (date === first) return (st ? st + ' ' : '') + '→';
+    if (date === last) return '→' + (et ? ' ' + et : '');
+    return '…';
+  }
+  // R-6: плитка = время + тема (жирно) + значки; исполнители — только в подсказке (title) и в карточке.
+  function tileHtml(t, date, pos) {
+    var when = tileWhen(t, date), orph = isOrphan(t);
     var names = assigneeNames(t).join(', ');
     var vac = (t.notes || []).filter(function (n) { return n.date === date && (n.kind === 'vacation' || n.kind === 'day_off'); });
     var hl = S.cal.emp && hasAssignee(t, S.cal.emp);
-    var max = S.cal.mode === 'day' ? 140 : 48;
+    var tip = [t.title];
+    if (when) tip.push(when === '…' ? 'продолжение' : when);
+    tip.push(orph ? plateText(t) : (names ? 'Исполнители: ' + names : ''));
+    if (vac.length) tip.push(NOTE_TEXT[vac[0].kind]);
+    if (t.conflict) tip.push('Конфликт' + (conflictReasons(t).length ? ': ' + conflictReasons(t).join(', ') : ''));
+    if (t.check_state === 'pending') tip.push('Не проверено');
+    var style = '', cls = pos ? ' tk-ev-t' + (pos.h < 40 ? ' tk-ev-s' : '') + (pos.cols >= 3 && S.cal.mode === 'week' ? ' tk-ev-n' : '') : ' tk-ev-ad', data = '';
+    if (pos) {
+      style = ' style="top:' + pos.top + 'px;height:' + pos.h + 'px;left:' + round4(pos.col * 100 / pos.cols) + '%;width:calc(' + round4(100 / pos.cols) + '% - 6px)"';
+      data = ' data-col="' + pos.col + '" data-cols="' + pos.cols + '" data-s="' + pos.s + '" data-e="' + pos.e + '"';
+    }
     return '<div class="tk-ev' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.conflict ? ' tk-conf' : '') +
-      (orph ? ' tk-orph' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" title="' + esc(t.title + (orph ? ' — ' + plateText(t) : '')) + '">' +
+      (orph ? ' tk-orph' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + cls + '" data-tk-act="openTask" data-id="' + esc(t.id) + '"' + data + style +
+      ' title="' + esc(tip.filter(Boolean).join('\n')) + '">' +
       (when ? '<span class="tk-ev-when">' + esc(when) + '</span> ' : '') +
-      (orph ? '<b class="tk-orph-lbl">без исполнителя</b>' : '<b>' + esc(names) + '</b>') +
-      '<div class="tk-ev-desc">' + esc(truncate(t.description || t.title, max)) + '</div>' +
-      (vac.length ? '<span class="tk-tag tk-neutral">' + esc(NOTE_TEXT[vac[0].kind]) + '</span>' : '') +
-      (t.conflict ? '<span class="tk-tag tk-warn">⚠ конфликт</span>' : '') +
-      (t.check_state === 'pending' ? '<span class="tk-tag tk-pending">не проверено</span>' : '') + '</div>';
+      '<b class="tk-ev-title">' + esc(t.title) + '</b>' +
+      (orph ? '<span class="tk-ev-ic tk-ic-orph" title="Без исполнителя">0</span>' : '') +
+      (t.conflict ? '<span class="tk-ev-ic tk-ic-conf" title="Конфликт">!</span>' : '') +
+      (t.check_state === 'pending' ? '<span class="tk-ev-ic tk-ic-pend" title="Не проверено">?</span>' : '') + '</div>';
+  }
+  function calDayTasks(tasks, d) {
+    return tasks.filter(function (t) { return t.first_day <= d && d <= t.last_day; });
+  }
+  // раскладка одного дня: { timed: [{t, s, e, col, cols}], allDay: [t] }
+  function calDayLayout(tasks, d) {
+    var timed = [], allDay = [];
+    calDayTasks(tasks, d).forEach(function (t) {
+      var sl = calSlotOf(t);
+      if (sl) timed.push({ t: t, s: sl.s, e: sl.e, k: String(t.id) }); else allDay.push(t);
+    });
+    allDay.sort(function (a, b) { return String(a.title).localeCompare(String(b.title)); });
+    calLayout(timed);
+    return { d: d, timed: timed, allDay: allDay };
   }
   function renderCalendar() {
     var days = calDays();
     var today = todayYmd();
+    var canClick = canWrite();
     var tasks = S.tasks.filter(function (t) { return !(S.cal.only && S.cal.emp) || hasAssignee(t, S.cal.emp); });
     var h = '<div class="tk-filters">' +
       '<button type="button" class="tk-btn" data-tk-act="calPrev">◀</button>' +
@@ -507,26 +607,69 @@
     if (S.cal.emp) {
       h += '<label class="tk-check"><input type="checkbox" data-tk-filter="calOnly"' + (S.cal.only ? ' checked' : '') + '> только выбранный</label>';
     }
-    h += '</div><div class="tk-split"><div class="tk-wk" style="grid-template-columns:repeat(' + days.length + ',minmax(0,1fr))">';
+    var cols = 'grid-template-columns:' + CAL_GUT_PX + 'px repeat(' + days.length + ',minmax(0,1fr))';
+    var inW = CAL_GUT_PX + days.length * (days.length === 1 ? 160 : CAL_COL_MIN_PX);
+    h += '</div><div class="tk-split"><div class="tk-wk" data-tk-cal="' + esc(S.cal.mode) + '"><div class="tk-cal-in" style="min-width:' + inW + 'px">';
+    // шапка
+    h += '<div class="tk-cal-hd" style="' + cols + '"><div class="tk-gut"></div>';
     days.forEach(function (d) {
       var wd = dowOf(d), hol = holidayLabelFor(d);
-      h += '<div class="tk-wk-h' + (wd === 0 || wd === 6 ? ' tk-we' : '') + (d === today ? ' tk-today' : '') + '"><b>' + esc(fmtDay(d)) + '</b>' +
-        (hol ? '<span class="tk-tag tk-neutral">' + esc(hol) + '</span>' : '') + '</div>';
+      h += '<div class="tk-wk-h' + (wd === 0 || wd === 6 ? ' tk-we' : '') + (d === today ? ' tk-today' : '') + '" data-date="' + d + '"><b>' + esc(fmtDay(d)) + '</b>' +
+        (hol ? ' <span class="tk-tag tk-neutral" title="' + esc(hol) + '">' + esc(truncate(hol, 14)) + '</span>' : '') + '</div>';
     });
-    days.forEach(function (d) {
-      var wd = dowOf(d);
-      var dayTasks = tasks.filter(function (t) { return t.first_day <= d && d <= t.last_day; })
-        .sort(function (a, b) {
-          var ta = a.first_day === d ? timeOf(a.start_at) : '', tb = b.first_day === d ? timeOf(b.start_at) : '';
-          return ta === tb ? String(a.title).localeCompare(String(b.title)) : (ta < tb ? -1 : 1);
-        });
-      h += '<div class="tk-wk-c' + (wd === 0 || wd === 6 ? ' tk-we' : '') + '">' +
-        (dayTasks.map(function (t) { return tileHtml(t, d); }).join('') || '') + '</div>';
+    h += '</div>';
+    var perDay = days.map(function (d) { return calDayLayout(tasks, d); });
+    // «Весь день»: задачи без времени и многодневные
+    var overflow = perDay.some(function (x) { return x.allDay.length > CAL_AD_MAX; });
+    var open = !!S.cal.adAll;
+    h += '<div class="tk-cal-ad' + (open ? ' tk-ad-open' : '') + '" data-tk-ad="1" style="' + cols + '"><div class="tk-gut tk-gut-ad">Весь день</div>';
+    perDay.forEach(function (x, i) {
+      var wd = dowOf(x.d), shown = open ? x.allDay : x.allDay.slice(0, CAL_AD_MAX);
+      h += '<div class="tk-ad-c' + (wd === 0 || wd === 6 ? ' tk-we' : '') + '" data-date="' + x.d + '">' +
+        shown.map(function (t) { return tileHtml(t, x.d); }).join('') +
+        (!open && x.allDay.length > shown.length
+          ? '<button type="button" class="tk-ad-more" data-tk-act="calAdToggle">+' + (x.allDay.length - shown.length) + ' ещё</button>' : '') +
+        (open && overflow && i === 0 ? '<button type="button" class="tk-ad-more" data-tk-act="calAdToggle">свернуть</button>' : '') + '</div>';
     });
-    h += '</div>' + renderDetail() + '</div>';
-    var anyTile = days.some(function (d) { return tasks.some(function (t) { return t.first_day <= d && d <= t.last_day; }); });
+    h += '</div>';
+    // сетка часов 00:00 … 24:00
+    var now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+    h += '<div class="tk-cal-bd" style="' + cols + '"><div class="tk-gut">';
+    for (var hr = 0; hr < 24; hr++) h += '<div class="tk-hr">' + pad(hr) + ':00</div>';
+    h += '</div>';
+    perDay.forEach(function (x) {
+      var wd = dowOf(x.d);
+      h += '<div class="tk-day' + (wd === 0 || wd === 6 ? ' tk-we' : '') + (canClick ? ' tk-can' : '') + '" data-date="' + x.d + '">';
+      for (var m = 0; m < 1440; m += CAL_SLOT_MIN) {
+        h += '<div class="tk-slot' + (m % 60 ? ' tk-half' : '') + '"' +
+          (canClick ? ' data-tk-act="calCell" data-date="' + x.d + '" data-min="' + m + '"' : '') + '></div>';
+      }
+      x.timed.forEach(function (it) {
+        var top = round4(it.s * CAL_HOUR_PX / 60), ht = Math.max(round4((it.e - it.s) * CAL_HOUR_PX / 60), 18);
+        h += tileHtml(it.t, x.d, { top: top, h: ht, col: it.col, cols: it.cols, s: it.s, e: it.e });
+      });
+      if (x.d === today) h += '<div class="tk-now" style="top:' + round4(nowMin * CAL_HOUR_PX / 60) + 'px" title="Сейчас ' + hhmm(nowMin) + '"></div>';
+      h += '</div>';
+    });
+    h += '</div></div></div>' + renderDetail() + '</div>';
+    var anyTile = perDay.some(function (x) { return x.timed.length || x.allDay.length; });
     if (!anyTile && !S.loading) h += '<p class="tk-empty">На этот период задач нет.</p>';
     return h;
+  }
+  // прокрутка календаря: render() перерисовывает всё — запоминаем положение, а при первом открытии идём к 08:00
+  function calEl() {
+    return DOM.root && typeof DOM.root.querySelector === 'function' ? DOM.root.querySelector('.tk-wk') : null;
+  }
+  function calScrollSave() {
+    var el = calEl();
+    if (el && !S.cal.fresh) { S.cal.scrollTop = el.scrollTop; S.cal.scrollLeft = el.scrollLeft; }
+  }
+  function calScrollApply() {
+    var el = calEl();
+    if (!el) return;
+    if (S.cal.fresh) { S.cal.scrollTop = null; S.cal.scrollLeft = 0; S.cal.fresh = false; }
+    el.scrollTop = S.cal.scrollTop == null ? CAL_SCROLL_H * CAL_HOUR_PX : S.cal.scrollTop;
+    if (S.cal.scrollLeft) el.scrollLeft = S.cal.scrollLeft;
   }
 
   // --- карточка (справа)
@@ -582,13 +725,16 @@
   }
 
   // --- форма (только admin)
-  function emptyDraft() {
+  function emptyDraft(pre) {
     var d = S.view === 'calendar' ? (S.cal.anchor || todayYmd()) : todayYmd();
-    return {
+    var dr = {
       title: '', description: '', assignees: S.filters.emp ? [S.filters.emp] : [],
       watchers: [], kind: 'single', startDate: d, startTime: '', endDate: d, endTime: '',
       priority: 2, label: '', checklist: []
     };
+    // V6-2 (R-10): дата/время из клика по ячейке календаря
+    if (pre) ['kind', 'startDate', 'startTime', 'endDate', 'endTime'].forEach(function (k) { if (pre[k] !== undefined) dr[k] = pre[k]; });
+    return dr;
   }
   function draftFromTask(t) {
     return {
@@ -640,8 +786,8 @@
       '<label><input type="radio" name="tkKind" data-tk-field="kind" value="single"' + (d.kind === 'single' ? ' checked' : '') + '> Срок (один день)</label>' +
       '<label><input type="radio" name="tkKind" data-tk-field="kind" value="period"' + (d.kind === 'period' ? ' checked' : '') + '> Период</label></div>' +
       '<div class="tk-dt"><span>' + (d.kind === 'period' ? 'Начало' : 'Дата') + '</span>' +
-      '<input type="date" data-tk-field="startDate" value="' + esc(d.startDate) + '"> <input type="time" data-tk-field="startTime" value="' + esc(d.startTime) + '"></div>' +
-      (d.kind === 'period' ? '<div class="tk-dt"><span>Конец</span><input type="date" data-tk-field="endDate" value="' + esc(d.endDate) + '"> <input type="time" data-tk-field="endTime" value="' + esc(d.endTime) + '"></div>' : ''));
+      '<input type="date" data-tk-field="startDate" value="' + esc(d.startDate) + '"> ' + timeSelectHtml('startTime', d.startTime) + '</div>' +
+      (d.kind === 'period' ? '<div class="tk-dt"><span>Конец</span><input type="date" data-tk-field="endDate" value="' + esc(d.endDate) + '"> ' + timeSelectHtml('endTime', d.endTime) + '</div>' : ''));
     h += fieldRow('Приоритет', '<select data-tk-field="priority">' + optionsHtml([
       { value: 1, label: '1 — высокий' }, { value: 2, label: '2 — обычный' }, { value: 3, label: '3 — низкий' }], d.priority) + '</select>');
     h += fieldRow('Метка', '<input type="text" maxlength="50" list="tkLabels" data-tk-field="label" value="' + esc(d.label) + '">' +
@@ -660,14 +806,19 @@
 
   function render() {
     if (!DOM.root) return;
+    var showForm = !!(S.form && canWrite());
+    var showCal = !showForm && S.view === 'calendar';
+    calScrollSave();                                   // V6-2: запомнить прокрутку календаря перед перерисовкой
+    if (!showForm && !showCal) S.cal.scrollTop = null; // ушли из календаря — при возврате снова 08:00
     var h = '<div class="tk-wrap">' + renderBar() + renderMsg();
     if (S.loadError) h += '<div class="tk-msg tk-msg-error">' + esc(S.loadError) + '</div>';
-    if (S.form && canWrite()) h += renderForm();
+    if (showForm) h += renderForm();
     else if (S.view === 'board') h += renderBoard();
     else if (S.view === 'calendar') h += renderCalendar();
     else h += renderList();
     h += '</div>';
     DOM.root.innerHTML = h;
+    if (showCal) calScrollApply();
     if (!S.form && typeof DOM.root.querySelector === 'function') {
       var sel = DOM.root.querySelector('.tk-sel');
       if (sel && sel.scrollIntoView) { try { sel.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ } }
@@ -843,10 +994,10 @@
   }
 
   // ---------------------------------------------------------------- actions
-  function openForm(id, focus) {
+  function openForm(id, focus, pre) {
     if (!canWrite()) return;
     var t = id ? findTask(id) : null;
-    S.form = { id: t ? t.id : null, version: t ? t.version : null, draft: t ? draftFromTask(t) : emptyDraft(), blocked: null, error: '', focus: focus || '' };
+    S.form = { id: t ? t.id : null, version: t ? t.version : null, draft: t ? draftFromTask(t) : emptyDraft(pre), blocked: null, error: '', focus: focus || '' };
     S.msg = null;
     render();
     if (focus === 'assignees' && DOM.root.querySelector) {
@@ -946,7 +1097,16 @@
     calPrev: function () { shiftCal(-1); },
     calNext: function () { shiftCal(1); },
     calToday: function () { S.cal.anchor = todayYmd(); load(); },
-    calMode: function (el) { S.cal.mode = el.dataset.mode === 'day' ? 'day' : 'week'; load(); }
+    calMode: function (el) { S.cal.mode = el.dataset.mode === 'day' ? 'day' : 'week'; load(); },
+    // V6-2 (R-10): клик по пустой ячейке (день, полчаса) → «Новая задача»; только admin
+    calCell: function (el) {
+      if (!canWrite()) return;
+      var date = el.dataset.date, m = +el.dataset.min;
+      if (!parseYmd(date) || !(m >= 0 && m < 1440)) return;
+      openForm(null, '', calSlotDraft(date, m));
+    },
+    // V6-2: «+N ещё» в полосе «Весь день» — развернуть/свернуть
+    calAdToggle: function () { S.cal.adAll = !S.cal.adAll; render(); }
   };
 
   function shiftCal(dir) {
@@ -1087,6 +1247,7 @@
       if (opts.mode === 'day' || opts.mode === 'week') S.cal.mode = opts.mode;
       S.cal.emp = emp;
       S.cal.only = false;
+      S.cal.fresh = true;            // V6-2: открытие из матрицы/извне — снова прокрутка к 08:00
     } else {
       S.filters.emp = emp;
     }
@@ -1440,15 +1601,44 @@
       '.tk-box-warn{border-color:var(--sick-red);background:rgba(244,67,54,.07)}' +
       '.tk-box-pending{border-color:#d4b106;background:#fffbe6}' +
       '.tk-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}' +
-      '.tk-wk{flex:1 1 auto;min-width:0;display:grid;border:1px solid var(--divider);border-radius:8px;overflow:hidden}' +
-      '.tk-wk-h{padding:4px 6px;border-bottom:1px solid var(--divider);border-right:1px solid var(--divider);background:rgba(138,155,181,.08)}' +
-      '.tk-wk-c{padding:4px;border-right:1px solid var(--divider);min-height:160px}' +
+      // V6-2: календарь по часам (Неделя/День): один прокручиваемый контейнер, липкие шапка/«Весь день»/колонка часов
+      '.tk-wk{flex:1 1 auto;min-width:0;border:1px solid var(--divider);border-radius:8px;overflow:auto;max-height:calc(100vh - 230px);min-height:320px;background:#fff;position:relative}' +
+      '.tk-wk *{box-sizing:border-box}' +
+      '.tk-cal-in{position:relative}' +
+      '.tk-cal-hd,.tk-cal-ad,.tk-cal-bd{display:grid}' +
+      '.tk-cal-hd{position:sticky;top:0;z-index:6;height:36px;background:#f1f3f8;border-bottom:1px solid var(--divider)}' +
+      '.tk-wk-h{padding:4px 6px;border-right:1px solid var(--divider);overflow:hidden;white-space:nowrap;line-height:26px;min-width:0}' +
+      '.tk-gut{position:sticky;left:0;z-index:4;background:#fff;border-right:1px solid var(--divider)}' +
+      '.tk-cal-hd .tk-gut{z-index:7;background:#f1f3f8}' +
+      '.tk-cal-ad{position:sticky;top:36px;z-index:5;background:#fff;border-bottom:2px solid var(--divider)}' +
+      '.tk-cal-ad.tk-ad-open{position:static}' +
+      '.tk-gut-ad{font-size:10px;line-height:1.15;color:var(--accent);padding:5px 3px;text-align:right;background:#f1f3f8}' +
+      '.tk-ad-c{border-right:1px solid var(--divider);padding:2px;min-height:26px;min-width:0;overflow:hidden}' +
+      '.tk-ad-more{display:block;width:100%;border:0;background:transparent;color:var(--rt-blue);font:inherit;font-size:11px;text-align:left;padding:1px 3px;cursor:pointer}' +
+      '.tk-hr{height:' + CAL_HOUR_PX + 'px;border-top:1px solid var(--divider);font-size:11px;line-height:14px;color:var(--accent);text-align:right;padding:2px 4px 0}' +
+      '.tk-hr:first-child{border-top-color:transparent}' +
+      '.tk-day{position:relative;border-right:1px solid var(--divider);min-width:0}' +
+      '.tk-slot{height:' + (CAL_HOUR_PX / 2) + 'px;border-top:1px solid var(--divider)}' +
+      '.tk-slot.tk-half{border-top-color:rgba(138,155,181,.22)}' +
+      '.tk-day .tk-slot:first-child{border-top-color:transparent}' +
+      '.tk-day.tk-can .tk-slot{cursor:pointer}.tk-day.tk-can .tk-slot:hover{background:rgba(0,136,204,.09)}' +
       '.tk-we{background:var(--weekend-bg)}' +
       '.tk-today{box-shadow:inset 0 -2px 0 var(--rt-blue)}' +
+      '.tk-now{position:absolute;left:0;right:0;height:0;border-top:2px solid #e53935;z-index:3;pointer-events:none}' +
+      '.tk-now:before{content:"";position:absolute;left:-1px;top:-5px;width:8px;height:8px;border-radius:50%;background:#e53935}' +
       '.tk-ev{background:rgba(0,136,204,.14);border-left:3px solid var(--rt-blue);border-radius:4px;padding:3px 5px;margin-bottom:4px;font-size:11px;cursor:pointer;overflow:hidden}' +
+      '.tk-ev.tk-ev-t{position:absolute;z-index:2;margin:0 0 0 1px;padding:1px 4px;line-height:14px;background:#d9edf7;box-shadow:0 0 0 1px #fff}' +
+      '.tk-ev.tk-ev-s{white-space:nowrap;text-overflow:ellipsis}' +
+      '.tk-ev.tk-ev-n{padding:1px 2px;word-break:break-word}.tk-ev.tk-ev-n .tk-ev-when{display:none}' +
+      '.tk-ev.tk-ev-ad{margin-bottom:2px;padding:1px 4px;line-height:15px;white-space:nowrap;text-overflow:ellipsis}' +
       '.tk-ev.tk-conf{border-left-color:var(--sick-red);background:rgba(244,67,54,.1)}' +
+      '.tk-ev.tk-ev-t.tk-conf{background:#fde3e0}' +
       '.tk-ev.tk-hl{border-left-color:var(--rt-purple);background:rgba(119,0,255,.14)}' +
-      '.tk-ev-when{color:var(--accent)}.tk-ev-desc{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}' +
+      '.tk-ev.tk-ev-t.tk-hl{background:#e9dcfb}' +
+      '.tk-ev.tk-sel{outline-offset:-1px;z-index:4}' +
+      '.tk-ev-when{color:var(--accent)}.tk-ev-title{font-weight:700}' +
+      '.tk-ev-ic{display:inline-block;min-width:13px;height:13px;line-height:13px;border-radius:7px;text-align:center;font-size:9px;font-weight:700;color:#fff;margin-left:3px;vertical-align:middle}' +
+      '.tk-ic-conf{background:var(--sick-red)}.tk-ic-pend{background:#c99a00}.tk-ic-orph{background:var(--rt-orange)}' +
       '.tk-caltitle{min-width:130px;text-align:center}' +
       '.tk-form{max-width:640px}' +
       '.tk-f{margin:10px 0}.tk-f>label{display:block;color:var(--accent);font-size:11px;text-transform:uppercase;margin-bottom:3px}' +
@@ -1478,7 +1668,7 @@
       '.tk-mit-done{background:rgba(76,175,80,.08)}.tk-mok{color:#2e7d32}.tk-merr{color:#a3261b}' +
       '.tk-mrow{margin:10px 0}.tk-mrow select{border:1px solid var(--divider);border-radius:6px;padding:4px 6px;font:inherit;background:#fff;color:var(--text)}' +
       '@media (max-width:760px){#tasksView{padding:8px}.tk-split{flex-direction:column}.tk-detail{flex:1 1 auto;width:100%}' +
-      '.tk-cols{width:100%;flex-direction:column}.tk-wk{width:100%;overflow-x:auto}.tk-wk-c{min-height:90px}}';
+      '.tk-cols{width:100%;flex-direction:column}.tk-wk{width:100%;max-height:72vh}}';
   }
 
   // ---------------------------------------------------------------- init
@@ -1549,7 +1739,9 @@
       S: S, ACTIONS: ACTIONS, render: render, onClick: onClick, onChange: onChange, onDrop: onDrop, onDragStart: onDragStart,
       truncate: truncate, weekStart: weekStart, addDays: addDays, fmtPeriod: fmtPeriod, normEmpId: normEmpId,
       applyFilters: applyFilters, buildPayload: buildPayload, draftError: draftError, esc: esc,
-      isOrphan: isOrphan, removedDate: removedDate, plural: plural, modalEl: function () { return DOM.modal; }
+      isOrphan: isOrphan, removedDate: removedDate, plural: plural, modalEl: function () { return DOM.modal; },
+      calLayout: calLayout, calSlotOf: calSlotOf, calSlotDraft: calSlotDraft, calDayLayout: calDayLayout, timeOptionsHtml: timeOptionsHtml,
+      calScrollApply: calScrollApply, calScrollSave: calScrollSave, CAL_HOUR_PX: CAL_HOUR_PX
     }
   };
   window.openTasksPanel = openTasksPanel;
