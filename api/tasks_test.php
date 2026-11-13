@@ -1231,6 +1231,84 @@ try {
         return 'endpoint не изменился';
     });
 
+    // --- V6.2 (W-4): метки-теги ------------------------------------------------
+    $run('W4-1 создание: split по запятой, trim, схлопывание пробелов, без пустых и дублей (регистр не важен, первая форма побеждает); labels[] в ответе', function () use ($A) {
+        $r = $A('POST', '', ['title' => 'Теги', 'start_at' => '2027-05-05', 'assignees' => ['tt_a'],
+            'label' => '  Ремонт ,  выезд   срочный,РЕМОНТ, ,,выезд срочный ,  Склад  ']);
+        eq($r['status'], 201, 'status');
+        $t = $r['json']['task'];
+        eq($t['label'], 'Ремонт, выезд срочный, Склад', 'label строкой «тег1, тег2»');
+        eq($t['labels'], ['Ремонт', 'выезд срочный', 'Склад'], 'labels[]');
+        $g = $A('GET', '?id=' . $t['id']);
+        eq([$g['json']['task']['label'], $g['json']['task']['labels']], ['Ремонт, выезд срочный, Склад', ['Ремонт', 'выезд срочный', 'Склад']], 'GET по id');
+        $found = null;
+        foreach ($A('GET', '')['json']['tasks'] as $x) { if ($x['id'] === $t['id']) { $found = $x; } }
+        ok($found !== null && $found['labels'] === ['Ремонт', 'выезд срочный', 'Склад'], 'GET список отдаёт labels');
+        $one = $A('POST', '', ['title' => 'Один', 'start_at' => '2027-05-05', 'assignees' => ['tt_a'], 'label' => 'ремонт']);
+        eq([$one['json']['task']['label'], $one['json']['task']['labels']], ['ремонт', ['ремонт']], 'один тег — строка без запятых (n8n/старые клиенты)');
+        return $t['label'];
+    });
+
+    $run('W4-2 пусто → NULL, labels = []: нет поля, null, "", только пробелы/запятые', function () use ($A, $pdo) {
+        foreach ([['k' => 'нет поля', 'b' => []], ['k' => 'null', 'b' => ['label' => null]], ['k' => 'пустая строка', 'b' => ['label' => '']],
+                  ['k' => 'пробелы и запятые', 'b' => ['label' => ' , ,, ']]] as $c) {
+            $r = $A('POST', '', ['title' => 'Пусто ' . $c['k'], 'start_at' => '2027-05-06', 'assignees' => ['tt_a']] + $c['b']);
+            eq($r['status'], 201, $c['k'] . ' status');
+            eq([$r['json']['task']['label'], $r['json']['task']['labels']], [null, []], $c['k'] . ' → NULL / []');
+            eq($pdo->query("SELECT label IS NULL FROM tasks WHERE id = '" . $r['json']['task']['id'] . "'")->fetchColumn(), 1, $c['k'] . ': в БД NULL');
+        }
+        return '4 кейса';
+    });
+
+    $run('W4-3 длина: тег ≤ 30, вся строка ≤ 200; дубли в длину не входят; ошибка — invalid_label с понятным message', function () use ($A, $taskCount) {
+        $n0 = $taskCount();
+        $mkBody = fn($label) => ['title' => 'Длина', 'start_at' => '2027-05-07', 'assignees' => ['tt_a'], 'label' => $label];
+        $r = $A('POST', '', $mkBody(str_repeat('я', 30)));
+        eq([$r['status'], mb_strlen($r['json']['task']['label'])], [201, 30], 'тег ровно 30 — можно');
+        $r = $A('POST', '', $mkBody('ok, ' . str_repeat('я', 31)));
+        eq([$r['status'], $r['json']['error'] ?? null], [400, 'invalid_label'], 'тег 31 — ошибка');
+        ok(isset($r['json']['message']) && mb_strpos($r['json']['message'], '30') !== false, 'message объясняет лимит 30: ' . ($r['json']['message'] ?? ''));
+        $six = implode(', ', array_map(fn($i) => str_repeat((string) $i, 30), [1, 2, 3, 4, 5, 6]));      // 6*30 + 5*2 = 190
+        eq(mb_strlen($six), 190, 'контроль: 190 символов');
+        $r = $A('POST', '', $mkBody($six));
+        eq([$r['status'], $r['json']['task']['label'] ?? null], [201, $six], '190 символов — можно');
+        $r = $A('POST', '', $mkBody($six . ', ' . str_repeat('7', 30)));                                  // 222
+        eq([$r['status'], $r['json']['error'] ?? null], [400, 'invalid_label'], 'вся строка 222 > 200 — ошибка');
+        ok(mb_strpos($r['json']['message'] ?? '', '200') !== false, 'message объясняет лимит 200');
+        $dups = implode(', ', array_fill(0, 40, str_repeat('я', 30)));                                     // дубли схлопываются → 30
+        $r = $A('POST', '', $mkBody($dups));
+        eq([$r['status'], mb_strlen($r['json']['task']['label'] ?? '')], [201, 30], 'дубли не входят в длину');
+        $nonStr = [['x'], 5, true];
+        foreach ($nonStr as $v) {
+            $r = $A('POST', '', $mkBody($v));
+            eq([$r['status'], $r['json']['error'] ?? null], [400, 'invalid_label'], 'не строка: ' . json_encode($v));
+        }
+        eq($taskCount(), $n0 + 3, 'создано ровно 3 валидных (30, 190 и схлопнутые дубли); невалидные ничего не создали');
+        return 'ok';
+    });
+
+    $run('W4-4 update — те же правила; пусто → NULL; без поля label метка не трогается; старое значение с запятой читается как несколько тегов', function () use ($A, $mk, $pdo) {
+        $t = $mk(['label' => 'a']);
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 1, 'label' => ' Срочно ,срочно, Выезд  на  объект ,, ']);
+        eq($r['status'], 200, 'update status');
+        eq([$r['json']['task']['label'], $r['json']['task']['labels'], $r['json']['task']['version']], ['Срочно, Выезд на объект', ['Срочно', 'Выезд на объект'], 2], 'нормализация при update');
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 2, 'title' => 'Другое имя']);
+        eq($r['json']['task']['labels'], ['Срочно', 'Выезд на объект'], 'без поля label — теги на месте');
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 3, 'label' => str_repeat('ы', 31)]);
+        eq([$r['status'], $r['json']['error'] ?? null], [400, 'invalid_label'], 'update: тег 31 — ошибка');
+        ok(mb_strpos($r['json']['message'] ?? '', '30') !== false, 'update: message');
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 3, 'label' => str_repeat('я', 30) . ', ' . str_repeat('ю', 30) . ', ' . str_repeat('э', 30) . ', ' . str_repeat('ь', 30) . ', ' . str_repeat('ъ', 30) . ', ' . str_repeat('ё', 30) . ', ' . str_repeat('ф', 30)]);
+        eq([$r['status'], $r['json']['error'] ?? null], [400, 'invalid_label'], 'update: строка > 200 — ошибка');
+        eq($pdo->query("SELECT label FROM tasks WHERE id = '" . $t['id'] . "'")->fetchColumn(), 'Срочно, Выезд на объект', 'после ошибок в БД прежнее значение');
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 3, 'label' => '  , ']);
+        eq([$r['status'], $r['json']['task']['label'], $r['json']['task']['labels']], [200, null, []], 'update пусто → NULL');
+        // старое значение «a,b» (как на проде) — несколько тегов без миграции
+        $pdo->exec("UPDATE tasks SET label = 'старый,тег ,  Ещё' WHERE id = '" . $t['id'] . "'");
+        $g = $A('GET', '?id=' . $t['id']);
+        eq([$g['json']['task']['label'], $g['json']['task']['labels']], ['старый,тег ,  Ещё', ['старый', 'тег', 'Ещё']], 'устаревшая запись: label как есть, labels — отдельные теги');
+        return 'ok';
+    });
+
     $run('G2 нет утечки: ошибки не раскрывают пути; OPTIONS → 204; неподдерживаемый метод → 405', function () use ($A, $T) {
         $r = req('OPTIONS', $T);
         eq($r['status'], 204, 'OPTIONS');

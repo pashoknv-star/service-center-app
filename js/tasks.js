@@ -45,7 +45,7 @@
     title_required: 'Укажите название задачи.',
     invalid_title: 'Название слишком длинное (максимум 200 символов).',
     invalid_description: 'Описание слишком длинное (максимум 5000 символов).',
-    invalid_label: 'Метка слишком длинная (максимум 50 символов).',
+    invalid_label: 'Метка некорректна: тег — до 30 символов, все теги вместе — до 200.',
     invalid_priority: 'Приоритет должен быть от 1 до 3.',
     invalid_start_at: 'Некорректная дата или время начала.',
     invalid_end_at: 'Некорректная дата или время окончания.',
@@ -216,6 +216,7 @@
     if (!code && r && r.status === 0) code = 'network';
     if (r && r.status === 401) code = 'unauthorized';
     if (r && r.status === 403) code = 'forbidden';
+    if (code === 'invalid_label' && r.data && r.data.message) return String(r.data.message);     // V6.2 (W-4): понятный текст сервера
     return ERR_TEXT[code] || ('Ошибка сервера' + (code ? ' (' + code + ')' : '') + '.');
   }
 
@@ -276,10 +277,33 @@
   }
 
   // ---------------------------------------------------------------- filters
+  // V6.2 (W-4): метка = теги через запятую (сервер хранит «тег1, тег2» и отдаёт labels[]).
+  // splitTags — та же нормализация, что на сервере: split по «,», trim, схлопнуть пробелы, без пустых и дублей (без учёта регистра).
+  var TAG_MAX = 30, LABEL_MAX = 200;
+  function splitTags(v) {
+    var out = [], seen = {};
+    String(v == null ? '' : v).split(',').forEach(function (p) {
+      var tag = p.replace(/\s+/g, ' ').trim(), key = tag.toLowerCase();
+      if (!tag || seen[key]) return;
+      seen[key] = 1;
+      out.push(tag);
+    });
+    return out;
+  }
+  function tagsOf(t) { return Array.isArray(t.labels) ? t.labels.slice() : splitTags(t.label); }
   function labelsOf(tasks) {
     var seen = {}, out = [];
-    tasks.forEach(function (t) { if (t.label && !seen[t.label]) { seen[t.label] = 1; out.push(t.label); } });
-    return out.sort();
+    tasks.forEach(function (t) {
+      tagsOf(t).forEach(function (tag) { var k = tag.toLowerCase(); if (!seen[k]) { seen[k] = 1; out.push(tag); } });
+    });
+    return out.sort(function (a, b) {
+      var x = a.toLowerCase(), y = b.toLowerCase();
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+  }
+  function hasTag(t, tag) {
+    var k = String(tag).toLowerCase();
+    return tagsOf(t).some(function (x) { return x.toLowerCase() === k; });
   }
   function matchDue(t, due) {
     if (!due) return true;
@@ -299,7 +323,7 @@
       if (!listOnly) return true;
       if (f.status && t.status !== f.status) return false;
       if (f.priority && String(t.priority) !== String(f.priority)) return false;
-      if (f.label && t.label !== f.label) return false;
+      if (f.label && !hasTag(t, f.label)) return false;      // V6.2 (W-4): задача содержит тег
       return matchDue(t, f.due);
     });
   }
@@ -344,7 +368,10 @@
   }
   function badgesHtml(t, link) {
     var h = '';
-    if (t.label) h += link ? tagBtn('', t.label, 'label', t.label, 'Показать в Списке все задачи с меткой «' + t.label + '»') : '<span class="tk-tag">' + esc(t.label) + '</span>';
+    // V6.2 (W-4): каждый тег — отдельный чип (link → кликабельный: в «Список» с фильтром по этому тегу)
+    tagsOf(t).forEach(function (tag) {
+      h += link ? tagBtn('tk-ltag', tag, 'label', tag, 'Показать в Списке все задачи с меткой «' + tag + '»') : '<span class="tk-tag tk-ltag">' + esc(tag) + '</span>';
+    });
     if (t.checklist && t.checklist.length) {
       var done = t.checklist.filter(function (c) { return c.done; }).length;
       h += '<span class="tk-tag">☑ ' + done + '/' + t.checklist.length + '</span>';
@@ -360,13 +387,20 @@
   }
   // подстрока карточки Доски: ФИО — ссылка «Список по сотруднику» (V6-5, P2-1; span[role=button], не <a>: <a> внутри draggable-карточки
   // перехватывает перетаскивание, как и <button>, см. tagBtn); удалённый исполнитель открытой задачи зачёркнут (как в Списке/карточке)
+  var BOARD_NAMES_MAX = 2;      // V6.2 (W-3): в плитке Доски не больше 2 исполнителей, дальше «…»
   function nameStrike(t) {
     var open = t.status === 'open' && !t.archived;
-    return assigneesOf(t).map(function (p) {
+    var all = assigneesOf(t), more = all.length > BOARD_NAMES_MAX;
+    return all.slice(0, BOARD_NAMES_MAX).map(function (p) {
       if (p.removed) return open ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
       return '<span role="button" tabindex="0" class="tk-name tk-namebtn" data-tk-act="filterEmp" data-emp="' + esc(p.employee_id) + '"' +
         ' title="Показать в Списке все задачи сотрудника">' + esc(personName(p)) + '</span>';
-    }).join(', ');
+    }).join(', ') + (more ? '…' : '');
+  }
+  // полный список ФИО для title подстроки плитки Доски (W-3); только когда список обрезан («…»)
+  function namesTitle(t) {
+    var all = assigneesOf(t);
+    return all.length > BOARD_NAMES_MAX ? 'Исполнители: ' + all.map(personName).join(', ') : '';
   }
   // V6-1 (R-8): «!» у исполнителя, который в дни задачи в отпуске/отгуле (notes[]) или на больничном/в командировке (conflict_days[])
   var RISK_ORDER = ['vacation', 'day_off', 'sick', 'trip'];
@@ -476,14 +510,20 @@
     if (!rows.length) {
       return h + '<p class="tk-empty">' + (S.loading ? 'Загрузка…' : 'Задач нет.') + '</p>';
     }
-    h += '<div class="tk-tablewrap"><table class="tk-table"><thead><tr><th>Задача</th><th>Исполнитель</th><th>Описание</th><th>Срок</th>' + sortTh('priority', 'Приор.') + sortTh('status', 'Статус') + '</tr></thead><tbody>';
+    // V6.2 (W-1): Задача · Описание · Исполнитель (узкая, ~50 % прежней) · Срок · Приор. · Статус; W-2: последняя колонка «Править» (только admin)
+    var admin = canWrite();
+    h += '<div class="tk-tablewrap"><table class="tk-table tk-table-v62"><thead><tr><th class="tk-c-task">Задача</th><th class="tk-c-desc">Описание</th><th class="tk-c-exec">Исполнитель</th><th>Срок</th>' +
+      sortTh('priority', 'Приор.') + sortTh('status', 'Статус') +
+      (admin ? '<th class="tk-c-edit"><span class="tk-sr">Править</span></th>' : '') + '</tr></thead><tbody>';
     rows.forEach(function (t) {
       h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board">' +
-        '<td><b>' + esc(t.title) + '</b><div class="tk-badges">' + badgesHtml(t).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></td>' +
-        '<td>' + nameLinks(t, true) + '</td>' + descCell(t) +
+        '<td class="tk-c-task"><b>' + esc(t.title) + '</b><div class="tk-badges">' + badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></td>' +
+        descCell(t) + '<td class="tk-c-exec">' + nameLinks(t, true) + '</td>' +
         '<td class="tk-nowrap">' + esc(fmtPeriod(t)) + '</td>' +
         '<td class="' + (+t.priority === 1 ? 'tk-hi' : '') + '">' + esc(PRIORITY_TEXT[t.priority] || t.priority) + '</td>' +
-        '<td>' + (t.status === 'closed' ? 'Закрыта' : 'Открыта') + '</td></tr>';
+        '<td>' + (t.status === 'closed' ? 'Закрыта' : 'Открыта') + '</td>' +
+        (admin ? '<td class="tk-c-edit"><button type="button" class="tk-editbtn" data-tk-act="editTask" data-id="' + esc(t.id) + '" title="Править" aria-label="Править задачу «' + esc(t.title) + '»">✎</button></td>' : '') +
+        '</tr>';
     });
     return h + '</tbody></table></div>';
   }
@@ -493,7 +533,7 @@
     return '<div class="tk-card' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '"' +
       ' data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board"' + (admin ? ' draggable="true" data-tk-drag="' + esc(t.id) + '"' : '') + '>' +
       '<b>' + esc(t.title) + '</b>' +
-      '<div class="tk-sub">' + (isOrphan(t) ? plateHtml(t) : nameStrike(t)) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
+      '<div class="tk-sub"' + (!isOrphan(t) && namesTitle(t) ? ' title="' + esc(namesTitle(t)) + '"' : '') + '>' + (isOrphan(t) ? plateHtml(t) : nameStrike(t)) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
       '<div class="tk-badges">' + statusTag(t, true) + priorityTag(t, true) +
       badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></div>';
   }
@@ -811,7 +851,7 @@
     var dr = {
       title: '', description: '', assignees: S.filters.emp ? [S.filters.emp] : [],
       watchers: [], kind: 'single', startDate: d, startTime: '', endDate: d, endTime: '',
-      priority: 2, label: '', checklist: []
+      priority: 2, labels: [], labelInput: '', checklist: []
     };
     // V6-2 (R-10): дата/время из клика по ячейке календаря
     if (pre) ['kind', 'startDate', 'startTime', 'endDate', 'endTime'].forEach(function (k) { if (pre[k] !== undefined) dr[k] = pre[k]; });
@@ -827,9 +867,15 @@
       kind: t.end_at ? 'period' : 'single',
       startDate: dateOf(t.start_at), startTime: timeOf(t.start_at),
       endDate: t.end_at ? dateOf(t.end_at) : dateOf(t.start_at), endTime: timeOf(t.end_at),
-      priority: +t.priority || 2, label: t.label || '',
+      priority: +t.priority || 2, labels: tagsOf(t), labelInput: '',
       checklist: (t.checklist || []).map(function (c) { return { id: c.id, text: c.text, done: !!c.done }; })
     };
+  }
+  function tagChipsHtml(d) {
+    return d.labels.map(function (tag, i) {
+      return '<span class="tk-chip tk-tagchip" data-tk-tag="' + esc(tag) + '">' + esc(tag) +
+        ' <button type="button" class="tk-x" data-tk-act="removeTag" data-idx="' + i + '" title="Убрать тег" aria-label="Убрать тег «' + esc(tag) + '»">×</button></span>';
+    }).join('');
   }
   function fieldRow(label, inner, cls) {
     return '<div class="tk-f ' + (cls || '') + '"><label>' + esc(label) + '</label>' + inner + '</div>';
@@ -871,8 +917,11 @@
       (d.kind === 'period' ? '<div class="tk-dt"><span>Конец</span><input type="date" data-tk-field="endDate" value="' + esc(d.endDate) + '"> ' + timeSelectHtml('endTime', d.endTime) + '</div>' : ''));
     h += fieldRow('Приоритет', '<select data-tk-field="priority">' + optionsHtml([
       { value: 1, label: '1 — высокий' }, { value: 2, label: '2 — обычный' }, { value: 3, label: '3 — низкий' }], d.priority) + '</select>');
-    h += fieldRow('Метка', '<input type="text" maxlength="50" list="tkLabels" data-tk-field="label" value="' + esc(d.label) + '">' +
-      '<datalist id="tkLabels">' + labelsOf(S.tasks).map(function (l) { return '<option value="' + esc(l) + '">'; }).join('') + '</datalist>');
+    // V6.2 (W-4): метка — теги-чипы: Enter/запятая → чип, × и Backspace в пустом вводе удаляют, подсказки — существующие теги
+    h += fieldRow('Метка', '<div class="tk-tagsbox" data-tk-tagsbox="1"><span class="tk-tagchips" data-tk-tagchips="1">' + tagChipsHtml(d) + '</span>' +
+      '<input type="text" maxlength="' + LABEL_MAX + '" list="tkLabels" autocomplete="off" placeholder="тег и Enter" aria-label="Добавить тег" data-tk-field="labelInput" value="' + esc(d.labelInput) + '"></div>' +
+      '<datalist id="tkLabels">' + labelsOf(S.tasks).map(function (l) { return '<option value="' + esc(l) + '">'; }).join('') + '</datalist>' +
+      '<div class="tk-muted tk-hint">Enter или запятая — добавить тег; × или Backspace в пустом поле — убрать. Тег до ' + TAG_MAX + ' символов, все вместе до ' + LABEL_MAX + '.</div>');
     h += fieldRow('Чек-лист', '<div class="tk-cklist">' + d.checklist.map(function (c, i) {
       return '<div class="tk-ckrow"><input type="checkbox" data-tk-ck-done="' + i + '"' + (c.done ? ' checked' : '') + '> ' +
         '<input type="text" maxlength="300" data-tk-ck-text="' + i + '" value="' + esc(c.text) + '"> ' +
@@ -909,6 +958,8 @@
   // ---------------------------------------------------------------- form logic
   function draftError(d) {
     if (!String(d.title).trim()) return ERR_TEXT.title_required;
+    var le = labelError(draftTags(d));
+    if (le) return le;
     if (!d.assignees.length && !(d.hasRemoved && d.origActive && !d.origActive.length)) return ERR_TEXT.assignees_required;
     if (!parseYmd(d.startDate)) return 'Укажите дату начала.';
     if (d.kind === 'period') {
@@ -922,6 +973,16 @@
     if (a.length !== b.length) return false;
     return a.every(function (x) { return b.indexOf(x) >= 0; });
   }
+  // V6.2 (W-4): чипы + введённый, но не превращённый в чип текст → строка «тег1, тег2» (сервер нормализует так же)
+  function draftTags(d) { return splitTags((d.labels || []).concat(splitTags(d.labelInput)).join(',')); }
+  function draftLabel(d) { return draftTags(d).join(', '); }
+  function labelError(tags) {
+    for (var i = 0; i < tags.length; i++) {
+      if (tags[i].length > TAG_MAX) return 'Тег «' + truncate(tags[i], 20) + '» длиннее ' + TAG_MAX + ' символов.';
+    }
+    if (tags.join(', ').length > LABEL_MAX) return 'Все теги вместе длиннее ' + LABEL_MAX + ' символов — уберите лишние.';
+    return '';
+  }
   function buildPayload(d, isNew) {
     var p = {
       title: String(d.title).trim(),
@@ -930,7 +991,7 @@
       start_at: d.startDate + (d.startTime ? 'T' + d.startTime : ''),
       end_at: d.kind === 'period' ? (d.endDate + (d.endTime ? 'T' + d.endTime : '')) : (isNew ? null : ''),
       priority: +d.priority || 2,
-      label: String(d.label || '').trim(),
+      label: draftLabel(d),
       checklist: d.checklist.filter(function (c) { return String(c.text).trim() !== ''; }).map(function (c) {
         var it = { text: String(c.text).trim(), done: !!c.done };
         if (c.id) it.id = c.id;
@@ -1153,7 +1214,11 @@
     },
     clearEmp: function () { S.filters.emp = ''; render(); },
     newTask: function () { openForm(null); },
-    editTask: function (el) { openForm(el.dataset.id); },
+    editTask: function (el, ev) {
+      // V6.2 (W-2): та же функция и у «Править» в карточке, и у ✎ в строке Списка; клик по ✎ не открывает карточку строки
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      openForm(el.dataset.id);
+    },
     assignOrphan: function (el) { openForm(el.dataset.id, 'assignees'); },        // T1-8: «Назначить» в карточке (admin)
     mAssign: function () { runAssign(null, false); },                              // T1-8: окно замены
     mAccept: function (el) {
@@ -1172,6 +1237,13 @@
       api('DELETE', API + '?id=' + encodeURIComponent(t.id), { version: t.version }).then(function (r) {
         return handleWriteResult(r, t.id, 'Задача отправлена в архив');
       });
+    },
+    // V6.2 (W-4): × на чипе тега в форме
+    removeTag: function (el) {
+      if (!S.form) return;
+      var i = +el.dataset.idx;
+      if (i >= 0 && i < S.form.draft.labels.length) S.form.draft.labels.splice(i, 1);
+      refreshTags(true);
     },
     saveForm: function () { submitForm(); },
     cancelForm: function () { S.form = null; render(); flushDirty(); },
@@ -1223,6 +1295,76 @@
     calAdToggle: function () { S.cal.adAll = !S.cal.adAll; render(); }
   };
 
+  // ---------------------------------------------------------------- V6.2 (W-4): поле-теги формы
+  // Добавить теги из строки (через запятую) в черновик; true — всё принято. Ошибка (тег > 30, всего > 200) — текст в форме, ввод сохраняется.
+  function addDraftTags(raw) {
+    var F = S.form, d = F.draft, err = '';
+    splitTags(raw).forEach(function (tag) {
+      if (err) return;
+      var k = tag.toLowerCase();
+      if (d.labels.some(function (x) { return x.toLowerCase() === k; })) return;
+      err = labelError([tag]);
+      if (!err) {
+        var next = d.labels.concat([tag]);
+        err = labelError(next);
+        if (!err) d.labels = next;
+      }
+    });
+    if (err) { F.error = err; F.tagErr = true; }
+    else if (F.tagErr) { F.error = ''; F.tagErr = false; }
+    return !err;
+  }
+  function focusTagInput() {
+    var inp = DOM.root && DOM.root.querySelector ? DOM.root.querySelector('[data-tk-field="labelInput"]') : null;
+    if (inp && inp.focus) inp.focus();
+  }
+  // перерисовать только чипы (фокус и прокрутка формы не теряются); нет разметки/ошибка → полная перерисовка
+  function refreshTags(focus) {
+    var F = S.form, q = DOM.root && DOM.root.querySelector ? DOM.root : null;
+    var box = q ? q.querySelector('[data-tk-tagchips]') : null, inp = q ? q.querySelector('[data-tk-field="labelInput"]') : null;
+    if (!F) return;
+    if (!box || !inp || F.tagErr) { render(); if (focus) focusTagInput(); return; }
+    box.innerHTML = tagChipsHtml(F.draft);
+    inp.value = F.draft.labelInput;
+    if (focus && inp.focus) inp.focus();
+  }
+  function onTagKey(ev) {
+    if (ev.isComposing || !S.form) return;
+    var d = S.form.draft, t = ev.target;
+    if (ev.key === 'Enter' || ev.key === ',') {
+      if (ev.preventDefault) ev.preventDefault();
+      var raw = t.value != null ? t.value : d.labelInput;
+      d.labelInput = raw;
+      if (!String(raw).trim()) return;                           // пустой ввод: Enter/запятая ничего не делают
+      if (addDraftTags(raw)) d.labelInput = '';
+      refreshTags(true);
+    } else if (ev.key === 'Backspace') {
+      var cur = t.value != null ? t.value : d.labelInput;
+      if (cur === '' && d.labels.length) {
+        if (ev.preventDefault) ev.preventDefault();
+        d.labels.pop();
+        d.labelInput = '';
+        refreshTags(true);
+      }
+    }
+  }
+  function onTagInput(ev, t) {
+    var d = S.form.draft, v = t.value;
+    if (v.indexOf(',') >= 0) {                                   // запятая / вставка строки «a, b, c»
+      var parts = v.split(','), paste = ev.inputType === 'insertFromPaste' || ev.inputType === 'insertFromDrop' || parts.length > 2;
+      var rest = paste ? '' : parts.pop();
+      d.labelInput = addDraftTags(parts.join(',')) ? rest : v;
+      refreshTags(true);
+      return;
+    }
+    d.labelInput = v;
+    // выбор подсказки из datalist (Chrome: insertReplacementText, Firefox: событие без inputType) → сразу чип
+    if (v.trim() && (!ev.inputType || ev.inputType === 'insertReplacementText') && labelsOf(S.tasks).indexOf(v) >= 0) {
+      if (addDraftTags(v)) d.labelInput = '';
+      refreshTags(true);
+    }
+  }
+
   function shiftCal(dir) {
     S.cal.anchor = addDays(S.cal.anchor || todayYmd(), (S.cal.mode === 'day' ? 1 : 7) * dir);
     load();
@@ -1245,6 +1387,11 @@
     if (!el) return;
     if (ev.preventDefault) ev.preventDefault();
     onClick({ target: el, preventDefault: function () {} });
+  }
+  function onKeyDown(ev) {
+    var t = ev.target;
+    if (t && t.dataset && t.dataset.tkField === 'labelInput') { onTagKey(ev); return; }   // V6.2 (W-4)
+    onKeyTag(ev);
   }
   function onChange(ev) {
     var t = ev.target;
@@ -1270,7 +1417,7 @@
     }
     if (f === 'kind') { d.kind = t.value === 'period' ? 'period' : 'single'; render(); return; }
     if (f === 'priority') { d.priority = +t.value || 2; return; }
-    if (['title', 'description', 'label', 'startDate', 'startTime', 'endDate', 'endTime'].indexOf(f) >= 0) {
+    if (['title', 'description', 'labelInput', 'startDate', 'startTime', 'endDate', 'endTime'].indexOf(f) >= 0) {
       d[f] = t.value;
       if (f === 'startDate' && d.kind === 'period' && (!d.endDate || d.endDate < d.startDate)) {
         d.endDate = d.startDate;
@@ -1285,7 +1432,8 @@
     var d = S.form.draft;
     if (t.dataset.tkCkText !== undefined) { d.checklist[+t.dataset.tkCkText].text = t.value; return; }
     var f = t.dataset.tkField;
-    if (f === 'title' || f === 'description' || f === 'label') d[f] = t.value;
+    if (f === 'labelInput') { onTagInput(ev, t); return; }
+    if (f === 'title' || f === 'description') d[f] = t.value;
   }
   function onDragStart(ev) {
     var t = ev.target;
@@ -1832,12 +1980,35 @@
       '@media (max-width:760px){.tk-split-board{grid-template-columns:minmax(0,1fr)}.tk-tablewrap{max-height:calc(100vh - 260px)}}';
   }
 
+  // V6.2-1 (W-1…W-4): только новые правила
+  function cssV621() {
+    return '' +
+      // W-1: «Исполнитель» — половина прежней ширины (замер на 1280: 255.8 px → 128 px), «Описание» забирает остаток, ФИО переносятся
+      '.tk-table-v62{width:100%}' +
+      '.tk-table-v62 th.tk-c-exec,.tk-table-v62 td.tk-c-exec{width:128px;min-width:128px;max-width:128px;overflow-wrap:anywhere}' +
+      '.tk-table-v62 td.tk-desc{min-width:220px;max-width:none}' +
+      '.tk-table-v62 th.tk-c-task,.tk-table-v62 td.tk-c-task{min-width:160px}' +
+      // W-2: «Править» в строке
+      '.tk-table-v62 th.tk-c-edit,.tk-table-v62 td.tk-c-edit{width:44px;min-width:44px;max-width:44px;padding:4px;text-align:center;vertical-align:middle}' +
+      '.tk-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}' +
+      '.tk-editbtn{width:32px;height:32px;padding:0;border:1px solid #b9c6da;border-radius:6px;background:#fff;color:#1a2b49;font-size:16px;line-height:1;cursor:pointer}' +
+      '.tk-editbtn:hover,.tk-editbtn:focus-visible{background:rgba(0,136,204,.12);border-color:var(--rt-blue);outline:0}' +
+      // W-4: поле-теги формы
+      '.tk-f .tk-tagsbox{display:flex;flex-wrap:wrap;gap:4px;align-items:center;border:1px solid var(--divider);border-radius:6px;padding:3px 6px;background:#fff}' +
+      '.tk-tagsbox:focus-within{border-color:var(--rt-blue)}' +
+      '.tk-tagchips{display:contents}' +
+      '.tk-tagsbox .tk-tagchip{margin:0;background:#eef4fb;border-color:#b9c6da;font-size:12px;padding:0 4px 0 8px;overflow-wrap:anywhere}' +
+      '.tk-f .tk-tagsbox input[type=text]{flex:1 1 120px;width:auto;min-width:120px;border:0;outline:0;padding:4px 2px;background:transparent}' +
+      '.tk-hint{font-size:11px;margin-top:3px}' +
+      '.tk-ltag{overflow-wrap:anywhere}';
+  }
+
   // ---------------------------------------------------------------- init
   function injectStyles() {
     if (document.getElementById('tasksModuleStyles')) return;
     var st = document.createElement('style');
     st.id = 'tasksModuleStyles';
-    st.textContent = css() + cssV61();
+    st.textContent = css() + cssV61() + cssV621();
     document.head.appendChild(st);
   }
   function init() {
@@ -1866,7 +2037,7 @@
       });
     }
     DOM.root.addEventListener('click', onClick);
-    DOM.root.addEventListener('keydown', onKeyTag);
+    DOM.root.addEventListener('keydown', onKeyDown);
     DOM.root.addEventListener('change', onChange);
     DOM.root.addEventListener('input', onInput);
     // Enter в поле формы не должен перезагружать страницу; сохранение — только кнопкой.
@@ -1899,6 +2070,7 @@
     // для тестов (scripts/test_tasks_frontend.js); в UI не используется
     __t: {
       S: S, ACTIONS: ACTIONS, render: render, onClick: onClick, onChange: onChange, onDrop: onDrop, onDragStart: onDragStart,
+      splitTags: splitTags, tagsOf: tagsOf, labelsOf: labelsOf, errText: errText,       // V6.2-1 (W-4)
       truncate: truncate, weekStart: weekStart, addDays: addDays, fmtPeriod: fmtPeriod, normEmpId: normEmpId,
       applyFilters: applyFilters, buildPayload: buildPayload, draftError: draftError, esc: esc,
       isOrphan: isOrphan, removedDate: removedDate, plural: plural, modalEl: function () { return DOM.modal; },

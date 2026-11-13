@@ -170,6 +170,21 @@ function makeEnv(base, cookie) {
     root.fire('change', { target: Object.assign({ dataset: t.dataset, value, type: t.attrs.type || 'text', checked: !!(extra && extra.checked) }, extra || {}) });
     await settle();
   }
+  // V6.2 (W-4): клавиатура/ввод в поле-тегах (keydown/input на корне, как в браузере)
+  async function key(name, k, value, extra) {
+    const t = findTag('data-tk-field', name);
+    if (!t) throw new Error('поле data-tk-field=\"' + name + '\" не отрендерено');
+    const ev = Object.assign({ target: { dataset: t.dataset, value, type: 'text' }, key: k, prevented: false, preventDefault() { this.prevented = true; } }, extra || {});
+    root.fire('keydown', ev);
+    await settle();
+    return ev;
+  }
+  async function input(name, value, extra) {
+    const t = findTag('data-tk-field', name);
+    if (!t) throw new Error('поле data-tk-field=\"' + name + '\" не отрендерено');
+    root.fire('input', Object.assign({ target: { dataset: t.dataset, value, type: 'text' } }, extra || {}));
+    await settle();
+  }
   const field = (name, value) => change('data-tk-field', name, value);
   const filter = (name, value, extra) => change('data-tk-filter', name, value, extra);
   // T1-8: окно замены (элемент #tasksReassignModal в document.body)
@@ -189,7 +204,7 @@ function makeEnv(base, cookie) {
     modalEl().fire('change', { target: Object.assign({ dataset: t.dataset, value, type: t.attrs.type || 'text', checked: !!(extra && extra.checked) }, extra || {}) });
     await settle();
   }
-  return { sandbox, els, root, T, S: T.__t.S, calls, toasts, confirms, settle, click, change, field, filter, has, count, findTag,
+  return { sandbox, els, root, T, S: T.__t.S, calls, toasts, confirms, settle, click, change, field, key, input, filter, has, count, findTag,
     body, events, modalEl, mhtml, mhas, mcount, mclick, mchange };
 }
 
@@ -460,7 +475,7 @@ async function main() {
     // создать
     await A.click('newTask');
     check('E3 форма создания: поля название/описание/исполнители/срок/приоритет/метка/чек-лист, «наблюдатель» неактивен',
-      ['title', 'description', 'assigneePick', 'kind', 'startDate', 'startTime', 'priority', 'label'].every((f) => A.findTag('data-tk-field', f)) &&
+      ['title', 'description', 'assigneePick', 'kind', 'startDate', 'startTime', 'priority', 'labelInput'].every((f) => A.findTag('data-tk-field', f)) &&
       A.has('data-tk-act="addCheck"') && A.has('data-tk-act="saveForm"') && /Наблюдатель<\/label><select disabled/.test(A.root.innerHTML));
     await A.click('saveForm');
     check('E4 пустое название → понятная ошибка, запрос не отправлен', A.has('Укажите название задачи') && !A.calls.some((c) => c.method === 'POST'));
@@ -479,7 +494,7 @@ async function main() {
     await A.field('endDate', mon);
     await A.field('endTime', '18:00');
     await A.field('priority', '1');
-    await A.field('label', 'e2e');
+    await A.field('labelInput', 'e2e');           // V6.2: введённый, но не превращённый в чип текст сохраняется как тег
     await A.click('addCheck');
     await A.click('addCheck');
     await A.change('data-tk-ck-text', '0', 'Шаг один');
@@ -496,8 +511,8 @@ async function main() {
     check('E7 на сервере: исполнители 2, период Пт 09:00 — Пн 18:00, чек-лист 2 (1 выполнен), приоритет 1, метка',
       srvTask && srvTask.assignees.length === 2 && srvTask.start_at === fri + 'T09:00' && srvTask.end_at === mon + 'T18:00' &&
       srvTask.checklist.length === 2 && srvTask.checklist[1].done === true && srvTask.priority === 1 && srvTask.label === 'e2e');
-    check('E8 список: колонки Задача/Исполнитель/Описание/Срок + сортируемые Приор./Статус, приоритет «высокий» выделен, ФИО — ссылки',
-      ['Задача', 'Исполнитель', 'Описание', 'Срок'].every((c) => A.has('<th>' + c + '</th>')) &&
+    check('E8 список: колонки Задача/Описание/Исполнитель/Срок + сортируемые Приор./Статус, приоритет «высокий» выделен, ФИО — ссылки',
+      ['Задача', 'Описание', 'Исполнитель', 'Срок'].every((c) => A.has('>' + c + '</th>')) &&
       A.has('data-tk-act="sortBy" data-key="priority"') && A.has('data-tk-act="sortBy" data-key="status"') && A.has('tk-hi') && A.count('data-tk-act="filterEmp"') === 2);
     // фильтры списка
     await A.filter('priority', '3');
@@ -515,7 +530,7 @@ async function main() {
     // клик по фамилии → «Список» по сотруднику (V6-1 R-14; раньше вёл на Доску)
     await A.click('filterEmp', (d) => d.emp === e1);
     check('E13 клик по фамилии → «Список», отфильтрован по сотруднику, остальные фильтры пусты (R-14)',
-      A.S.view === 'list' && A.S.filters.emp === e1 && !A.S.filters.priority && !A.S.filters.label && !A.S.filters.status && !A.S.filters.due && A.has('E2E задача') && A.has('class="tk-table"'));
+      A.S.view === 'list' && A.S.filters.emp === e1 && !A.S.filters.priority && !A.S.filters.label && !A.S.filters.status && !A.S.filters.due && A.has('E2E задача') && A.has('class="tk-table tk-table-v62"'));
     await A.filter('emp', e3);
     check('E14 список по другому сотруднику: задачи нет', !A.has('E2E задача'));
     await A.click('resetFilters');
@@ -1062,7 +1077,7 @@ async function main() {
     A.sandbox.window.openMatrixAt = (o) => { hasMatrixCalls.push(o); return Promise.resolve({}); };
     await A.T.open({ view: 'list' });
     await A.settle();
-    const rowTitles = (E) => (E.root.innerHTML.match(/<tr class="tk-row[^>]*>\s*<td><b>[^<]*<\/b>/g) || []).map((x) => /<b>([^<]*)<\/b>/.exec(x)[1]);
+    const rowTitles = (E) => (E.root.innerHTML.match(/<tr class="tk-row[^>]*>\s*<td class="tk-c-task"><b>[^<]*<\/b>/g) || []).map((x) => /<b>([^<]*)<\/b>/.exec(x)[1]);
     const v61Row = (E, id) => { const m = new RegExp('<tr class="tk-row[^>]*data-id="' + id + '"[\\s\\S]*?</tr>').exec(E.root.innerHTML); return m ? m[0] : ''; };
 
     // R-1 (кроме E32a): «Назначить» у задач без исполнителя и окно замены остались
@@ -1071,7 +1086,7 @@ async function main() {
 
     // R-16: колонка «Описание» сразу после «Исполнитель»
     const hdr = /<thead><tr>([\s\S]*?)<\/tr><\/thead>/.exec(A.root.innerHTML)[1];
-    check('V6-1 R-16 в шапке «Описание» стоит сразу после «Исполнитель»', /<th>Исполнитель<\/th><th>Описание<\/th>/.test(hdr), hdr);
+    check('V6-1 R-16 → V6.2 W-1: в шапке «Описание» стоит сразу после «Задача», затем «Исполнитель» (колонки поменяны местами)', /<th class="tk-c-task">Задача<\/th><th class="tk-c-desc">Описание<\/th><th class="tk-c-exec">Исполнитель<\/th><th>Срок<\/th>/.test(hdr), hdr);
     const rX = v61Row(A, vX.id), rY = v61Row(A, vY.id);
     const descX = /<td class="tk-desc" title="([^"]*)">([^<]*)<\/td>/.exec(rX);
     check('V6-1 R-16 длинное описание: ≤80 символов с «…», полный текст в title (экранирован), без сырых тегов',
@@ -1079,12 +1094,12 @@ async function main() {
     check('V6-1 R-16 пустое описание → «—» (без title)', /<td class="tk-desc"><span class="tk-muted">—<\/span><\/td>/.test(rY));
     // колонка стоит именно после исполнителя в строке
     const cells = rX.split('</td>');
-    check('V6-1 R-16 в строке: 2-я ячейка — исполнитель, 3-я — описание', cells[1].indexOf('Отпускник Тестович') >= 0 && cells[2].indexOf('tk-desc') >= 0, cells[2]);
+    check('V6-1 R-16 → V6.2 W-1 в строке: 2-я ячейка — описание, 3-я — исполнитель', cells[2].indexOf('Отпускник Тестович') >= 0 && cells[1].indexOf('tk-desc') >= 0, cells[2]);
 
     // R-8: «!» рядом с ФИО
     const wi = /<span class="tk-warnico"[^>]*title="([^"]*)"[^>]*>!<\/span>/.exec(rX);
     check('V6-1 R-8 у исполнителя в отпуске/отгуле/больничном/командировке — «!» с причинами и датами в title',
-      wi && unescTitle(wi[1]) === 'отпуск 02.12–04.12; отгул 08.12; больничный 10.12; командировка 12.12' && cells[1].indexOf('tk-warnico') >= 0, wi && wi[1]);
+      wi && unescTitle(wi[1]) === 'отпуск 02.12–04.12; отгул 08.12; больничный 10.12; командировка 12.12' && cells[2].indexOf('tk-warnico') >= 0, wi && wi[1]);
     check('V6-1 R-8 у исполнителя без пометок «!» нет', rY.indexOf('tk-warnico') < 0);
     // удалённый исполнитель: «!» не показывается, даже если по его employee_id есть пометки
     const keepTasks = A.S.tasks;
@@ -1252,6 +1267,216 @@ async function main() {
     check('V6-1 R-4 Календарь не затронут: renderCalendar по-прежнему на .tk-split (flex), без tk-split-board',
       !/renderCalendar[\s\S]{0,2500}tk-split-board/.test(SRC.slice(SRC.indexOf('function renderCalendar'), SRC.indexOf('function renderDetail'))));
 
+    // =====================================================================================================
+    // V6.2-1: W-1 колонки Списка, W-2 «Править» в строке, W-3 Доска ≤ 2 исполнителей, W-4 метки-теги
+    // =====================================================================================================
+    console.log('-- V6.2-1 W-1…W-4');
+    await A.T.open({ view: 'list' });
+    await A.settle();
+    await A.click('resetFilters');
+    {
+      const esc2 = A.T.__t.esc;
+      const nameOf = (id) => (A.S.employees.find((e) => e.id === id) || {}).name;
+      const mkW = async (title, extra) => mkV(title, Object.assign({ start_at: '2099-11-20', end_at: null }, extra || {}));
+      const w3 = await mkW('W62 три исполнителя', { assignees: ['v61_a', 'v61_b', 'v61_s'], label: 'Alpha, beta' });
+      const w2 = await mkW('W62 два исполнителя', { assignees: ['v61_a', 'v61_b'], label: 'beta,  Gamma ,alpha' });
+      const w4 = await mkW('W62 четыре исполнителя', { assignees: ['v61_a', 'v61_b', 'v61_s', 'v61_x'] });
+      const w1 = await mkW('W62 один исполнитель', { assignees: ['v61_s'] });
+      const wx = await mkW('W62 тег <i>x</i>', { assignees: ['v61_s'], label: 'тег <i>x</i> & "q"' });
+      // старое значение «a,b» (как на проде: 2 задачи с запятой) — без миграции показывается несколькими тегами
+      const dbl = sdb();
+      dbl.prepare('UPDATE tasks SET label = ? WHERE id = ?').run('старый,тег 2', w1.id);
+      dbl.close();
+      await A.T.open({ view: 'list' });
+      await A.settle();
+      const rowOf = (id) => { const m = new RegExp('<tr class="tk-row[^>]*data-id="' + id + '"[\\s\\S]*?</tr>').exec(A.root.innerHTML); return m ? m[0] : ''; };
+      const cellsOf = (row) => row.split('</td>').slice(0, -1);
+
+      // ---- W-1 ----
+      const hdrW = /<thead><tr>([\s\S]*?)<\/tr><\/thead>/.exec(A.root.innerHTML)[1];
+      const thTexts = (hdrW.match(/<th[^>]*>[\s\S]*?<\/th>/g) || []).map((x) => x.replace(/<span class="tk-arr[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim());
+      check('V6.2 W-1 порядок колонок: Задача · Описание · Исполнитель · Срок · Приор. · Статус · (Править)', thTexts.join('|') === 'Задача|Описание|Исполнитель|Срок|Приор.|Статус|Править', thTexts.join('|'));
+      const r3 = rowOf(w3.id), c3 = cellsOf(r3);
+      check('V6.2 W-1 строка: 7 ячеек — задача, описание, исполнитель (все 3 ФИО, «!» и фильтр-ссылки сохранены), срок, приоритет, статус, ✎',
+        c3.length === 7 && /class="tk-c-task"/.test(c3[0]) && /class="tk-desc"/.test(c3[1]) && /class="tk-c-exec"/.test(c3[2]) && (c3[2].match(/data-tk-act="filterEmp"/g) || []).length === 3 &&
+        /class="tk-c-edit"/.test(c3[6]) && /Открыта/.test(c3[5]), c3.map((x) => x.slice(0, 50)).join(' | '));
+      const wRule = /\.tk-table-v62 th\.tk-c-exec,\.tk-table-v62 td\.tk-c-exec\{width:(\d+)px;min-width:(\d+)px;max-width:(\d+)px;overflow-wrap:anywhere\}/.exec(SRC);
+      check('V6.2 W-1 ширина «Исполнителя» — ~50 % замеренной до правки (1280 px: 255.8 px → 128 px, фиксировано), ФИО переносятся (overflow-wrap:anywhere)',
+        wRule && +wRule[1] === 128 && wRule[1] === wRule[2] && wRule[2] === wRule[3] && +wRule[1] / 255.8 > 0.48 && +wRule[1] / 255.8 < 0.52, wRule && wRule[0]);
+      check('V6.2 W-1 «Описание» забирает освободившееся: у .tk-desc в таблице нет max-width, min-width ≥ 220px', /\.tk-table-v62 td\.tk-desc\{min-width:2\d\dpx;max-width:none\}/.test(SRC));
+      check('V6.2 W-1 «Приор.» и «Статус» по-прежнему сортируются, шапка sticky (th position:sticky), таблица в .tk-tablewrap (горизонтальная прокрутка на 375)',
+        A.has('data-tk-act="sortBy" data-key="priority"') && A.has('data-tk-act="sortBy" data-key="status"') && /\.tk-table th\{position:sticky;top:0/.test(SRC) && /\.tk-tablewrap\{overflow:auto/.test(SRC) && A.has('class="tk-tablewrap"'));
+
+      // ---- W-2 ----
+      const nRows = A.count('<tr class="tk-row');
+      check('V6.2 W-2 admin: в каждой строке кнопка ✎ (title «Править», aria-label, type=button), в шапке — колонка с доступным именем «Править»',
+        nRows >= 5 && A.count('class="tk-editbtn"') === nRows && /<button type="button" class="tk-editbtn" data-tk-act="editTask" data-id="[^"]+" title="Править" aria-label="Править задачу «[^"]*»">✎<\/button>/.test(r3) &&
+        /<th class="tk-c-edit"><span class="tk-sr">Править<\/span><\/th>/.test(A.root.innerHTML), nRows + ' ' + A.count('tk-editbtn'));
+      check('V6.2 W-2 в строке задачи с тегом <i> aria-label экранирован', /aria-label="Править задачу «W62 тег &lt;i&gt;x&lt;\/i&gt;»"/.test(rowOf(wx.id)));
+      let stopped = 0;
+      const rowEl = { dataset: { tkAct: 'openTask', id: w3.id, view: 'board' } };
+      const btnEl = { dataset: { tkAct: 'editTask', id: w3.id } };
+      A.root.fire('click', { target: { closest: () => btnEl }, stopPropagation() { stopped++; }, preventDefault() {} });
+      await A.settle();
+      check('V6.2 W-2 клик по ✎: сразу форма правки ЭТОЙ задачи (тот же путь, что «Править» в карточке), карточка не открыта, остались в «Списке», stopPropagation вызван',
+        A.S.form && A.S.form.id === w3.id && A.has('Редактирование задачи') && A.S.view === 'list' && A.S.selectedId !== w3.id && !A.has('class="tk-detail"') && stopped === 1 && A.S.form.draft.title === 'W62 три исполнителя', JSON.stringify({ form: A.S.form && A.S.form.id, view: A.S.view, sel: A.S.selectedId, stopped }));
+      check('V6.2 W-2 в форме правки теги задачи — чипами, а не строкой: «Alpha», «beta»', A.S.form.draft.labels.join('|') === 'Alpha|beta' && A.count('class="tk-chip tk-tagchip"') === 2);
+      await A.click('cancelForm');
+      check('V6.2 W-2 «Отмена» возвращает в «Список» (строка на месте)', A.S.form === null && A.S.view === 'list' && A.has('W62 три исполнителя'));
+      await A.click('openTask', (d) => d.id === w3.id);
+      check('V6.2 W-2 клик по строке (не по ✎) — как раньше: открывается карточка (Доска + .tk-detail)', A.S.view === 'board' && A.S.selectedId === w3.id && A.has('class="tk-detail"'));
+      check('V6.2 W-2 «Править» в карточке и ✎ — одна и та же функция (ACTIONS.editTask)', A.findTag('data-tk-act', 'editTask', (d) => d.id === w3.id) && typeof A.T.__t.ACTIONS.editTask === 'function' && (SRC.match(/data-tk-act="editTask"/g) || []).length === 2);
+      await A.T.open({ view: 'list' }); await A.settle();
+      // ✎ → правка → сохранение → строка обновилась, клавиатура: у <button> Enter/Space = click (нативно), tabindex не нужен
+      await A.click('editTask', (d) => d.id === w1.id);
+      await A.field('title', 'W62 один исполнитель (правка)');
+      await A.click('saveForm');
+      check('V6.2 W-2 ✎ → правка названия → «Сохранить»: форма закрыта, в Списке новое название, сервер сохранил',
+        A.S.form === null && A.S.view === 'list' && A.has('W62 один исполнитель (правка)') && (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + w1.id)).json.task.title === 'W62 один исполнитель (правка)');
+      check('V6.2 W-2 правка через ✎ старого значения «старый,тег 2» не потеряла теги (оба в форме и на сервере — «старый, тег 2»)',
+        (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + w1.id)).json.task.label === 'старый, тег 2');
+
+      // ---- W-3 ----
+      await A.T.open({ view: 'board' }); await A.settle();
+      const tile = (id) => (A.root.innerHTML.split('<div class="tk-card').filter((r) => r.indexOf('data-id="' + id + '"') >= 0)[0] || '');
+      const sub = (id) => (/<div class="tk-sub"([^>]*)>([\s\S]*?)<\/div>/.exec(tile(id)) || [])[0] || '';
+      const n3 = A.S.tasks.find((t) => t.id === w3.id).assignees.map((x) => x.full_name || nameOf(x.employee_id));   // порядок — как в ответе API
+      check('V6.2 W-3 (данные) у тестовой задачи 3 исполнителя', n3.length === 3 && n3.every(Boolean), n3.join(','));
+      const s3 = sub(w3.id);
+      const names3 = (s3.match(/class="tk-name tk-namebtn" data-tk-act="filterEmp" data-emp="([^"]+)"/g) || []);
+      check('V6.2 W-3 Доска, 3 исполнителя: в подстроке ровно 2 ФИО-кнопки и «…» после второго; третьего ФИО в тексте нет',
+        names3.length === 2 && />\s*…<\/|<\/span>…/.test(s3) && s3.indexOf('</span>…') > s3.lastIndexOf('data-tk-act="filterEmp"') && s3.indexOf(n3[2] + '</span>') < 0, s3);
+      const ttl = unescTitle((/title="(Исполнители: [^"]*)"/.exec(s3) || [])[1] || '');
+      check('V6.2 W-3 полный список ФИО — в title подстроки («Исполнители: A, B, C»)', ttl === 'Исполнители: ' + n3.join(', '), ttl);
+      const s4 = sub(w4.id);
+      check('V6.2 W-3 4 исполнителя: 2 ФИО + «…», в title — все 4', (s4.match(/data-tk-act="filterEmp"/g) || []).length === 2 && s4.indexOf('</span>…') > 0 && (unescTitle((/title="(Исполнители: [^"]*)"/.exec(s4) || [])[1] || '').split(', ').length === 4), s4);
+      const s2 = sub(w2.id);
+      check('V6.2 W-3 2 исполнителя: оба ФИО, без «…» и без общего title', (s2.match(/data-tk-act="filterEmp"/g) || []).length === 2 && s2.indexOf('…') < 0 && !/<div class="tk-sub" title=/.test(s2), s2);
+      const s1 = sub(w1.id);
+      check('V6.2 W-3 1 исполнитель: без «…»', (s1.match(/data-tk-act="filterEmp"/g) || []).length === 1 && s1.indexOf('…') < 0, s1);
+      // удалённый среди первых двух — зачёркнут, считается в лимите
+      const keepW = A.S.tasks;
+      const t3 = A.S.tasks.find((t) => t.id === w3.id);
+      A.S.tasks = A.S.tasks.map((t) => t.id !== w3.id ? t : Object.assign({}, t, { assignees: [{ employee_id: 'v61_a', full_name: 'Удалённый Икс', removed: true, removed_at: null }].concat(t.assignees.filter((a) => a.employee_id !== 'v61_a')) }));
+      A.T.__t.render();
+      const s3r = sub(w3.id);
+      check('V6.2 W-3 удалённый исполнитель среди первых двух — зачёркнут (<s class="tk-gone">), «…» и title на месте, живой — кнопка', /<s class="tk-gone" title="Сотрудник удалён">Удалённый Икс<\/s>/.test(s3r) && (s3r.match(/data-tk-act="filterEmp"/g) || []).length === 1 && s3r.indexOf('</span>…') > 0 && /title="Исполнители: Удалённый Икс, /.test(s3r), s3r);
+      A.S.tasks = keepW; A.T.__t.render();
+      await A.click('filterEmp', (d) => d.emp === 'v61_a');
+      check('V6.2 W-3 первое ФИО из плитки по-прежнему кликабельно (V6-5): → «Список» по сотруднику', A.S.view === 'list' && A.S.filters.emp === 'v61_a' && !A.S.filters.label && A.has('W62 три исполнителя'));
+      const lr = rowOf(w3.id);
+      check('V6.2 W-3 Список — без изменений: в строке все 3 исполнителя', n3.every((n) => lr.indexOf(esc2(n)) >= 0) && lr.indexOf('…') < 0, lr.slice(0, 300));
+      await A.T.open({ view: 'board', taskId: w3.id }); await A.settle();
+      const detW = A.root.innerHTML.slice(A.root.innerHTML.indexOf('<aside class="tk-detail">'));
+      check('V6.2 W-3 карточка задачи — без изменений: «Исполнители» — все 3, без «…»', /<span>Исполнители<\/span><div>[\s\S]*?<\/div>/.test(detW) && n3.every((n) => /<span>Исполнители<\/span><div>[\s\S]*?<\/div>/.exec(detW)[0].indexOf(esc2(n)) >= 0) && !/<span>Исполнители<\/span><div>[^]*?…/.test(/<span>Исполнители<\/span><div>[\s\S]*?<\/div>/.exec(detW)[0]));
+
+      // ---- W-4: отображение ----
+      await A.T.open({ view: 'list' }); await A.settle();
+      await A.click('resetFilters');
+      const lr3 = rowOf(w3.id);
+      const chips3 = (lr3.match(/class="tk-tag tk-tagbtn tk-ltag"[^>]*>[^<]*<\/span>/g) || []);
+      check('V6.2 W-4 Список: «Alpha, beta» — два отдельных кликабельных чипа (filterBy label), у каждого title «Показать в Списке…»',
+        chips3.length === 2 && /data-f="label" data-v="Alpha"/.test(chips3[0]) && /data-f="label" data-v="beta"/.test(chips3[1]) && /title="Показать в Списке все задачи с меткой «Alpha»"/.test(chips3[0]), chips3.join(' '));
+      const lw1 = rowOf(w1.id);
+      check('V6.2 W-4 старое значение «старый,тег 2» (как на проде) — несколько тегов без миграции',
+        (lw1.match(/data-f="label" data-v="[^"]+"/g) || []).join('|') === 'data-f="label" data-v="старый"|data-f="label" data-v="тег 2"', lw1.slice(0, 400));
+      check('V6.2 W-4 тег с HTML экранирован в чипе и в data-v', rowOf(wx.id).indexOf('<i>x</i>') < 0 && /data-v="тег &lt;i&gt;x&lt;\/i&gt; &amp; &quot;q&quot;"/.test(rowOf(wx.id)));
+      await A.T.open({ view: 'board' }); await A.settle();
+      check('V6.2 W-4 Доска: теги плитки — отдельные кликабельные чипы', (tile(w2.id).match(/class="tk-tag tk-tagbtn tk-ltag"/g) || []).length === 3 && (tile(w3.id).match(/data-f="label"/g) || []).length === 2);
+      await A.T.open({ view: 'board', taskId: w2.id }); await A.settle();
+      const detW2 = A.root.innerHTML.slice(A.root.innerHTML.indexOf('<aside class="tk-detail">'));
+      check('V6.2 W-4 карточка: теги — отдельные кликабельные чипы (3)', (detW2.match(/data-f="label" data-v="/g) || []).length === 3);
+      await A.click('filterBy', (d) => d.f === 'label' && d.v === 'beta');
+      const betaRows = (A.root.innerHTML.match(/<tr class="tk-row[^>]*data-id="[^"]+"/g) || []).map((x) => /data-id="([^"]+)"/.exec(x)[1]);
+      check('V6.2 W-4 R-12: клик по тегу «beta» → «Список», ровно один фильтр label=beta; видны задачи, ГДЕ ЕСТЬ этот тег (2 из «Alpha, beta» и «beta, Gamma, alpha»), без других',
+        A.S.view === 'list' && A.S.filters.label === 'beta' && !A.S.filters.emp && !A.S.filters.status && betaRows.length === 2 && betaRows.indexOf(w3.id) >= 0 && betaRows.indexOf(w2.id) >= 0, betaRows.length + ' ' + JSON.stringify(A.S.filters));
+      await A.click('resetFilters');
+      await A.filter('label', 'gamma');
+      check('V6.2 W-4 фильтр совпадает без учёта регистра: «gamma» находит тег «Gamma»', A.has('W62 два исполнителя') && !A.has('W62 три исполнителя'));
+      await A.click('resetFilters');
+      const optsM = /<select data-tk-filter="label">([\s\S]*?)<\/select>/.exec(A.root.innerHTML)[1];
+      const optVals = (optsM.match(/<option value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]).filter(Boolean).map((x) => unescTitle(x));
+      const sortedCopy = optVals.slice().sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0));
+      check('V6.2 W-4 фильтр «Метка»: варианты — отдельные теги, уникальные (Alpha и alpha — один), по алфавиту; составных строк с запятой нет',
+        optVals.length >= 6 && optVals.join('|') === sortedCopy.join('|') && optVals.every((o) => o.indexOf(',') < 0) && new Set(optVals.map((o) => o.toLowerCase())).size === optVals.length &&
+        optVals.indexOf('Alpha') >= 0 && optVals.indexOf('alpha') < 0 && optVals.indexOf('Gamma') >= 0 && optVals.indexOf('старый') >= 0 && optVals.indexOf('тег 2') >= 0, optVals.join('|'));
+      check('V6.2 W-4 labelsOf/splitTags — модульные: «a ,A,  b  c ,,» → [a, "b c"]', JSON.stringify(A.T.__t.splitTags('a ,A,  b  c ,,')) === JSON.stringify(['a', 'b c']));
+
+      // ---- W-4: форма ----
+      await A.click('newTask');
+      const kb = async (k, v) => A.key('labelInput', k, v);
+      const labs = () => A.S.form.draft.labels.join('|');
+      check('V6.2 W-4 форма: поле «Метка» — контейнер тегов + input[list=tkLabels] (подсказки из существующих тегов), без старого input[data-tk-field=label]',
+        A.has('data-tk-tagsbox="1"') && A.has('list="tkLabels"') && !A.findTag('data-tk-field', 'label') && A.count('<datalist id="tkLabels"><option') === 1 && A.has('<option value="Alpha">') && A.has('<option value="тег 2">') && !A.has('<option value="alpha">'));
+      let e = await kb('Enter', 'первый');
+      check('V6.2 W-4 Enter в поле → чип, ввод очищен, действие по умолчанию отменено', labs() === 'первый' && A.S.form.draft.labelInput === '' && e.prevented && A.count('class="tk-chip tk-tagchip"') === 1);
+      e = await kb(',', 'второй');
+      check('V6.2 W-4 запятая в поле → чип', labs() === 'первый|второй' && e.prevented && A.count('class="tk-chip tk-tagchip"') === 2);
+      e = await kb('Enter', '  ПЕРВЫЙ ');
+      check('V6.2 W-4 дубль без учёта регистра не добавляется, ввод очищается', labs() === 'первый|второй' && A.S.form.draft.labelInput === '');
+      e = await kb('Enter', '   ');
+      check('V6.2 W-4 Enter на пустом вводе ничего не делает', labs() === 'первый|второй');
+      e = await kb('Backspace', 'ab');
+      check('V6.2 W-4 Backspace в НЕпустом вводе — обычное редактирование (чипы целы, событие не отменено)', labs() === 'первый|второй' && !e.prevented);
+      e = await kb('Backspace', '');
+      check('V6.2 W-4 Backspace в пустом вводе удаляет последний чип', labs() === 'первый' && e.prevented && A.count('class="tk-chip tk-tagchip"') === 1);
+      await A.input('labelInput', 'тег1, тег2, Тег3', { inputType: 'insertFromPaste' });
+      check('V6.2 W-4 вставка строки с запятыми → несколько чипов (все три, ввод пуст)', labs() === 'первый|тег1|тег2|Тег3' && A.S.form.draft.labelInput === '');
+      await A.input('labelInput', 'набран,');
+      check('V6.2 W-4 набранная запятая (input) → чип «набран», хвост после запятой остаётся в поле', labs() === 'первый|тег1|тег2|Тег3|набран' && A.S.form.draft.labelInput === '');
+      await A.input('labelInput', 'хв');
+      check('V6.2 W-4 обычный ввод только обновляет черновик (без чипа)', labs() === 'первый|тег1|тег2|Тег3|набран' && A.S.form.draft.labelInput === 'хв');
+      await A.click('removeTag', (d) => d.idx === '1');
+      check('V6.2 W-4 × на чипе удаляет именно его (тег1), остальные на месте, введённый текст сохранён', labs() === 'первый|тег2|Тег3|набран' && A.S.form.draft.labelInput === 'хв' && !A.has('data-tk-tag="тег1"') && A.has('data-tk-tag="тег2"'));
+      check('V6.2 W-4 у × есть title и aria-label', /data-tk-act="removeTag" data-idx="0" title="Убрать тег" aria-label="Убрать тег «первый»"/.test(A.root.innerHTML));
+      await A.input('labelInput', 'Alpha', { inputType: 'insertReplacementText' });
+      check('V6.2 W-4 выбор подсказки из datalist (insertReplacementText) → сразу чип', labs().split('|').indexOf('Alpha') === 4 && A.S.form.draft.labelInput === '', labs());
+      await A.input('labelInput', 'Alpha', { inputType: 'insertText' });
+      check('V6.2 W-4 ввод «Alpha» руками (insertText) в чип не превращается до Enter', A.S.form.draft.labelInput === 'Alpha' && labs().split('|').length === 5);
+      await A.field('labelInput', '');
+      const long31 = 'я'.repeat(31);
+      e = await kb('Enter', long31);
+      check('V6.2 W-4 тег длиннее 30 → понятная ошибка в форме, чип не добавлен, введённое не потеряно', A.has('длиннее 30 символов') && labs().split('|').length === 5 && A.S.form.draft.labelInput === long31, A.S.form.error);
+      await A.field('labelInput', '');
+      e = await kb('Enter', 'коротко');
+      check('V6.2 W-4 после исправления ошибка тега снимается', !A.has('длиннее 30 символов') && labs().split('|').indexOf('коротко') === 5);
+      // сохранить: чипы + «введённый, но не превращённый в чип» текст
+      await A.click('cancelForm');
+      await A.click('newTask');
+      await A.field('title', 'W62 теги формы');
+      await A.field('assigneePick', 'v61_s');
+      await kb('Enter', 'один'); await kb(',', 'два'); await kb('Enter', 'Один');
+      await A.field('labelInput', 'хвост-не-чип');
+      check('V6.2 W-4 перед сохранением: чипы «один, два», в поле текст «хвост-не-чип»', labs() === 'один|два' && A.S.form.draft.labelInput === 'хвост-не-чип');
+      const postsPre = A.calls.length;
+      await A.click('saveForm');
+      const postW = A.calls.slice(postsPre).find((c) => c.method === 'POST' && c.url === 'api/tasks.php');
+      check('V6.2 W-4 «Сохранить»: непревращённый текст тоже уходит тегом — label = «один, два, хвост-не-чип»', postW && postW.body.label === 'один, два, хвост-не-чип' && A.S.form === null, postW && postW.body.label);
+      const srvNew = A.S.tasks.find((t) => t.title === 'W62 теги формы');
+      check('V6.2 W-4 перечитывание: сервер вернул label «один, два, хвост-не-чип» и labels[3]; в Списке 3 чипа', srvNew && srvNew.label === 'один, два, хвост-не-чип' && srvNew.labels.join('|') === 'один|два|хвост-не-чип' && (rowOf(srvNew.id).match(/data-f="label"/g) || []).length === 3, srvNew && srvNew.label);
+      // правка существующей: чипы из labels, удалить и добавить, сохранить
+      await A.click('editTask', (d) => d.id === srvNew.id);
+      check('V6.2 W-4 правка: теги подгружены чипами (3)', labs() === 'один|два|хвост-не-чип' && A.count('class="tk-chip tk-tagchip"') === 3);
+      await A.click('removeTag', (d) => d.idx === '0');
+      await kb('Backspace', '');
+      await kb('Enter', 'новый');
+      await A.click('saveForm');
+      const srvNew2 = (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + srvNew.id)).json.task;
+      check('V6.2 W-4 правка: «× на первом», Backspace, добавление → сохранено «два, новый», версия выросла', srvNew2.label === 'два, новый' && srvNew2.labels.join('|') === 'два|новый' && srvNew2.version === srvNew.version + 1 && A.S.form === null, srvNew2.label);
+      // пустая метка → NULL
+      await A.click('editTask', (d) => d.id === srvNew.id);
+      await A.click('removeTag', (d) => d.idx === '0'); await A.click('removeTag', (d) => d.idx === '0');
+      await A.click('saveForm');
+      const srvNew3 = (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + srvNew.id)).json.task;
+      check('V6.2 W-4 все чипы убраны → метка NULL, labels []', srvNew3.label === null && srvNew3.labels.length === 0);
+      // ошибка сервера показывается понятным текстом (message), а не «Ошибка сервера (invalid_label)»
+      const errTxt = A.T.__t.errText({ status: 400, data: { error: 'invalid_label', message: 'Тег «яяя…» длиннее 30 символов.' } });
+      check('V6.2 W-4 ответ сервера invalid_label с message → текст показывается как есть; без message — запасной понятный текст', errTxt === 'Тег «яяя…» длиннее 30 символов.' && /тег — до 30 символов/.test(A.T.__t.errText({ status: 400, data: { error: 'invalid_label' } })));
+      check('V6.2 W-4 клиентский предел строки: 7 тегов по 30 → ошибка «Все теги вместе длиннее 200»', /Все теги вместе длиннее 200/.test(A.T.__t.draftError({ title: 'x', assignees: ['v61_s'], startDate: '2099-01-01', kind: 'single', labels: ['1', '2', '3', '4', '5', '6', '7'].map((c) => c.repeat(30)), labelInput: '' })));
+      check('V6.2 W-4 CSS чипов формы и 375px: .tk-tagsbox flex-wrap, input не сжимается (flex:1 1 120px)', /\.tk-f \.tk-tagsbox\{display:flex;flex-wrap:wrap/.test(SRC) && /input\[type=text\]\{flex:1 1 120px/.test(SRC));
+      await A.click('resetFilters');
+    }
+
     // ---------- supervisor / viewer ----------
     for (const [label, ck] of [['supervisor', supCk], ['viewer', viewCk]]) {
       const R = makeEnv(base, ck);
@@ -1259,6 +1484,17 @@ async function main() {
       await R.settle();
       check('R-' + label + '-1 панель работает (видны задачи), режим «только просмотр»',
         R.root.style.display === 'block' && R.S.tasks.length >= 2 && R.has('только просмотр') && R.T.canWrite() === false);
+      // V6.2 W-2: у supervisor/viewer в Списке нет ни колонки «Править», ни кнопок ✎; принудительный вызов editTask формы не открывает
+      {
+        const lst = R.root.innerHTML;
+        const thN = ((/<thead><tr>([\s\S]*?)<\/tr><\/thead>/.exec(lst) || [])[1] || '').match(/<th[ >]/g) || [];
+        const pre = R.calls.length;
+        R.T.__t.ACTIONS.editTask({ dataset: { id: tid } }, { stopPropagation() {} });
+        check('R-' + label + '-8 V6.2 W-2: в Списке нет колонки «Править» и кнопок ✎ (6 колонок), editTask принудительно — формы нет, запросов нет',
+          R.S.view === 'list' && thN.length === 6 && lst.indexOf('tk-c-edit') < 0 && lst.indexOf('tk-editbtn') < 0 && lst.indexOf('Править') < 0 && R.S.form === null && R.calls.length === pre, thN.length + ' ' + R.S.view);
+        const kt = R.T.__t.ACTIONS.removeTag; kt({ dataset: { idx: '0' } });
+        check('R-' + label + '-9 V6.2 W-4: у наблюдателя нет поля-тегов; чипы тегов в Списке — кликабельные фильтры', lst.indexOf('data-tk-tagsbox') < 0 && lst.indexOf('data-tk-field="labelInput"') < 0 && /data-tk-act="filterBy" data-f="label"/.test(lst) && R.S.form === null);
+      }
       const writeMarks = ['data-tk-act="newTask"', 'data-tk-act="editTask"', 'data-tk-act="closeTask"', 'data-tk-act="reopenTask"',
         'data-tk-act="archiveTask"', 'data-tk-act="reassignTask"', 'data-tk-act="saveForm"', 'draggable', 'data-tk-drag', '<form'];
       const seen = [];
