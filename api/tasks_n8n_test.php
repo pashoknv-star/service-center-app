@@ -460,6 +460,45 @@ $run('N12 tasks_recheck_pending: вердикты с ошибкой/чужой i
     return 'остаётся pending';
 });
 
+// --- V6.3-2 (Д-1): перепроверка pending учитывает повторы ------------------------------
+$run('N12b tasks_recheck_pending + повторы: каждый повтор — отдельная запись пакета «задача#повтор» (сценарий n8n не меняется); conflict по повтору; нет вердикта по повтору → остаётся pending', function () use ($pdo, $setEnv, $setCtl, $SECRET, $calls, $resetCalls) {
+    $pdo->exec("INSERT INTO tasks (id, title, start_at, check_state) VALUES ('nn_occ', 'occ', '2027-06-01', 'pending')");
+    $pdo->exec("INSERT INTO task_assignees (task_id, employee_id, role) VALUES ('nn_occ', 'nn_u1', 'assignee')");
+    $pdo->exec("INSERT INTO task_occurrences (task_id, start_at, end_at) VALUES ('nn_occ', '2027-06-03', NULL)");   // день больничного nn_u1
+    $oid = (int) $pdo->query("SELECT id FROM task_occurrences WHERE task_id = 'nn_occ'")->fetchColumn();
+    $setEnv(false, true, $SECRET);
+    try {
+        // 1) вердикты по обеим записям (mock «auto» считает блоки по фактам): conflict=true только у повтора
+        $resetCalls();
+        $setCtl(['recheck' => ['mode' => 'auto']]);
+        $s = tasks_recheck_pending($pdo);
+        eq([$s['available'], $s['checked'], $s['resolved'], $s['conflicts']], [true, 1, 1, 1], 'stat: 1 задача, conflict от повтора');
+        $c = $calls('recheck');
+        eq(count($c), 1, 'один вызов');
+        $ids = array_column($c[0]['body']['tasks'], 'id');
+        eq($ids, ['nn_occ', 'nn_occ#' . $oid], 'в пакете основной срок и повтор отдельными записями');
+        eq(array_column($c[0]['body']['tasks'], 'from'), ['2027-06-01', '2027-06-03'], 'from по каждой записи');
+        eq((string) $pdo->query("SELECT check_state FROM tasks WHERE id = 'nn_occ'")->fetchColumn(), 'ok', 'pending → ok');
+        $d = json_decode((string) $pdo->query("SELECT details FROM audit_log WHERE action = 'task.recheck' AND entity_id = 'nn_occ'")->fetchColumn(), true);
+        eq([$d['conflict'], $d['blocked_days_count']], [true, 1], 'audit: conflict по повтору');
+        // 2) n8n вернул вердикт только по основной записи → по повтору нет → задача остаётся pending
+        $pdo->exec("UPDATE tasks SET check_state = 'pending' WHERE id = 'nn_occ'");
+        $setCtl(['recheck' => ['response' => ['results' => [['id' => 'nn_occ', 'conflict' => false, 'blocked_days' => []]]]]]);
+        $s = tasks_recheck_pending($pdo);
+        eq([$s['available'], $s['checked'], $s['resolved']], [true, 1, 0], 'stat: неполный вердикт');
+        eq((string) $pdo->query("SELECT check_state FROM tasks WHERE id = 'nn_occ'")->fetchColumn(), 'pending', 'остаётся pending');
+        // 3) вердикт с ошибкой по повтору — тоже pending
+        $setCtl(['recheck' => ['response' => ['results' => [['id' => 'nn_occ', 'conflict' => false, 'blocked_days' => []], ['id' => 'nn_occ#' . $oid, 'error' => 'invalid_from']]]]]);
+        $s = tasks_recheck_pending($pdo);
+        eq($s['resolved'], 0, 'ошибка вердикта повтора → не разрешено');
+    } finally {
+        $setEnv(false, false, null);
+        $pdo->exec("DELETE FROM tasks WHERE id = 'nn_occ'");
+        $pdo->exec("DELETE FROM audit_log WHERE action = 'task.recheck' AND entity_id = 'nn_occ'");
+    }
+    return 'пакет «задача#повтор», полный вердикт обязателен';
+});
+
 // --- D-4 (T1-9): таймауты 3 с / 10 с и лог аномалий ----------------------------
 // Запись error_log во временный файл: [результат вызова, текст лога].
 $withLog = function (callable $fn): array {
@@ -618,6 +657,34 @@ try {
         eq(count($c), 1, 'вызовов webhook');
         eq([$c[0]['secret_ok'], $c[0]['body']['employee_ids'], $c[0]['body']['from'], $c[0]['body']['to']], [true, ['nn_a'], '2027-07-05', '2027-07-06'], 'запрос');
         return $r['ms'] . ' мс';
+    });
+
+    $run('H1b V6.3-2: создание с повторами — проверка вызывается для каждого повтора (основной срок + 2 повтора = 3 вызова validate, свои from/to); n8n недоступен → pending; вердикт-блок → 422, задача не создана', function () use ($A, $setCtl, $okVerdict, $calls, $resetCalls, $pdo, $state) {
+        $resetCalls();
+        $setCtl(['validate' => ['response' => $okVerdict]]);
+        $r = $A('POST', '', ['title' => 'H1b', 'start_at' => '2027-07-05T10:00', 'end_at' => '2027-07-05T11:00', 'assignees' => ['nn_a'],
+            'occurrences' => [['start_at' => '2027-07-12T10:00'], ['start_at' => '2027-07-20T15:00']]]);
+        eq($r['status'], 201, 'status ' . $r['raw']);
+        $c = $calls('validate');
+        eq(count($c), 3, 'вызовов webhook: основной срок + по одному на повтор');
+        eq(array_map(fn($x) => $x['body']['from'], $c), ['2027-07-05', '2027-07-12', '2027-07-20'], 'from по каждому периоду');
+        eq($r['json']['task']['check_state'], 'ok', 'check_state ok');
+        // n8n недоступен → PHP-fallback, pending
+        $setCtl(['validate' => ['status' => 500, 'raw' => 'x']]);
+        $r = $A('POST', '', ['title' => 'H1b-pending', 'start_at' => '2027-07-05T10:00', 'end_at' => '2027-07-05T11:00', 'assignees' => ['nn_a'],
+            'occurrences' => [['start_at' => '2027-07-12T10:00']]]);
+        eq([$r['status'], $r['json']['task']['check_state']], [201, 'pending'], 'недоступен → pending');
+        // вердикт n8n первичен: блок → 422, ничего не создано (mock отвечает одинаково на все вызовы)
+        $setCtl(['validate' => ['response' => ['blocked_days' => [['date' => '2027-07-12', 'employee_id' => 'nn_a', 'reason' => 'sick']], 'notes' => [], 'suggested_start' => '2027-07-13']]]);
+        $n0 = (int) $pdo->query('SELECT COUNT(*) FROM tasks')->fetchColumn();
+        $r = $A('POST', '', ['title' => 'H1b-blocked', 'start_at' => '2027-07-05T10:00', 'end_at' => '2027-07-05T11:00', 'assignees' => ['nn_a'],
+            'occurrences' => [['start_at' => '2027-07-12T10:00']]]);
+        eq($r['status'], 422, 'вердикт-блок → 422');
+        eq((int) $pdo->query('SELECT COUNT(*) FROM tasks')->fetchColumn(), $n0, 'задача не создана');
+        // убрать следы (pending-задача и аудит не должны влиять на H5/H6)
+        $pdo->exec("DELETE FROM audit_log WHERE entity_type = 'task' AND entity_id IN (SELECT id FROM tasks WHERE title LIKE 'H1b%')");
+        $pdo->exec("DELETE FROM tasks WHERE title LIKE 'H1b%'");
+        return '3 вызова на задачу с 2 повторами';
     });
 
     $run('H2 вариант B: n8n вернул блок → 422 TASK_BLOCKED с suggested_start от n8n, задача не создана', function () use ($A, $setCtl, $pdo) {

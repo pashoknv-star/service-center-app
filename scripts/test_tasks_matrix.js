@@ -256,6 +256,29 @@ async function main() {
   await A.M.overlay(2026); await settle();
   check('B11 12 задач в один день → «9+» (круг не раздувается)', A.icons().length === 1 && A.icons()[0].el.textContent === '9+' && A.icons()[0].el.dataset.tkCount === '12');
 
+  // B11a–B11f V6.3-2 (Д-1): повторы задачи — иконка и рамка на днях ВСЕХ выполнений
+  const withOcc = (t, occ) => Object.assign(t, { occurrences: occ.map((o, i) => ({ id: i + 1, start_at: o[0], end_at: o[1] || null })) });
+  A = mk([withOcc(task('2026-11-09', '2026-11-09', [1], { title: 'С повторами' }), [['2026-11-12T09:00'], ['2026-11-18T09:00', '2026-11-19T18:00']])]);
+  await A.M.overlay(2026); await settle();
+  check('B11a задача с двумя повторами: иконки на днях основной даты и обоих повторов (09.11, 12.11, 18.11), по одной на день',
+    A.icons().map((i) => i.day).join() === [D('2026-11-09'), D('2026-11-12'), D('2026-11-18')].join() && A.icons().every((i) => i.emp === '1' && i.el.textContent === '1'), JSON.stringify(A.icons().map((i) => i.day)));
+  check('B11b рамка: дни основной даты и каждого повтора; многодневный повтор 18–19.11 — одна рамка из двух дней (скобки на краях), между повторами рамки нет',
+    A.framed(1).join() === [D('2026-11-09'), D('2026-11-12'), D('2026-11-18'), D('2026-11-19')].join() && A.cell(1, D('2026-11-18'))._cls.has('tk-fr-l') && A.cell(1, D('2026-11-19'))._cls.has('tk-fr-r') && !A.cell(1, D('2026-11-10'))._cls.has('tk-fr'));
+  A = mk([withOcc(task('2026-11-09', '2026-11-09', [1, 2], { title: 'Двое с повтором' }), [['2026-11-12T09:00']]), task('2026-11-12', null, [1], { title: 'Другая в день повтора' })]);
+  await A.M.overlay(2026); await settle();
+  const ic12 = A.icons().filter((i) => i.emp === '1' && i.day === D('2026-11-12'))[0];
+  check('B11c день повтора: иконка считает задачи — повтор «Двое с повтором» + «Другая» = 2; у второго исполнителя иконки на обоих днях повторов',
+    ic12 && ic12.el.textContent === '2' && A.icons().filter((i) => i.emp === '2').map((i) => i.day).join() === [D('2026-11-09'), D('2026-11-12')].join());
+  A = mk([withOcc(task('2026-11-09', '2026-11-09', [1]), [['2026-11-09T15:00']])]);
+  await A.M.overlay(2026); await settle();
+  check('B11d основная дата и повтор в один день (разное время) — одна задача: один круг со счётчиком 1, рамка из одного дня', A.icons().length === 1 && A.icons()[0].el.textContent === '1' && A.framed(1).length === 1);
+  A = mk([withOcc(task('2026-11-09', '2026-11-09', [1], { status: 'closed' }), [['2026-11-12T09:00']]), withOcc(task('2026-11-09', '2026-11-09', [2], { archived: 1 }), [['2026-11-12T09:00']])]);
+  await A.M.overlay(2026); await settle();
+  check('B11e закрытая и архивная задачи с повторами: ни иконок, ни рамок (повторы закрываются вместе с задачей)', A.icons().length === 0 && A.framed(1).length === 0 && A.framed(2).length === 0);
+  A = mk([withOcc(task('2025-12-30', '2025-12-30', [1]), [['2026-11-12T09:00'], ['2027-02-01T09:00']])]);
+  await A.M.overlay(2026); await settle();
+  check('B11f основная дата в другом году: в показанном году видны только его повторы (12.11); повтор следующего года не рисуется', A.icons().map((i) => i.day).join() === String(D('2026-11-12')) && A.framed(1).join() === String(D('2026-11-12')));
+
   // B12–B14 границы года
   const span = task('2026-12-29', '2027-01-03', [1], { title: 'Через год' });
   const prev = task('2025-12-29', '2026-01-04', [2], { title: 'С прошлого года' });
@@ -513,6 +536,17 @@ async function main() {
     for (let i = 0; i < 400 && E.icons().filter((x) => x.emp === nid(eIds[0])).length; i++) await sleep(50);   // refresh асинхронный: ждём результат, а не фиксированное время
     check('F7 admin закрыл задачу через API + tasks:changed → иконка и рамка убраны, остальные на месте (2 иконки)',
       E.icons().filter((i) => i.emp === nid(eIds[0])).length === 0 && E.framed(nid(eIds[0])).length === 0 && E.icons().length === 2 && E.calls.length === 2, JSON.stringify(E.icons().map((i) => i.emp)));
+    // V6.3-2: задача с повторами по реальному API → иконки на днях повторов (повтор начинается в другом месяце)
+    {
+      const rr = await http(adminCk, 'POST', 'api/tasks.php', { title: 'E2E повторы', assignees: [eIds[3]], start_at: add(mon, 40) + 'T13:00', end_at: add(mon, 40) + 'T14:00', occurrences: [{ start_at: add(mon, 50) + 'T14:30' }, { start_at: add(mon, 45) + 'T13:00' }] });
+      const R = mkReal(adminCk);
+      await R.M.overlay(2099); await sleep(80);
+      const dd = (n) => Math.round((Date.UTC(+add(mon, n).slice(0, 4), +add(mon, n).slice(5, 7) - 1, +add(mon, n).slice(8, 10)) - Date.UTC(2099, 0, 1)) / 86400000) + 1;
+      const mine = R.icons().filter((i) => i.emp === nid(eIds[3])).map((i) => i.day).sort((a, b) => a - b);
+      check('F8 реальный API: задача с повторами (основная + 2 повтора) — иконки сотрудника на трёх днях (основная и обе даты повторов)',
+        rr.status === 201 && rr.j.task.occurrences.length === 2 && mine.join() === [dd(40), dd(45), dd(50)].join(), JSON.stringify([rr.status, mine, rr.j.task && rr.j.task.occurrences]));
+      check('F8a те же дни в рамке', R.framed(nid(eIds[3])).join() === [dd(40), dd(45), dd(50)].join());
+    }
   } catch (e) {
     check('F-FATAL необработанное исключение теста', false, (e && e.stack) || e);
   }

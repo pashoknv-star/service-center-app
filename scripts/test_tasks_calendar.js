@@ -666,28 +666,24 @@ async function main() {
   check('PC6 «Месяц»: то же время суток, что у оригинала (14:30–15:30), дата ячейки', c.start_at === D(10) + 'T14:30' && c.end_at === D(10) + 'T15:30', JSON.stringify(c));
   c = pc(mk('p', 'П', tue + 'T09:00', D(3) + 'T17:00', tue, D(3)), { kind: 'slot', date: D(5), min: 600 });
   check('PC7 многодневная (вт 09:00 → чт 17:00 = 2 дня 8 ч) в ячейку сб 10:00 → вс… конец = пн 18:00 (та же длительность)', c.start_at === D(5) + 'T10:00' && c.end_at === D(7) + 'T18:00' && c.last_day === D(7), JSON.stringify(c));
-  const srcT = mk('src', 'Исходная «задача» <b>', wed + 'T09:00', wed + 'T10:00', {
-    description: 'Описание\nв две строки', priority: 1, label: 'монтаж, срочно ',
-    assignees: [{ employee_id: 'emp_1', full_name: 'Иванов Иван', removed: false }, { employee_id: 'emp_9', full_name: 'Удалённый', removed: true }, { employee_id: 'emp_2', full_name: 'Петров Пётр', removed: false }],
-    watchers: [{ employee_id: 'emp_3', full_name: 'Сидорова Анна', removed: false }, { employee_id: 'emp_8', full_name: 'Удалённый наблюдатель', removed: true }],
-    checklist: [{ id: 5, text: 'Первый', done: true }, { id: 6, text: ' Второй ', done: false }, { id: 7, text: '   ', done: true }],
-    status: 'closed', version: 7,
-  });
-  const clip = U.calClipOf(srcT), pay = U.calCopyPayload(clip, { start_at: tue + 'T10:00', end_at: tue + 'T11:00' });
-  check('CL1 состав копии: тема, описание, приоритет, метка «как есть» (строка), исполнители и наблюдатели (без удалённых)',
-    pay.title === srcT.title && pay.description === 'Описание\nв две строки' && pay.priority === 1 && pay.label === 'монтаж, срочно ' &&
-    pay.assignees.join() === 'emp_1,emp_2' && pay.watchers.join() === 'emp_3', JSON.stringify(pay));
-  check('CL2 чек-лист копии: пункты без отметок (done=false у всех, даже у отмеченного оригинала), без id, пустые пункты не копируются',
-    pay.checklist.length === 2 && pay.checklist.every((x) => x.done === false && x.id === undefined) && pay.checklist.map((x) => x.text).join('|') === 'Первый|Второй', JSON.stringify(pay.checklist));
-  check('CL3 в запрос не попадают статус/версия/id/закрытие: статус «Открыта» ставит сервер при создании; start_at/end_at — по ячейке',
-    !('status' in pay) && !('version' in pay) && !('id' in pay) && pay.start_at === tue + 'T10:00' && pay.end_at === tue + 'T11:00');
-  check('CL4 снимок не зависит от оригинала: правка/удаление исходной задачи после «Копировать» не меняют буфер', (() => { srcT.title = 'Другое'; srcT.checklist.length = 0; srcT.assignees.length = 0; return clip.title.indexOf('Исходная') === 0 && clip.checklist.length === 2 && clip.assignees.length === 2; })());
-  check('CL5 label = null/пусто → пустая строка (не «null»)', U.calClipOf(mk('n', 'Н', wed, null, { label: null })).label === '' && U.calCopyPayload(U.calClipOf(mk('n', 'Н', wed, null, { label: null })), { start_at: wed, end_at: null }).label === '');
+  // V6.3-2 (Д-1): «Копировать» хранит только ссылку на задачу; «Вставить» добавляет повтор (новая задача не создаётся)
+  const srcT = mk('src', 'Исходная «задача» <b>', wed + 'T09:00', wed + 'T10:00', { version: 7, status: 'closed' });
+  const clip = U.calClipOf(srcT), clipO = U.calClipOf(srcT, 42);
+  check('CL1 снимок буфера: ссылка на задачу (id, версия, тема) и её срок; копия содержимого (исполнители, чек-лист…) не нужна — повтор не создаёт задачу',
+    clip.id === 'src' && clip.version === 7 && clip.title === srcT.title && clip.occ === null && clip.start_at === wed + 'T09:00' && !('assignees' in clip) && !('checklist' in clip), JSON.stringify(clip));
+  check('CL2 копирование плитки повтора помнит id повтора', clipO.id === 'src' && clipO.occ === 42);
+  check('CL3 снимок не зависит от оригинала: правка темы после «Копировать» не меняет буфер', (() => { srcT.title = 'Другое'; return clip.title.indexOf('Исходная') === 0; })());
+  check('CL4 ограничение V6.2 «задачу без исполнителя копировать нельзя» снято: copy не требует исполнителей', (() => {
+    const E = makeEnv('http://127.0.0.1:1', '');
+    E.S.user = { role: 'admin', isAdmin: true }; E.S.tasks = [mk('na', 'Без исполнителя', wed + 'T09:00', wed + 'T10:00', { assignees: [], orphan: true })];
+    E.U.calCopy('na');
+    return E.U.clip() && E.U.clip().id === 'na';
+  })());
 
   // ---- 7c. V6.2-2: права и мышь/касание (шим) -------------------------------------------------
   console.log('-- W-5/W-6 права, касания');
-  const fakeTile = (id, date, timed, top) => {
-    const el = { dataset: { id, tkDnd: '1' }, classList: { add() {}, remove() {} }, getBoundingClientRect: () => ({ top: top === undefined ? 100 : top }), closest: (sel) => (sel === '[data-date]' ? { dataset: { date } } : null) };
+  const fakeTile = (id, date, timed, top, occ) => {
+    const el = { dataset: Object.assign({ id, tkDnd: '1' }, occ === undefined ? {} : { occ }), classList: { add() {}, remove() {} }, getBoundingClientRect: () => ({ top: top === undefined ? 100 : top }), closest: (sel) => (sel === '[data-date]' ? { dataset: { date } } : null) };
     if (timed) el.dataset.s = '540';
     return el;
   };
@@ -739,11 +735,11 @@ async function main() {
     Ad.U.clearClip();
     Ad.root.fire('contextmenu', mev(onCell(wed, 600)));
     const m0 = menuEls(Ad)[0], callsBefore = Ad.calls.length;
-    check('RD10 ПКМ по пустой ячейке: пункт «Вставить», пока ничего не скопировано — неактивен (disabled), клик по нему ничего не создаёт',
-      m0 && />Вставить</.test(m0.innerHTML) && /disabled/.test(m0.innerHTML) && (m0.fire('click', { target: { closest: () => ({ dataset: { tkCtx: '0' } }) } }), Ad.calls.length === callsBefore && menuEls(Ad).length === 1));
+    check('RD10 ПКМ по пустой ячейке: пункт «Вставить повтор», пока ничего не скопировано — неактивен (disabled), клик по нему ничего не создаёт',
+      m0 && />Вставить повтор</.test(m0.innerHTML) && /disabled/.test(m0.innerHTML) && (m0.fire('click', { target: { closest: () => ({ dataset: { tkCtx: '0' } }) } }), Ad.calls.length === callsBefore && menuEls(Ad).length === 1));
     Ad.U.ctxClose();
     Ad.root.fire('contextmenu', mev(onStrip(sat)));
-    check('RD11 ПКМ по полосе «Весь день» (ячейка дня) тоже даёт «Вставить»', menuEls(Ad).length === 1 && />Вставить</.test(menuEls(Ad)[0].innerHTML));
+    check('RD11 ПКМ по полосе «Весь день» (ячейка дня) тоже даёт «Вставить повтор»', menuEls(Ad).length === 1 && />Вставить повтор</.test(menuEls(Ad)[0].innerHTML));
     Ad.U.ctxClose();
     // клик без сдвига: перетаскивание не начинается, карточка открывается
     Ad.root.fire('pointerdown', mev(onTile(fakeTile('vt', wed, true))));
@@ -1011,60 +1007,150 @@ async function main() {
     A.U.clearClip();
     A.root.fire('contextmenu', mev(onTile(fakeTile(c1.id, day, true))));
     mm(A, 0);
-    check('CP1 ПКМ по плитке → «Копировать»: буфер заполнен снимком (тема, исполнители, чек-лист), меню закрылось, запросов на сервер нет',
-      A.U.clip() && A.U.clip().title === 'Копируемая <i>' && A.U.clip().assignees.join() === e1 + ',' + e2 && menuEls(A).length === 0 && A.toasts.some((q) => /Скопировано: «Копируемая/.test(q.text)));
-    const nBefore = A.S.tasks.length;
+    check('CP1 ПКМ по плитке → «Копировать»: буфер — ссылка на задачу (id, тема), меню закрылось, запросов на сервер нет',
+      A.U.clip() && A.U.clip().id === c1.id && A.U.clip().title === 'Копируемая <i>' && A.U.clip().occ === null && menuEls(A).length === 0 && A.toasts.some((q) => /Скопировано: «Копируемая/.test(q.text)));
+    const nBefore = A.S.tasks.length, srvCnt = async () => (await http(base, adminCk, 'GET', 'api/tasks.php?from=' + AD(0) + '&to=' + AD(6))).json.tasks.filter((q) => q.title === 'Копируемая <i>').length;
     A.root.fire('contextmenu', mev(onCell(AD(4), 900)));
-    check('CP2 после «Копировать» «Вставить» в пустой ячейке активно', menuEls(A).length === 1 && />Вставить</.test(menuEls(A)[0].innerHTML) && !/disabled/.test(menuEls(A)[0].innerHTML));
+    check('CP2 после «Копировать» пункт «Вставить повтор» в пустой ячейке активен (пункта «Вставить» нет)', menuEls(A).length === 1 && />Вставить повтор</.test(menuEls(A)[0].innerHTML) && !/disabled/.test(menuEls(A)[0].innerHTML));
     mm(A, 0);
     await A.settle();
-    const copies = async () => (await http(base, adminCk, 'GET', 'api/tasks.php?from=' + AD(0) + '&to=' + AD(6))).json.tasks.filter((q) => q.title === 'Копируемая <i>' && q.id !== c1.id);
-    let cps = await copies();
-    const cp1 = cps.find((q) => q.start_at === AD(4) + 'T15:00');
-    check('CP3 «Вставить» в пт 15:00: на сервере новая задача, начало 15:00, длительность 1 ч 30 мин (конец 16:30)', cps.length === 1 && cp1 && cp1.end_at === AD(4) + 'T16:30', JSON.stringify(cps.map((q) => [q.start_at, q.end_at])));
-    check('CP4 поля копии: тема, описание, приоритет 1, метка «как есть», статус «Открыта»',
-      cp1.title === 'Копируемая <i>' && cp1.description === 'Описание копии' && cp1.priority === 1 && cp1.label === 'метка1, метка2' && cp1.status === 'open', JSON.stringify(cp1));
-    check('CP5 исполнители и наблюдатели копии те же', cp1.assignees.map((x) => x.employee_id).sort().join() === [e1, e2].sort().join() && cp1.watchers.map((x) => x.employee_id).join() === e3);
-    check('CP6 чек-лист копии: «пункт а», «пункт б», у всех done=false (оригинал отмечен)', cp1.checklist.map((x) => x.text + ':' + x.done).join('|') === 'пункт а:false|пункт б:false' && (await getS(c1.id)).checklist.some((x) => x.done), JSON.stringify(cp1.checklist));
-    check('CP7 оригинал не тронут (версия 1, время прежнее); в списке задач стало на одну больше', (await getS(c1.id)).version === 1 && (await getS(c1.id)).start_at === day + 'T09:00' && A.S.tasks.length === nBefore + 1);
-    const flashTile = (A.root.innerHTML.match(/<div class="tk-ev [^"]*tk-flash[^"]*"[^>]*>/) || [''])[0];
-    check('CP8 новая плитка подсвечена (tk-flash) и стоит в пт на 15:00 (top 720)', A.S.cal.flashId === cp1.id && flashTile.includes('data-id="' + cp1.id + '"') && /top:720px/.test(flashTile), flashTile);
-    check('CP9 всплывающее сообщение «Скопировано на 12.06 15:00» с действием «Открыть»', toastEls(A).length === 1 && toastEls(A)[0].innerHTML.includes('Скопировано на 12.06 15:00') && toastEls(A)[0].innerHTML.includes('>Открыть<'), toastEls(A)[0] && toastEls(A)[0].innerHTML);
+    let s1 = await getS(c1.id);
+    const o1 = (s1.occurrences || []).find((q) => q.start_at === AD(4) + 'T15:00');
+    check('CP3 вставка в пт 15:00: НОВАЯ ЗАДАЧА НЕ СОЗДАНА, у исходной появился повтор пт 15:00–16:30 (длительность 1 ч 30 мин), версия 2',
+      (await srvCnt()) === 1 && A.S.tasks.length === nBefore && s1.occurrences.length === 1 && o1 && o1.end_at === AD(4) + 'T16:30' && s1.version === 2, JSON.stringify(s1.occurrences));
+    check('CP4 основная дата и поля исходной задачи не тронуты (09:00–10:30, исполнители, чек-лист, статус)',
+      s1.start_at === day + 'T09:00' && s1.end_at === day + 'T10:30' && s1.assignees.length === 2 && s1.checklist.length === 2 && s1.status === 'open');
+    const occTile = (E, id, date) => (bodyTilesByDay(E)[date] || []).find((q) => q.id === id && /\btk-occ\b/.test(q.cls));
+    const tOcc = occTile(A, c1.id, AD(4));
+    check('CP5 плитка повтора: отдельная плитка в пт на 15:00 (top 720), класс tk-occ, значок ↻, подсвечена (tk-flash); плитка основной даты на месте',
+      tOcc && tOcc.top === 720 && tOcc.cls.includes('tk-flash') && A.S.cal.flashOcc === o1.id && A.has('class="tk-ev-rep"') && (bodyTilesByDay(A)[day] || []).some((q) => q.id === c1.id && !/\btk-occ\b/.test(q.cls)), JSON.stringify(tOcc));
+    check('CP6 всплывающее сообщение «Повтор добавлен на 12.06 15:00» с действием «Открыть»', toastEls(A).length === 1 && toastEls(A)[0].innerHTML.includes('Повтор добавлен на 12.06 15:00') && toastEls(A)[0].innerHTML.includes('>Открыть<'), toastEls(A)[0] && toastEls(A)[0].innerHTML);
     toastEls(A)[0].fire('click', { target: { closest: () => ({ dataset: { tkCtoast: 'act' } }) } });
     await A.settle();
-    check('CP10 «Открыть» открывает карточку копии (выбрана копия, справа её тема/описание), сообщение закрыто',
-      A.S.selectedId === cp1.id && A.has('class="tk-detail"') && A.has('Описание копии') && toastEls(A).length === 0);
-    // вторая вставка того же буфера — в «Весь день» (без времени)
+    check('CP7 «Открыть» открывает карточку той же задачи с перечнем дат выполнения (основная + повтор), сообщение закрыто',
+      A.S.selectedId === c1.id && A.has('class="tk-detail"') && A.has('data-tk-dates="1"') && A.has('Даты выполнения · 2') && toastEls(A).length === 0);
+    A.S.selectedId = null; A.U.render();
+    A.U.ACTIONS.openTask({ dataset: { id: c1.id, occ: String(o1.id) } });
+    check('CP7a клик по плитке повтора открывает карточку той же задачи (data-id плитки — id задачи)', A.S.selectedId === c1.id && A.has('class="tk-detail"') && (A.root.innerHTML.match(/<div class="tk-ev [^"]*tk-occ[^"]*"[^>]*>/) || [''])[0].includes('data-id="' + c1.id + '"'));
+    // вставка в «Весь день» задачи со временем → время начала самой задачи (09:00)
     A.root.fire('contextmenu', mev(onStrip(AD(5))));
     mm(A, 0);
     await A.settle();
-    cps = await copies();
-    const cp2 = cps.find((q) => q.start_at === AD(5));
-    check('CP11 тот же буфер вставляется повторно: вторая копия в «Весь день» сб — start_at = дата без времени, конца нет', cps.length === 2 && cp2 && cp2.end_at === null && cp2.status === 'open', JSON.stringify(cps.map((q) => [q.start_at, q.end_at])));
+    s1 = await getS(c1.id);
+    check('CP8 тот же буфер: вставка в «Весь день» сб — повтор получает время начала задачи (сб 09:00–10:30); версия 3', s1.occurrences.some((q) => q.start_at === AD(5) + 'T09:00' && q.end_at === AD(5) + 'T10:30') && s1.version === 3, JSON.stringify(s1.occurrences));
     // ячейка 23:30: конец не за 23:59
     A.root.fire('contextmenu', mev(onCell(AD(0), 1410)));
     mm(A, 0);
     await A.settle();
-    cps = await copies();
-    const cp3 = cps.find((q) => q.start_at === AD(0) + 'T23:30');
-    check('CP12 вставка в 23:30: конец прижат к 23:59 того же дня', cps.length === 3 && cp3 && cp3.end_at === AD(0) + 'T23:59', JSON.stringify(cps.map((q) => [q.start_at, q.end_at])));
-    // закрытая задача копируется «Открытой»
-    const c2 = await mkS({ title: 'Закрытая для копии', start_at: day + 'T16:00', end_at: day + 'T17:00' });
-    const cl = await http(base, adminCk, 'POST', 'api/tasks.php?id=' + c2.id + '&action=close', { version: 1 });
-    await A.T.reload(); await A.settle();
-    A.U.calCopy(c2.id);
-    await A.U.calPaste({ kind: 'slot', date: AD(1), min: 600 });
+    s1 = await getS(c1.id);
+    check('CP9 вставка в 23:30: конец повтора прижат к 23:59 того же дня', s1.occurrences.some((q) => q.start_at === AD(0) + 'T23:30' && q.end_at === AD(0) + 'T23:59') && s1.occurrences.length === 3, JSON.stringify(s1.occurrences));
+    check('CP9a повторы идут по возрастанию (пн 23:30, пт 15:00, сб 09:00); next_at — на сервере есть и совпадает с одним из выполнений',
+      s1.occurrences.map((q) => q.start_at).join() === [AD(0) + 'T23:30', AD(4) + 'T15:00', AD(5) + 'T09:00'].join() && [day + 'T09:00'].concat(s1.occurrences.map((q) => q.start_at)).includes(s1.next_at), JSON.stringify([s1.occurrences, s1.next_at]));
+    // дубль с основной датой → понятная ошибка, ничего не меняется
+    const vBefore = (await getS(c1.id)).version;
+    A.S.msg = null;
+    A.root.fire('contextmenu', mev(onCell(day, 540)));
+    mm(A, 0);
     await A.settle();
-    const cpc = (await http(base, adminCk, 'GET', 'api/tasks.php?from=' + AD(1) + '&to=' + AD(1))).json.tasks.find((q) => q.title === 'Закрытая для копии' && q.id !== c2.id);
-    check('CP13 копия закрытой задачи — со статусом «Открыта»', cl.json.task && cl.json.task.status === 'closed' && cpc && cpc.status === 'open' && cpc.start_at === AD(1) + 'T10:00', JSON.stringify(cpc));
+    check('CP10 вставка точно на основную дату/время (ср 09:00): сообщение об ошибке, повтор не добавлен, версия прежняя',
+      A.S.msg && A.S.msg.type === 'error' && /Повтор не добавлен/.test(A.S.msg.text) && /совпадает/.test(A.S.msg.text) && (await getS(c1.id)).version === vBefore && (await getS(c1.id)).occurrences.length === 3, JSON.stringify(A.S.msg));
+    A.S.msg = null;
+    // задача без времени: повтор — только датой, даже при вставке в ячейку часа
+    const c3 = await mkS({ title: 'Без времени для повтора', start_at: day });
+    await A.T.reload(); await A.settle();
+    A.U.calCopy(c3.id);
+    await A.U.calPaste({ kind: 'slot', date: AD(3), min: 600 });
+    await A.settle();
+    const s3 = await getS(c3.id);
+    check('CP11 задача без времени: вставка в ячейку 10:00 даёт повтор только с датой (чт, без времени)', s3.occurrences.length === 1 && s3.occurrences[0].start_at === AD(3) && s3.occurrences[0].end_at === null, JSON.stringify(s3.occurrences));
+    // перенос ТОЛЬКО повтора
+    await A.T.reload(); await A.settle();
+    s1 = await getS(c1.id);
+    const oFri = s1.occurrences.find((q) => q.start_at === AD(4) + 'T15:00');
+    const pn = A.calls.length;
+    A.root.fire('pointerdown', mev(onTile(fakeTile(c1.id, AD(4), true, 100, String(oFri.id))), { clientX: 200, clientY: 130 }));
+    moveTo({ date: AD(3), min: 840 });
+    check('CP12 тень повтора: перенос пт 15:00 → чт 14:00, длительность 1 ч 30 мин сохранена', A.U.drag() && A.U.drag().started && A.U.drag().occ === String(oFri.id) && A.U.drag().calc.start_at === AD(3) + 'T14:00' && A.U.drag().calc.end_at === AD(3) + 'T15:30', JSON.stringify(A.U.drag() && A.U.drag().calc));
+    A.fireDoc('pointerup', mev(null, { clientX: 260, clientY: 190 }));
+    check('CP12a сразу после отпускания плитка повтора уже на новом месте (чт 14:00 → top 672), основная плитка не двигалась (ср 09:00 → top 432)',
+      (() => { const q = occTile(A, c1.id, AD(3)); return q && q.top === 672 && (bodyTilesByDay(A)[day] || []).some((x) => x.id === c1.id && x.top === 432); })());
+    await A.settle();
+    const mvCall = A.calls.slice(pn).filter((q) => q.method === 'POST' && /action=occ_move/.test(q.url)).pop(), s1m = await getS(c1.id);
+    check('CP13 POST ?id=…&action=occ_move с version и occurrence_id; на сервере повтор чт 14:00–15:30, основная дата прежняя (ср 09:00), повторов по-прежнему 3',
+      mvCall && mvCall.body.version === s1.version && String(mvCall.body.occurrence_id) === String(oFri.id) && mvCall.body.start_at === AD(3) + 'T14:00' &&
+      s1m.occurrences.some((q) => q.id === oFri.id && q.start_at === AD(3) + 'T14:00' && q.end_at === AD(3) + 'T15:30') && s1m.start_at === day + 'T09:00' && s1m.occurrences.length === 3, JSON.stringify([mvCall && mvCall.body, s1m.occurrences]));
+    check('CP13a тост «Повтор перенесён: 11.06 14:00»; запрос — не PUT (основная дата не переписывается)', A.toasts.some((q) => /Повтор перенесён: 11\.06 14:00/.test(q.text)) && !A.calls.slice(pn).some((q) => q.method === 'PUT'));
+    // 409: другая вкладка изменила задачу
+    const other2 = await http(base, adminCk, 'PUT', 'api/tasks.php?id=' + c1.id, { title: 'Копируемая <i>', description: 'правка другой вкладкой', version: s1m.version });
+    check('CP14a (подготовка) другая вкладка изменила задачу', other2.status === 200 && other2.json.task.version === s1m.version + 1);
+    A.S.msg = null;
+    A.root.fire('pointerdown', mev(onTile(fakeTile(c1.id, AD(3), true, 100, String(oFri.id))), { clientX: 200, clientY: 130 }));
+    moveTo({ date: AD(2), min: 600 });
+    await release();
+    const s1c = await getS(c1.id);
+    check('CP14 перенос повтора по устаревшей версии: 409 — понятное сообщение, повтор на сервере не сдвинут, календарь обновлён (свежая версия)',
+      A.S.msg && /другим пользователем/.test(A.S.msg.text) && s1c.occurrences.some((q) => q.id === oFri.id && q.start_at === AD(3) + 'T14:00') && A.S.tasks.find((q) => q.id === c1.id).version === s1c.version, JSON.stringify(A.S.msg));
+    A.S.msg = null;
+    // ПКМ по плитке повтора: «Копировать» + «Удалить повтор»; копирование плитки повтора = копирование задачи
+    A.U.clearClip();
+    A.root.fire('contextmenu', mev(onTile(fakeTile(c1.id, AD(3), true, 100, String(oFri.id)))));
+    check('CP15 ПКМ по плитке повтора: два пункта — «Копировать» и «Удалить повтор»', menuEls(A).length === 1 && />Копировать</.test(menuEls(A)[0].innerHTML) && />Удалить повтор</.test(menuEls(A)[0].innerHTML));
+    mm(A, 0);
+    check('CP15a «Копировать» по плитке повтора копирует задачу (id задачи, occ = id повтора)', A.U.clip() && A.U.clip().id === c1.id && String(A.U.clip().occ) === String(oFri.id));
+    A.root.fire('contextmenu', mev(onCell(AD(6), 600)));
+    mm(A, 0);
+    await A.settle();
+    const s1p = await getS(c1.id);
+    const oSun = s1p.occurrences.find((q) => q.start_at === AD(6) + 'T10:00');
+    check('CP15b вставка скопированного повтора в вс 10:00: у задачи 4 повтора, вс 10:00–11:30; новых задач нет', s1p.occurrences.length === 4 && oSun && oSun.end_at === AD(6) + 'T11:30' && (await srvCnt()) === 1, JSON.stringify(s1p.occurrences));
+    // удаление повтора
+    let asked = null; A.sandbox.confirm = (m) => { asked = m; return false; };
+    A.root.fire('contextmenu', mev(onTile(fakeTile(c1.id, AD(6), true, 100, String(oSun.id)))));
+    mm(A, 1);
+    await A.settle();
+    check('CP16 «Удалить повтор» спрашивает подтверждение (текст с датой и темой); отказ — ничего не удалено', asked && /Удалить повтор 14\.06 10:00/.test(asked) && (await getS(c1.id)).occurrences.length === 4, asked);
+    A.sandbox.confirm = () => true;
+    A.root.fire('contextmenu', mev(onTile(fakeTile(c1.id, AD(6), true, 100, String(oSun.id)))));
+    mm(A, 1);
+    await A.settle();
+    const s1d = await getS(c1.id);
+    check('CP17 подтверждено: удалён только этот повтор (остались 3), задача и основная дата на месте, плитка исчезла, тост «Повтор удалён»',
+      s1d.occurrences.length === 3 && !s1d.occurrences.some((q) => q.start_at === AD(6) + 'T10:00') && s1d.status === 'open' && s1d.start_at === day + 'T09:00' && !occTile(A, c1.id, AD(6)) && A.toasts.some((q) => /Повтор удалён: 14\.06 10:00/.test(q.text)));
+    // Список: одна строка, «↻ N» и подсказка
+    A.S.view = 'list'; A.S.filters.emp = ''; A.U.render();
+    const listRows = (A.root.innerHTML.match(/data-tk-act="openTask" data-id="[^"]+"/g) || []).filter((q) => q.includes('"' + c1.id + '"'));
+    check('CP18 Список: задача с повторами — одна строка, «↻ 3» рядом со сроком, в подсказке все даты', listRows.length === 1 && A.has('data-tk-occ-n="3"') && /Повторов: 3/.test(A.root.innerHTML), String(listRows.length));
+    A.S.view = 'calendar'; A.U.render();
     // роли по реальному API
     {
       const nb = S2.calls.filter((q) => q.method !== 'GET').length;
       S2.root.fire('pointerdown', mev(onTile(fakeTile(d1.id, AD(3), true))));
       const sc = mev(onTile(fakeTile(d1.id, AD(3), true))), sc2 = mev(onCell(AD(3), 600));
       S2.root.fire('contextmenu', sc); S2.root.fire('contextmenu', sc2);
-      check('CP14 supervisor (реальная сессия): плитки без перетаскивания, ПКМ — родное меню браузера, наше не открывается, записей нет',
+      check('CP19 supervisor (реальная сессия): плитки без перетаскивания, ПКМ — родное меню браузера, наше не открывается, записей нет',
         !S2.has('data-tk-dnd') && S2.U.drag() === null && !sc.prevented && !sc2.prevented && menuEls(S2).length === 0 && S2.calls.filter((q) => q.method !== 'GET').length === nb);
+      S2.U.calDeleteOcc(c1.id, 1);
+      S2.U.calCopy(c1.id, 1);
+      check('CP19a supervisor: принудительные «Удалить повтор»/«Копировать» ничего не делают', S2.calls.filter((q) => q.method !== 'GET').length === nb && S2.U.clip() === null);
+      const r403 = await http(base, supCk, 'POST', 'api/tasks.php?id=' + c1.id + '&action=occ_add', { version: 1, start_at: AD(1) + 'T10:00' });
+      check('CP19b API: supervisor → occ_add запрещён (403)', r403.status === 403, JSON.stringify(r403));
+    }
+    // блок на повторе (больничный/командировка): мок-сервер отвечает 422 так же, как настоящий API
+    {
+      const mock = require('http').createServer((rq, rs) => {
+        rs.setHeader('Content-Type', 'application/json');
+        if (/action=occ_add/.test(rq.url)) { rs.statusCode = 422; rs.end(JSON.stringify({ success: false, error: 'TASK_BLOCKED_BY_SICK_OR_TRIP', message: 'Повтор 12.06 15:00: Тестов Т. на больничном — повтор нельзя назначить на эти дни.', blocked_days: [{ date: AD(4), employee_id: e1, reason: 'sick' }] })); }
+        else { rs.statusCode = 404; rs.end('{}'); }
+      });
+      await new Promise((rz) => mock.listen(0, '127.0.0.1', rz));
+      const M = makeEnv('http://127.0.0.1:' + mock.address().port, '');
+      M.S.user = { role: 'admin', isAdmin: true }; M.S.employees = emps; M.S.empById = {};
+      M.S.tasks = [mk('mt', 'Задача мок', day + 'T09:00', day + 'T10:00')]; M.S.view = 'calendar'; M.S.cal.mode = 'week'; M.S.cal.anchor = day; M.U.render();
+      M.U.calCopy('mt');
+      await M.U.calPaste({ kind: 'slot', date: AD(4), min: 900 });
+      check('CP20 повтор на день больничного исполнителя: сообщение сервера показано пользователю, повтор не добавлен',
+        M.S.msg && M.S.msg.type === 'error' && /Повтор не добавлен: Повтор 12\.06 15:00: Тестов Т\. на больничном/.test(M.S.msg.text) && M.S.tasks[0].occurrences === undefined, JSON.stringify(M.S.msg));
+      await new Promise((rz) => mock.close(rz));
     }
     A.U.HOOK.hit = null;
   } catch (e) {
