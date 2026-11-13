@@ -1,0 +1,33 @@
+{
+ "checks": [
+  {
+   "name": "создание с 8 повторами при зависшем n8n успешно (201, check_state=pending), но время растёт линейно: ≈3003 мс на повтор (таймаут 3 с) → 100 повторов ≈ 300 с",
+   "ok": true
+  }
+ ],
+ "latency": {
+  "0": {
+   "status": 201,
+   "ms": 3050,
+   "check_state": "pending"
+  },
+  "1": {
+   "status": 201,
+   "ms": 6029,
+   "check_state": "pending"
+  },
+  "4": {
+   "status": 201,
+   "ms": 15042,
+   "check_state": "pending"
+  },
+  "8": {
+   "status": 201,
+   "ms": 27071,
+   "check_state": "pending"
+  }
+ },
+ "estimate_100_s": 300,
+ "passed": 1,
+ "failed": 0
+}

@@ -1,0 +1,28 @@
+{
+ "checks": [
+  {
+   "name": "supervisor календарь: нет ячеек создания (calCell), нет .tk-can, нет кнопки «Новая задача»",
+   "ok": true
+  },
+  {
+   "name": "supervisor реальный клик по ячейке календаря: форма «Новая задача» НЕ открывается",
+   "ok": true
+  },
+  {
+   "name": "supervisor карточка: нет «Править/Закрыть/В архив»; пометка отпуска со ссылкой есть (просмотр)",
+   "ok": true
+  },
+  {
+   "name": "supervisor R-15 переход в матрицу из карточки работает (только просмотр)",
+   "ok": true
+  },
+  {
+   "name": "прогон без аварии",
+   "ok": false,
+   "extra": "Error: нет элемента .tk-detail [data-tk-act=\"filterBy\"][data-f=\"label\"]\n    at k.click (/home/hermes/service-center-app/scripts/v6_accept_lib.js:113:83)\n    at async /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/v63_reg_279515/v6c.js:57:7"
+  }
+ ],
+ "browser": "HeadlessChrome/145.0.7632.6",
+ "passed": 4,
+ "failed": 1
+}

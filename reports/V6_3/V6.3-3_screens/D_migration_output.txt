@@ -1,0 +1,63 @@
+### 0. dev-БД: sha1 до = a2e65ae47cc7; код ДО: <scratch>/before_6072f41; код ПОСЛЕ: /home/hermes/service-center-app
+dev-БД schema_version: 6
+
+### 1. старый код (до V6.3) доводит копию до v11 и создаёт задачи
+сотрудники: emp_1 emp_2 emp_3
+201 201 201 201 
+  [ok]   старый код: schema_version = 11 (11)
+  [ok]   в v11 таблицы task_occurrences нет
+задач в v11: 4
+  [ok]   создано ≥ 4 старых задач
+таблицы для сверки дампа: groups positions employees schedule_entries holidays vacation_balances users trips trip_participants trip_requests tasks task_assignees task_checklist
+ДО:    audit_log=57 employees=4 groups=7 holidays=0 meta=4 positions=27 schedule_entries=1 sync_log=7709 task_assignees=7 task_checklist=0 tasks=4 trip_participants=0 trip_requests=0 trips=0 users=4 vacation_balances=0 
+integrity v11: ok / fk: []
+
+### 2. новый код: v11 → v12 (первый запрос выполняет миграцию)
+ПОСЛЕ: audit_log=58 employees=4 groups=7 holidays=0 meta=4 positions=27 schedule_entries=1 sync_log=7709 task_assignees=7 task_checklist=0 task_occurrences=0 tasks=4 trip_participants=0 trip_requests=0 trips=0 users=4 vacation_balances=0 
+  [ok]   schema_version = 12
+CREATE INDEX idx_task_occurrences_start ON task_occurrences (start_at)
+CREATE INDEX idx_task_occurrences_task ON task_occurrences (task_id)
+CREATE TABLE task_occurrences (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id  TEXT NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at   TEXT,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+)
+  [ok]   создана таблица task_occurrences и 2 индекса
+id INTEGER; task_id TEXT NOT NULL; start_at TEXT NOT NULL; end_at TEXT
+fk: tasks.task_id on_delete=CASCADE
+  [ok]   FK task_id → tasks(id) ON DELETE CASCADE
+  [ok]   integrity_check = ok
+  [ok]   foreign_key_check пуст
+  [ok]   task_occurrences пуста после миграции
+  [ok]   существующие данные не изменились: дамп всех прежних таблиц (кроме meta/audit_log/sync_log) идентичен
+  [ok]   число строк во всех прежних таблицах не изменилось (audit_log: +запись входа, не считаем)
+
+### 3. повторный запуск = no-op
+  [ok]   второй запуск: дамп идентичен (кроме meta/audit/sync)
+  [ok]   версия по-прежнему 12
+E5-4: Очистка audit_log удалено 0 записей старше 2026-11-06T23:19:36+00:00
+  [ok]   CLI Database::migrate() (порядок из V6.3-2_REPORT §2): 12, повтор: 12
+  [ok]   CLI-копия: integrity_check ok, foreign_key_check пуст
+
+### 4. старые задачи выглядят как раньше (API до/после)
+задач до/после: 4/4; новые поля: occurrences,next_at; различия: нет
+  [ok]   ответ API старых задач = прежний + occurrences:[] + next_at=start_at (иных отличий нет)
+
+### 5. каскад: удаление задачи удаляет повторы
+occ_add → 200
+occ_add → 200
+  [ok]   у задачи task_6af79b06a17e59.53089895 2 повтора
+  [ok]   DELETE FROM tasks (foreign_keys=ON) → повторы удалены каскадом
+  [ok]   после каскада: сирот нет, foreign_key_check пуст, integrity_check ok
+
+### 6. откат кода: СТАРЫЙ код на v12-БД (с повторами) работает
+  [ok]   старый код на v12-БД: GET api/tasks.php → 200, задач 3 (таблицу повторов игнорирует)
+  [ok]   версия схемы после отката кода остаётся 12 (БД не понижается)
+
+### 7. data/app.db не тронута
+  [ok]   sha1 data/app.db: a2e65ae47cc7 → a2e65ae47cc7
+  [ok]   git status data/app.db чист
+
+ИТОГ: 23 passed, 0 failed
