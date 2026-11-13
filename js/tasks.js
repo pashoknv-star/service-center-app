@@ -680,7 +680,8 @@
       data = ' data-col="' + pos.col + '" data-cols="' + pos.cols + '" data-s="' + pos.s + '" data-e="' + pos.e + '"';
     }
     return '<div class="tk-ev' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.conflict ? ' tk-conf' : '') +
-      (orph ? ' tk-orph' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + cls + '" data-tk-act="openTask" data-id="' + esc(t.id) + '"' + data + style +
+      (orph ? ' tk-orph' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + (t.id === S.cal.flashId ? ' tk-flash' : '') +
+      (canWrite() ? ' tk-dnd' : '') + cls + '" data-tk-act="openTask" data-id="' + esc(t.id) + '"' + (canWrite() ? ' data-tk-dnd="1"' : '') + data + style +
       ' title="' + esc(tip.filter(Boolean).join('\n')) + '">' +
       (when ? '<span class="tk-ev-when">' + esc(when) + '</span> ' : '') +
       '<b class="tk-ev-title">' + esc(t.title) + '</b>' +
@@ -782,6 +783,447 @@
     if (S.cal.fresh) { S.cal.scrollTop = null; S.cal.scrollLeft = 0; S.cal.fresh = false; }
     el.scrollTop = S.cal.scrollTop == null ? CAL_SCROLL_H * CAL_HOUR_PX : S.cal.scrollTop;
     if (S.cal.scrollLeft) el.scrollLeft = S.cal.scrollLeft;
+  }
+
+  // ---------------------------------------------------------------- V6.2-2: перетаскивание плиток (W-5) и копирование ПКМ (W-6)
+  // Только мышь (pointerType 'mouse') и только admin (canWrite()). Касания и прокрутка пальцем не затрагиваются.
+  var CAL_DRAG_PX = 5;             // сдвиг мыши, с которого «клик» становится перетаскиванием
+  var CAL_END_MAX = 1439;          // конец не за 23:59 дня
+  var DRAG = null;                 // активное перетаскивание
+  var _noClick = 0;                // до этого момента (мс) подавляем click, пришедший после перетаскивания
+  var _lastPtr = 'mouse';          // pointerType последнего нажатия (контекстное меню от долгого касания не перехватываем)
+  var _clip = null;                // буфер копирования (в памяти страницы, не системный буфер обмена)
+  var HOOK = { hit: null };        // тесты подменяют определение места под курсором (в шиме нет геометрии)
+
+  function daysBetween(a, b) { return Math.round((utcOf(b) - utcOf(a)) / 86400000); }
+  function shiftWhen(s, n) { s = String(s); return addDays(s.slice(0, 10), n) + s.slice(10); }
+  function whenAt(date, min) { return date + 'T' + hhmm(min); }
+  function snapMin(m) { return Math.max(0, Math.min(1410, Math.round(m / CAL_SLOT_MIN) * CAL_SLOT_MIN)); }
+  function calUnchanged(t) { return { unchanged: true, start_at: t.start_at, end_at: t.end_at == null ? null : t.end_at, first_day: t.first_day, last_day: t.last_day }; }
+
+  // W-5: новое время плитки при сбросе. t — задача; tgt:
+  //   { kind: 'slot', date, min }  — «Неделя»/«День», плитка с временем: начало = ячейка (шаг 30 мин), длительность прежняя, конец ≤ 23:59;
+  //   { kind: 'days', days: n }    — «Весь день» и «Месяц»: сдвиг на n дней, оба конца, время суток сохраняется.
+  // Результат: { start_at, end_at, first_day, last_day } | { unchanged: true, … } | { error }.
+  function calDropCalc(t, tgt) {
+    if (!t || !tgt) return { error: 'bad_args' };
+    if (tgt.kind === 'days') {
+      var n = Math.round(+tgt.days);
+      if (!n) return calUnchanged(t);
+      return {
+        start_at: shiftWhen(t.start_at, n), end_at: t.end_at ? shiftWhen(t.end_at, n) : null,
+        first_day: addDays(t.first_day, n), last_day: addDays(t.last_day, n)
+      };
+    }
+    if (tgt.kind !== 'slot' || !parseYmd(tgt.date)) return { error: 'bad_args' };
+    var sl = calSlotOf(t);
+    if (!sl) return { error: 'not_timed' };
+    var min = snapMin(tgt.min);
+    if (tgt.date === t.first_day && min === snapMin(sl.s)) return calUnchanged(t);   // отпустили на старом месте
+    var end = null;
+    if (t.end_at) {
+      var er = minOf(timeOf(t.end_at));
+      end = er == null ? tgt.date : whenAt(tgt.date, Math.min(min + Math.max(0, er - sl.s), CAL_END_MAX));
+    }
+    return { start_at: whenAt(tgt.date, min), end_at: end, first_day: tgt.date, last_day: tgt.date };
+  }
+
+  // W-6: снимок задачи для буфера (только то, что копируется). Удалённые исполнители/наблюдатели не копируются.
+  function calClipOf(t) {
+    var act = function (a) { return !a.removed; }, id = function (a) { return a.employee_id; };
+    return {
+      title: String(t.title), description: t.description == null ? '' : String(t.description),
+      priority: +t.priority || 2, label: t.label == null ? '' : String(t.label),
+      assignees: assigneesOf(t).filter(act).map(id), watchers: ((t && t.watchers) || []).filter(act).map(id),
+      checklist: (t.checklist || []).map(function (c) { return String(c.text).trim(); }).filter(Boolean),
+      start_at: t.start_at, end_at: t.end_at == null ? null : t.end_at, first_day: t.first_day, last_day: t.last_day
+    };
+  }
+  // W-6: срок копии. tgt: { kind: 'slot', date, min } (ячейка часа/получаса), { kind: 'allday', date } (полоса «Весь день»),
+  // { kind: 'month', date } (день месяца: то же время суток, что у оригинала).
+  function calPasteCalc(clip, tgt) {
+    if (!clip || !tgt || !parseYmd(tgt.date)) return { error: 'bad_args' };
+    var span = daysBetween(clip.first_day, clip.last_day);
+    if (tgt.kind === 'month') {
+      var n = daysBetween(clip.first_day, tgt.date);
+      return {
+        start_at: shiftWhen(clip.start_at, n), end_at: clip.end_at ? shiftWhen(clip.end_at, n) : null,
+        first_day: addDays(clip.first_day, n), last_day: addDays(clip.last_day, n)
+      };
+    }
+    if (tgt.kind === 'allday') {
+      return { start_at: tgt.date, end_at: span > 0 ? addDays(tgt.date, span) : null, first_day: tgt.date, last_day: addDays(tgt.date, span) };
+    }
+    if (tgt.kind !== 'slot') return { error: 'bad_args' };
+    var min = snapMin(tgt.min), os = minOf(timeOf(clip.start_at)), oe = minOf(timeOf(clip.end_at)), end = null, last = tgt.date;
+    if (clip.end_at) {
+      if (os != null && oe != null) {
+        var total = min + span * 1440 + oe - os;                       // длительность прежняя
+        if (span === 0) total = Math.max(Math.min(total, CAL_END_MAX), min);
+        var dd = Math.floor(total / 1440);
+        last = addDays(tgt.date, dd);
+        end = whenAt(last, total - dd * 1440);
+      } else {
+        last = addDays(tgt.date, span);
+        end = span === 0 && oe == null ? tgt.date : last + (oe != null ? 'T' + hhmm(oe) : '');
+      }
+    }
+    return { start_at: whenAt(tgt.date, min), end_at: end, first_day: tgt.date, last_day: last };
+  }
+  // тело POST для «Вставить»: статус «Открыта» ставит сервер; чек-лист без отметок
+  function calCopyPayload(clip, calc) {
+    return {
+      title: clip.title, description: clip.description, assignees: clip.assignees.slice(), watchers: clip.watchers.slice(),
+      priority: clip.priority, label: clip.label,
+      checklist: clip.checklist.map(function (x) { return { text: x, done: false }; }),
+      start_at: calc.start_at, end_at: calc.end_at
+    };
+  }
+  function fmtWhen(startAt) { var tm = timeOf(startAt); return fmtDm(dateOf(startAt)) + (tm ? ' ' + tm : ''); }
+
+  // --- сохранение переноса (существующий update с version); плитка переносится сразу, при ошибке — откат
+  function calMove(t, calc) {
+    if (!canWrite() || !t || !calc || calc.unchanged || calc.error) return Promise.resolve();
+    if (S.busy) { toast('Дождитесь завершения предыдущего действия.', 'info'); return Promise.resolve(); }
+    var old = t, id = t.id;
+    S.msg = null;
+    mergeTask(Object.assign({}, t, { start_at: calc.start_at, end_at: calc.end_at, first_day: calc.first_day, last_day: calc.last_day }));
+    render();
+    S.busy = true;
+    return api('PUT', API + '?id=' + encodeURIComponent(id), { start_at: calc.start_at, end_at: calc.end_at == null ? '' : calc.end_at, version: t.version }).then(function (r) {
+      S.busy = false;
+      if (r.ok && r.data && r.data.success) {
+        notifyChanged();
+        if (r.data.task) mergeTask(r.data.task);
+        toast('Задача перенесена: ' + fmtWhen(calc.start_at), 'success');
+        return load(true);
+      }
+      var code = r.data && r.data.error, text;
+      mergeTask(old);                                      // откат плитки
+      if (r.status === 409 && code === 'VERSION_CONFLICT') {
+        notifyChanged();
+        if (r.data.task) mergeTask(r.data.task);
+        text = 'Задача уже изменена другим пользователем — календарь обновлён, перенос не выполнен. Повторите его при необходимости.';
+        S.msg = { type: 'error', text: text };
+        toast('Конфликт версий: календарь обновлён', 'error');
+        render();
+        return load(true);
+      }
+      if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') text = 'Перенос невозможен: исполнитель в эти дни на больничном или в командировке.';
+      else text = 'Перенос не выполнен: ' + errText(r);
+      S.msg = { type: 'error', text: text };
+      toast(text, 'error');
+      render();
+    });
+  }
+
+  // --- «Вставить»: сразу создаёт копию (существующий create)
+  function calPaste(tgt) {
+    if (!canWrite() || !_clip) return Promise.resolve();
+    if (S.busy) { toast('Дождитесь завершения предыдущего действия.', 'info'); return Promise.resolve(); }
+    var calc = calPasteCalc(_clip, tgt);
+    if (!calc || calc.error) return Promise.resolve();
+    S.busy = true;
+    S.msg = null;
+    return api('POST', API, calCopyPayload(_clip, calc)).then(function (r) {
+      S.busy = false;
+      if (r.ok && r.data && r.data.success && r.data.task) {
+        var task = r.data.task;
+        notifyChanged();
+        mergeTask(task);
+        S.cal.flashId = task.id;
+        render();
+        calToast('Скопировано на ' + fmtWhen(task.start_at), 'Открыть', function () { S.selectedId = task.id; S.msg = null; render(); });
+        setTimeout(function () {
+          if (S.cal.flashId !== task.id) return;
+          S.cal.flashId = null;
+          var el = DOM.root && DOM.root.querySelector ? DOM.root.querySelector('.tk-flash') : null;
+          if (el && el.classList) el.classList.remove('tk-flash');
+        }, 4500);
+        return load(true);
+      }
+      var code = r.data && r.data.error, text;
+      if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') text = 'Копия не создана: исполнитель в эти дни на больничном или в командировке.';
+      else text = 'Копия не создана: ' + errText(r);
+      S.msg = { type: 'error', text: text };
+      toast(text, 'error');
+      render();
+    });
+  }
+  function calCopy(id) {
+    var t = findTask(id);
+    if (!canWrite() || !t) return;
+    var clip = calClipOf(t);
+    if (!clip.assignees.length) { toast('Копировать нельзя: у задачи нет действующих исполнителей.', 'error'); return; }
+    _clip = clip;
+    toast('Скопировано: «' + truncate(t.title, 40) + '». ПКМ по свободному месту календаря → «Вставить».', 'info');
+  }
+
+  // --- всплывающее сообщение с действием (общий showToast действий не поддерживает)
+  var _ctoast = null, _ctoastTimer = null;
+  function calToastClose() {
+    if (_ctoastTimer) { clearTimeout(_ctoastTimer); _ctoastTimer = null; }
+    if (_ctoast && _ctoast.parentNode && _ctoast.parentNode.removeChild) _ctoast.parentNode.removeChild(_ctoast);
+    _ctoast = null;
+  }
+  function calToast(text, actionLabel, onAction) {
+    calToastClose();
+    if (!document.body || !document.createElement) return;
+    var el = document.createElement('div');
+    el.className = 'tk-ctoast';
+    if (el.setAttribute) el.setAttribute('role', 'status');
+    el.innerHTML = '<span class="tk-ctoast-t">' + esc(text) + '</span>' +
+      (actionLabel ? '<button type="button" class="tk-ctoast-act" data-tk-ctoast="act">' + esc(actionLabel) + '</button>' : '') +
+      '<button type="button" class="tk-ctoast-x" data-tk-ctoast="x" title="Закрыть" aria-label="Закрыть">×</button>';
+    el.addEventListener('click', function (ev) {
+      var b = ev.target && ev.target.closest ? ev.target.closest('[data-tk-ctoast]') : null;
+      if (!b) return;
+      var k = b.dataset.tkCtoast;
+      calToastClose();
+      if (k === 'act' && onAction) onAction();
+    });
+    document.body.appendChild(el);
+    _ctoast = el;
+    _ctoastTimer = setTimeout(calToastClose, 10000);
+  }
+
+  // --- контекстное меню календаря (ПКМ): «Копировать» по плитке, «Вставить» по пустому месту
+  var _ctx = null;
+  function ctxClose() {
+    if (!_ctx) return;
+    var c = _ctx;
+    _ctx = null;
+    document.removeEventListener('keydown', c.onKey, true);
+    document.removeEventListener('pointerdown', c.onOut, true);
+    document.removeEventListener('wheel', c.onAway, true);
+    document.removeEventListener('scroll', c.onAway, true);
+    if (typeof window.removeEventListener === 'function') { window.removeEventListener('blur', c.onAway); window.removeEventListener('resize', c.onAway); }
+    if (c.el.parentNode && c.el.parentNode.removeChild) c.el.parentNode.removeChild(c.el);
+  }
+  function ctxOpen(x, y, items) {
+    ctxClose();
+    if (!document.body || !document.createElement) return;
+    var el = document.createElement('div');
+    el.className = 'tk-ctx';
+    if (el.setAttribute) el.setAttribute('role', 'menu');
+    el.style.left = Math.round(x) + 'px';
+    el.style.top = Math.round(y) + 'px';
+    el.innerHTML = items.map(function (it, i) {
+      return '<button type="button" class="tk-ctx-i" role="menuitem" data-tk-ctx="' + i + '"' + (it.disabled ? ' disabled' : '') +
+        (it.title ? ' title="' + esc(it.title) + '"' : '') + '>' + esc(it.label) + '</button>';
+    }).join('');
+    el.addEventListener('click', function (ev) {
+      var b = ev.target && ev.target.closest ? ev.target.closest('[data-tk-ctx]') : null;
+      var it = b ? items[+b.dataset.tkCtx] : null;
+      if (!it || it.disabled) return;
+      ctxClose();
+      it.run();
+    });
+    var c = {
+      el: el,
+      onKey: function (ev) { if (ev.key === 'Escape' || ev.key === 'Esc' || ev.key === 'Tab') { if (ev.key !== 'Tab' && ev.preventDefault) ev.preventDefault(); ctxClose(); } },
+      onOut: function (ev) { var t = ev.target; if (!(t && t.closest && t.closest('.tk-ctx'))) ctxClose(); },
+      onAway: function () { ctxClose(); }
+    };
+    document.body.appendChild(el);
+    _ctx = c;
+    document.addEventListener('keydown', c.onKey, true);
+    document.addEventListener('pointerdown', c.onOut, true);
+    document.addEventListener('wheel', c.onAway, true);
+    document.addEventListener('scroll', c.onAway, true);
+    if (typeof window.addEventListener === 'function') { window.addEventListener('blur', c.onAway); window.addEventListener('resize', c.onAway); }
+    if (typeof el.getBoundingClientRect === 'function' && window.innerWidth) {      // не выходить за экран
+      var r = el.getBoundingClientRect();
+      if (r.right > window.innerWidth - 4) el.style.left = Math.max(4, Math.round(window.innerWidth - r.width - 4)) + 'px';
+      if (r.bottom > window.innerHeight - 4) el.style.top = Math.max(4, Math.round(window.innerHeight - r.height - 4)) + 'px';
+    }
+    var first = el.querySelector ? el.querySelector('.tk-ctx-i:not([disabled])') : null;
+    if (first && first.focus) first.focus();
+  }
+  function onContextMenu(ev) {
+    var t = ev.target;
+    if (!t || !t.closest || !t.closest('.tk-wk')) return;       // вне календаря — родное меню браузера
+    if (!canWrite()) return;                                     // supervisor/viewer — родное меню
+    if (ev.pointerType === 'touch' || (!ev.pointerType && _lastPtr === 'touch')) return;
+    if (DRAG) { if (ev.preventDefault) ev.preventDefault(); dragAbort(); return; }
+    var tile = t.closest('.tk-ev'), items = null, tgt = null;
+    if (tile && tile.dataset && tile.dataset.id) {
+      var id = tile.dataset.id;
+      items = [{ label: 'Копировать', run: function () { calCopy(id); } }];
+    } else {
+      var slot = t.closest('[data-tk-act="calCell"]'), ad = slot ? null : t.closest('.tk-ad-c');
+      if (slot && slot.dataset && parseYmd(slot.dataset.date)) tgt = { kind: 'slot', date: slot.dataset.date, min: +slot.dataset.min };
+      else if (ad && ad.dataset && parseYmd(ad.dataset.date)) tgt = { kind: 'allday', date: ad.dataset.date };
+      if (!tgt) return;                                          // шапка, колонка часов и т. п. — родное меню
+      items = [{
+        label: 'Вставить', disabled: !_clip,
+        title: _clip ? '' : 'Сначала скопируйте задачу: ПКМ по плитке → «Копировать»',
+        run: function () { calPaste(tgt); }
+      }];
+    }
+    if (ev.preventDefault) ev.preventDefault();
+    ctxOpen(ev.clientX || 0, ev.clientY || 0, items);
+  }
+
+  // --- перетаскивание
+  function calHitDom(x, y, D) {
+    var wk = calEl();
+    if (!wk || !wk.getBoundingClientRect || !DOM.root.querySelectorAll) return null;
+    var wr = wk.getBoundingClientRect();
+    if (x < wr.left || x > wr.right || y < wr.top || y > wr.bottom) return null;   // за пределами календаря — «никуда»
+    var gut = DOM.root.querySelector('.tk-gut');
+    if (gut && x < gut.getBoundingClientRect().right) return null;
+    var cols = DOM.root.querySelectorAll('.tk-day');
+    for (var i = 0; i < cols.length; i++) {
+      var r = cols[i].getBoundingClientRect();
+      if (x >= r.left && x < r.right) {
+        return { date: cols[i].dataset.date, col: cols[i], min: D.kind === 'timed' ? snapMin((y - D.gy - r.top) * 60 / CAL_HOUR_PX) : null };
+      }
+    }
+    return null;
+  }
+  function calHit(x, y, D) { return HOOK.hit ? HOOK.hit(x, y, D) : calHitDom(x, y, D); }
+
+  function shadowClear() {
+    if (DRAG && DRAG.shadow && DRAG.shadow.parentNode && DRAG.shadow.parentNode.removeChild) DRAG.shadow.parentNode.removeChild(DRAG.shadow);
+    if (DRAG) DRAG.shadow = null;
+  }
+  function shadowDraw(hit, calc) {
+    shadowClear();
+    if (!hit || !calc || calc.error || !document.createElement) return;
+    var D = DRAG, host = null, el = document.createElement('div'), cls = 'tk-shadow' + (calc.unchanged ? ' tk-shadow-same' : '');
+    if (D.kind === 'timed') {
+      host = hit.col;
+      var sl = calSlotOf({ first_day: calc.first_day, last_day: calc.last_day, start_at: calc.start_at, end_at: calc.end_at });
+      if (!sl || !host) return;
+      el.style.top = round4(sl.s * CAL_HOUR_PX / 60) + 'px';
+      el.style.height = Math.max(round4((sl.e - sl.s) * CAL_HOUR_PX / 60), 18) + 'px';
+      var et = calc.end_at ? timeOf(calc.end_at) : '';
+      el.innerHTML = esc(timeOf(calc.start_at) + (et ? '–' + et : ''));
+    } else {
+      host = DOM.root.querySelector ? DOM.root.querySelector('.tk-ad-c[data-date="' + hit.date + '"]') : null;
+      if (!host) return;
+      cls += ' tk-shadow-ad';
+      el.innerHTML = esc(calc.first_day === calc.last_day ? fmtDay(calc.first_day) : fmtDm(calc.first_day) + ' — ' + fmtDm(calc.last_day));
+    }
+    el.className = cls;
+    if (el.setAttribute) el.setAttribute('aria-hidden', 'true');
+    host.appendChild(el);
+    D.shadow = el;
+  }
+  function dragUpdate() {
+    var D = DRAG;
+    if (!D || !D.started || D.cancelled) return;
+    if (D.el && D.el.isConnected === false) { dragAbort(); return; }      // перерисовка (синхронизация) убрала плитку
+    var hit = calHit(D.px, D.py, D), calc = null;
+    if (hit) {
+      calc = D.kind === 'timed' ? calDropCalc(D.t, { kind: 'slot', date: hit.date, min: hit.min })
+        : calDropCalc(D.t, { kind: 'days', days: daysBetween(D.gDate, hit.date) });
+    }
+    D.hit = hit; D.calc = calc;
+    shadowDraw(hit, calc);
+  }
+  function dragUnbind() {
+    var D = DRAG;
+    document.removeEventListener('pointermove', onDragMove, true);
+    document.removeEventListener('pointerup', onDragUp, true);
+    document.removeEventListener('pointercancel', onDragCancel, true);
+    document.removeEventListener('keydown', onDragKey, true);
+    if (typeof window.removeEventListener === 'function') window.removeEventListener('blur', onDragCancel);
+    if (D && D.timer) { clearInterval(D.timer); D.timer = null; }
+    if (D && D.wk && D.wk.removeEventListener) D.wk.removeEventListener('scroll', dragUpdate);
+  }
+  function dragVisualOff() {
+    shadowClear();
+    if (DRAG && DRAG.el && DRAG.el.classList) DRAG.el.classList.remove('tk-drag-src');
+    if (DOM.root && DOM.root.classList) DOM.root.classList.remove('tk-dragging');
+  }
+  // полная отмена (ПКМ, потеря окна, перерисовка): ничего не меняется
+  function dragAbort() {
+    if (!DRAG) return;
+    if (DRAG.started) { dragVisualOff(); _noClick = Date.now() + 300; }
+    dragUnbind();
+    DRAG = null;
+  }
+  function onDragKey(ev) {
+    if (!DRAG || (ev.key !== 'Escape' && ev.key !== 'Esc')) return;
+    if (ev.preventDefault) ev.preventDefault();
+    if (!DRAG.started) { dragUnbind(); DRAG = null; return; }
+    // кнопка ещё нажата: убираем тень, но ждём отпускания, чтобы подавить click
+    DRAG.cancelled = true;
+    dragVisualOff();
+    if (DRAG.timer) { clearInterval(DRAG.timer); DRAG.timer = null; }
+  }
+  function onDragCancel() { dragAbort(); }
+  function onDragUp(ev) {
+    var D = DRAG;
+    if (!D) return;
+    if (!D.started) { dragUnbind(); DRAG = null; return; }              // обычный клик: пойдёт на открытие карточки
+    D.px = ev.clientX; D.py = ev.clientY;
+    if (!D.cancelled) dragUpdate();
+    var calc = D.cancelled ? null : D.calc, t = D.t;
+    dragVisualOff();
+    _noClick = Date.now() + 300;                                        // click после перетаскивания не должен ничего открывать
+    dragUnbind();
+    DRAG = null;
+    if (calc && !calc.unchanged && !calc.error) calMove(t, calc);
+  }
+  function dragAutoscroll() {
+    var D = DRAG, wk = D && D.wk;
+    if (!D || !D.started || D.cancelled || !wk || !wk.getBoundingClientRect) return;
+    var r = wk.getBoundingClientRect();
+    if (D.px < r.left || D.px > r.right) return;
+    var hd = DOM.root.querySelector('.tk-cal-hd'), ad = DOM.root.querySelector('.tk-cal-ad');
+    var top = r.top + (hd ? hd.offsetHeight : 36) + (ad && !/tk-ad-open/.test(ad.className || '') ? ad.offsetHeight : 0) + 28;
+    if (D.py < top) wk.scrollTop -= 16;
+    else if (D.py > r.bottom - 28) wk.scrollTop += 16;
+  }
+  function onDragMove(ev) {
+    var D = DRAG;
+    if (!D || D.cancelled) return;
+    if (ev.buttons === 0) { dragAbort(); return; }                      // кнопку отпустили вне окна
+    if (!D.started) {
+      if (Math.abs(ev.clientX - D.x0) < CAL_DRAG_PX && Math.abs(ev.clientY - D.y0) < CAL_DRAG_PX) return;
+      var t = findTask(D.id);
+      if (!t) { dragUnbind(); DRAG = null; return; }
+      D.t = t;
+      D.started = true;
+      if (D.el && D.el.classList) D.el.classList.add('tk-drag-src');
+      if (DOM.root.classList) DOM.root.classList.add('tk-dragging');
+      D.wk = calEl();
+      if (D.wk && D.wk.addEventListener) D.wk.addEventListener('scroll', dragUpdate);
+      D.timer = setInterval(dragAutoscroll, 40);
+    }
+    D.px = ev.clientX; D.py = ev.clientY;
+    dragUpdate();
+  }
+  function onCalPointerDown(ev) {
+    _lastPtr = ev.pointerType || 'mouse';
+    if (ev.pointerType && ev.pointerType !== 'mouse') return;           // касания и перо — только прокрутка/клик как раньше
+    if (ev.button !== undefined && ev.button !== 0) return;
+    if (!canWrite() || DRAG || S.busy) return;
+    var tg = ev.target, el = tg && tg.closest ? tg.closest('.tk-wk .tk-ev') : null;
+    if (!el || !el.dataset || !el.dataset.id) return;
+    var timed = el.dataset.s !== undefined, col = !timed && el.closest ? el.closest('[data-date]') : null;
+    var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { top: ev.clientY };
+    var t = findTask(el.dataset.id);
+    if (!t) return;
+    DRAG = {
+      id: t.id, el: el, kind: timed ? 'timed' : 'allday', x0: ev.clientX, y0: ev.clientY, px: ev.clientX, py: ev.clientY,
+      gy: ev.clientY - rect.top, gDate: timed ? t.first_day : (col && col.dataset.date) || t.first_day,
+      started: false, cancelled: false, shadow: null, hit: null, calc: null, timer: null, wk: null, t: t
+    };
+    document.addEventListener('pointermove', onDragMove, true);
+    document.addEventListener('pointerup', onDragUp, true);
+    document.addEventListener('pointercancel', onDragCancel, true);
+    document.addEventListener('keydown', onDragKey, true);
+    if (typeof window.addEventListener === 'function') window.addEventListener('blur', onDragCancel);
+  }
+  function onClickCapture(ev) {
+    if (!_noClick) return;
+    var fresh = Date.now() < _noClick;
+    _noClick = 0;
+    if (fresh) { if (ev.stopPropagation) ev.stopPropagation(); if (ev.preventDefault) ev.preventDefault(); }
   }
 
   // --- карточка (справа)
@@ -2003,12 +2445,34 @@
       '.tk-ltag{overflow-wrap:anywhere}';
   }
 
+  // V6.2-2: стили перетаскивания, контекстного меню и всплывающего сообщения календаря (только новые правила)
+  function cssV62() {
+    return '' +
+      '.tk-ev.tk-dnd{cursor:grab;-webkit-user-select:none;user-select:none}' +
+      '.tk-dragging,.tk-dragging *{cursor:grabbing!important;-webkit-user-select:none!important;user-select:none!important}' +
+      '.tk-ev.tk-drag-src{opacity:.4}' +
+      '.tk-shadow{position:absolute;left:1px;right:5px;z-index:8;box-sizing:border-box;border:2px dashed var(--rt-blue);border-radius:4px;background:rgba(0,136,204,.2);' +
+        'padding:1px 4px;font-weight:700;font-size:11px;line-height:14px;color:#0b4f8a;overflow:hidden;pointer-events:none}' +
+      '.tk-shadow.tk-shadow-same{border-color:#8a9bb5;background:rgba(138,155,181,.16);color:#51607a}' +
+      '.tk-shadow.tk-shadow-ad{position:static;display:block;margin:2px 0;line-height:15px}' +
+      '.tk-ev.tk-flash{outline:2px solid #ff9800;outline-offset:-1px;z-index:5;animation:tkflash 1s ease-in-out 3}' +
+      '@keyframes tkflash{0%,100%{box-shadow:0 0 0 0 rgba(255,152,0,0)}50%{box-shadow:0 0 0 4px rgba(255,152,0,.55)}}' +
+      '.tk-ctx{position:fixed;z-index:5002;min-width:170px;padding:4px;background:#fff;border:1px solid var(--divider);border-radius:8px;box-shadow:0 6px 24px rgba(26,43,73,.28);font-size:13px}' +
+      '.tk-ctx-i{display:block;width:100%;text-align:left;border:0;background:transparent;padding:7px 12px;border-radius:6px;font:inherit;color:var(--text);cursor:pointer}' +
+      '.tk-ctx-i:hover:not(:disabled),.tk-ctx-i:focus-visible{background:rgba(0,136,204,.12);outline:0}' +
+      '.tk-ctx-i:disabled{opacity:.45;cursor:default}' +
+      '.tk-ctoast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:5001;display:flex;align-items:center;gap:12px;max-width:min(92vw,460px);' +
+        'padding:10px 14px;background:#1a2b49;color:#fff;border-radius:8px;box-shadow:0 4px 16px rgba(26,43,73,.35);font:600 13px/1.3 Inter,sans-serif}' +
+      '.tk-ctoast-act{border:0;background:transparent;color:#7fd0ff;font:inherit;text-decoration:underline;cursor:pointer;padding:2px 4px}' +
+      '.tk-ctoast-x{border:0;background:transparent;color:#cfd8e8;font-size:16px;line-height:1;cursor:pointer;padding:0 2px}';
+  }
+
   // ---------------------------------------------------------------- init
   function injectStyles() {
     if (document.getElementById('tasksModuleStyles')) return;
     var st = document.createElement('style');
     st.id = 'tasksModuleStyles';
-    st.textContent = css() + cssV61() + cssV621();
+    st.textContent = css() + cssV61() + cssV621() + cssV62();
     document.head.appendChild(st);
   }
   function init() {
@@ -2045,6 +2509,10 @@
     DOM.root.addEventListener('dragstart', onDragStart);
     DOM.root.addEventListener('dragover', onDragOver);
     DOM.root.addEventListener('drop', onDrop);
+    // V6.2-2: перетаскивание плиток календаря (pointer, только мышь) и ПКМ-меню; click после перетаскивания гасим в фазе перехвата
+    DOM.root.addEventListener('click', onClickCapture, true);
+    DOM.root.addEventListener('pointerdown', onCalPointerDown);
+    DOM.root.addEventListener('contextmenu', onContextMenu);
     // T1-8: счётчик ⚠ на вкладке — при старте и при каждом открытии панели отпусков
     var trg = document.getElementById('vacationTrigger');
     if (trg) trg.addEventListener('click', function () { refreshOrphanCount(); setTimeout(flushDirty, 0); });
@@ -2075,7 +2543,10 @@
       applyFilters: applyFilters, buildPayload: buildPayload, draftError: draftError, esc: esc,
       isOrphan: isOrphan, removedDate: removedDate, plural: plural, modalEl: function () { return DOM.modal; },
       calLayout: calLayout, calSlotOf: calSlotOf, calSlotDraft: calSlotDraft, calDayLayout: calDayLayout, timeOptionsHtml: timeOptionsHtml,
-      calScrollApply: calScrollApply, calScrollSave: calScrollSave, CAL_HOUR_PX: CAL_HOUR_PX
+      calScrollApply: calScrollApply, calScrollSave: calScrollSave, CAL_HOUR_PX: CAL_HOUR_PX,
+      calDropCalc: calDropCalc, calPasteCalc: calPasteCalc, calClipOf: calClipOf, calCopyPayload: calCopyPayload, calMove: calMove, calPaste: calPaste, calCopy: calCopy,
+      onCalPointerDown: onCalPointerDown, onContextMenu: onContextMenu, onClickCapture: onClickCapture, HOOK: HOOK,
+      drag: function () { return DRAG; }, clip: function () { return _clip; }, clearClip: function () { _clip = null; }, ctxOpen: function () { return !!_ctx; }, ctxClose: ctxClose, calToastClose: calToastClose
     }
   };
   window.openTasksPanel = openTasksPanel;

@@ -80,14 +80,16 @@ function makeEnv(base, cookie) {
   body.appendChild = function (el) { this.children.push(el); el.parentNode = this; };
   body.removeChild = function (el) { this.children = this.children.filter((c) => c !== el); el.parentNode = null; };
   const win = {};
+  const docL = {};          // слушатели document (перетаскивание и меню ставят их на время жеста)
   const sandbox = {
-    window: win, console, setTimeout, clearTimeout, Promise, JSON, Date, Math, String, Number, Array, Object, RegExp, Error, encodeURIComponent,
+    window: win, console, setTimeout, clearTimeout, setInterval, clearInterval, Promise, JSON, Date, Math, String, Number, Array, Object, RegExp, Error, encodeURIComponent,
     CustomEvent: class { constructor(type) { this.type = type; } },
     document: {
       readyState: 'complete', head: makeEl('head'), body,
       getElementById: (id) => els[id] || null,
       createElement: (t) => makeEl(t),
-      addEventListener() {}, removeEventListener() {},
+      addEventListener(t, fn) { (docL[t] = docL[t] || []).push(fn); },
+      removeEventListener(t, fn) { docL[t] = (docL[t] || []).filter((f) => f !== fn); },
       dispatchEvent() { return true; },
     },
     fetch: (url, opt) => {
@@ -165,7 +167,8 @@ function makeEnv(base, cookie) {
     await settle();
   }
   const field = (name, value) => change('data-tk-field', name, value);
-  return { sandbox, els, root, T, S: T.__t.S, U: T.__t, calls, toasts, settle, click, change, field, has, count, findTag, parseTag, body };
+  return { sandbox, els, root, T, S: T.__t.S, U: T.__t, calls, toasts, settle, click, change, field, has, count, findTag, parseTag, body, docL,
+    fireDoc(type, ev) { (docL[type] || []).slice().forEach((fn) => fn(ev)); } };
 }
 
 // ----------------------------------------------------------------------------
@@ -600,7 +603,195 @@ async function main() {
     check('RL-' + role + '-3 клик по плитке открывает карточку (только просмотр), без кнопок записи', Q.S.selectedId === 'rv' && Q.has('class="tk-detail"') && !Q.has('data-tk-act="editTask"'));
   }
 
-  // ---- 8. нагрузка: неделя, 50 сотрудников × 3 задачи ------------------------------------
+  // ---- 7a. V6.2-2 (W-5): новое время при сбросе (чистая функция) -------------------------------
+  console.log('-- W-5 расчёт сброса');
+  const dc = (t, tgt) => U.calDropCalc(t, tgt);
+  const tt = (s, e, f, l) => mk('x', 'Т', s, e, f ? { first_day: f, last_day: l || f } : undefined);
+  let c = dc(tt(wed + 'T09:00', wed + 'T10:30'), { kind: 'slot', date: D(3), min: 840 });
+  check('DR1 «Неделя»: 09:00–10:30 → чт 14:00: начало 14:00, длительность 1 ч 30 мин сохранена (конец 15:30), день сменился',
+    c.start_at === D(3) + 'T14:00' && c.end_at === D(3) + 'T15:30' && c.first_day === D(3) && c.last_day === D(3), JSON.stringify(c));
+  check('DR2 привязка к шагу 30 мин: 10:07 → 10:00, 10:20 → 10:30, 10:15 → 10:30 (округление к ближайшему)',
+    dc(tt(wed + 'T09:00', wed + 'T10:00'), { kind: 'slot', date: wed, min: 607 }).start_at === wed + 'T10:00' &&
+    dc(tt(wed + 'T09:00', wed + 'T10:00'), { kind: 'slot', date: wed, min: 620 }).start_at === wed + 'T10:30' &&
+    dc(tt(wed + 'T09:00', wed + 'T10:00'), { kind: 'slot', date: wed, min: 615 }).start_at === wed + 'T10:30');
+  c = dc(tt(wed + 'T14:00', null), { kind: 'slot', date: tue, min: 600 });
+  check('DR3 задача только с началом: время сменилось, конца по-прежнему нет (end_at = null)', c.start_at === tue + 'T10:00' && c.end_at === null, JSON.stringify(c));
+  c = dc(tt(wed + 'T09:00', wed + 'T11:00'), { kind: 'slot', date: wed, min: 1380 });
+  check('DR4 граница суток: 2-часовая задача на 23:00 → конец не за 23:59 (23:00–23:59)', c.start_at === wed + 'T23:00' && c.end_at === wed + 'T23:59' && c.last_day === wed, JSON.stringify(c));
+  c = dc(tt(wed + 'T09:00', wed + 'T10:00'), { kind: 'slot', date: wed, min: 1410 });
+  check('DR4a 23:30 с 1-часовой: 23:30–23:59', c.start_at === wed + 'T23:30' && c.end_at === wed + 'T23:59', JSON.stringify(c));
+  c = dc(tt(wed + 'T09:00', wed + 'T10:00'), { kind: 'slot', date: wed, min: 5000 });
+  check('DR4b ниже сетки (min > 23:30) — прижимается к 23:30, не выходит за сутки; выше (min < 0) — к 00:00',
+    c.start_at === wed + 'T23:30' && dc(tt(wed + 'T09:00', wed + 'T10:00'), { kind: 'slot', date: wed, min: -90 }).start_at === wed + 'T00:00');
+  check('DR5 отпустили на старом месте — «без изменений»: тот же день и тот же получас (в т.ч. 09:07 ≈ 09:00)',
+    dc(tt(wed + 'T09:00', wed + 'T10:30'), { kind: 'slot', date: wed, min: 540 }).unchanged === true &&
+    dc(tt(wed + 'T09:07', wed + 'T10:13'), { kind: 'slot', date: wed, min: 540 }).unchanged === true);
+  check('DR5a тот же час, но другой день — это изменение; тот же день, другой час — тоже',
+    !dc(tt(wed + 'T09:00', wed + 'T10:30'), { kind: 'slot', date: tue, min: 540 }).unchanged && !dc(tt(wed + 'T09:00', wed + 'T10:30'), { kind: 'slot', date: wed, min: 570 }).unchanged);
+  c = dc(tt(tue + 'T09:00', D(4) + 'T18:00', tue, D(4)), { kind: 'days', days: 2 });
+  check('DR6 многодневная (вт 09:00 → пт 18:00) +2 дня: оба конца сдвинуты, время суток сохранено',
+    c.start_at === D(3) + 'T09:00' && c.end_at === D(6) + 'T18:00' && c.first_day === D(3) && c.last_day === D(6), JSON.stringify(c));
+  c = dc(tt(wed, null), { kind: 'days', days: -3 });
+  check('DR7 «Весь день»: задача без времени −3 дня — меняется только дата, времени не появляется', c.start_at === D(-1) && c.end_at === null && c.first_day === D(-1), JSON.stringify(c));
+  c = dc(tt(sat, sun, sat, sun), { kind: 'days', days: 7 });
+  check('DR7a период без времени (сб–вс) +7: обе даты, без времени', c.start_at === D(12) && c.end_at === D(13), JSON.stringify(c));
+  check('DR8 сдвиг на 0 дней — «без изменений»', dc(tt(wed, null), { kind: 'days', days: 0 }).unchanged === true);
+  c = dc(tt(wed + 'T14:30', wed + 'T15:30'), { kind: 'days', days: 5 });
+  check('DR9 «Месяц» (сдвиг на день): время сохраняется — 14:30–15:30 остаются, дата +5', c.start_at === D(7) + 'T14:30' && c.end_at === D(7) + 'T15:30' && c.last_day === D(7), JSON.stringify(c));
+  check('DR10 плитка без времени не принимает «slot» (ошибка), неверные аргументы — ошибка',
+    dc(tt(wed, null), { kind: 'slot', date: wed, min: 600 }).error === 'not_timed' && dc(tt(wed, null), { kind: 'x' }).error === 'bad_args' && dc(null, { kind: 'days', days: 1 }).error === 'bad_args');
+  c = dc(tt('2099-03-30T10:00', '2099-03-30T11:00', '2099-03-30'), { kind: 'days', days: 3 });
+  check('DR11 переход через границу месяца: 30.03 + 3 дня = 02.04', c.start_at === '2099-04-02T10:00' && c.end_at === '2099-04-02T11:00', JSON.stringify(c));
+  c = dc(tt(wed + 'T09:00', wed), { kind: 'slot', date: tue, min: 600 });
+  check('DR12 конец без времени (только дата) при сбросе в сетку: начало 10:00, конец = новая дата без времени', c.start_at === tue + 'T10:00' && c.end_at === tue, JSON.stringify(c));
+  check('DR13 в запрос «Весь день» время суток не появляется и не теряется: многодневная с временем в «Весь день» — время концов прежнее',
+    dc(tt(tue + 'T09:30', D(3) + 'T17:45', tue, D(3)), { kind: 'days', days: 1 }).start_at === wed + 'T09:30' && dc(tt(tue + 'T09:30', D(3) + 'T17:45', tue, D(3)), { kind: 'days', days: 1 }).end_at === D(4) + 'T17:45');
+
+  // ---- 7b. V6.2-2 (W-6): состав и срок копии ----------------------------------------------
+  console.log('-- W-6 копия');
+  const pc = (t, tgt) => U.calPasteCalc(U.calClipOf(t), tgt);
+  c = pc(mk('p', 'П', wed + 'T09:00', wed + 'T10:30'), { kind: 'slot', date: D(3), min: 900 });
+  check('PC1 вставка в ячейку чт 15:00: начало 15:00, длительность как у оригинала (1 ч 30 мин) → конец 16:30', c.start_at === D(3) + 'T15:00' && c.end_at === D(3) + 'T16:30', JSON.stringify(c));
+  c = pc(mk('p', 'П', wed + 'T09:00', wed + 'T10:30'), { kind: 'slot', date: wed, min: 1410 });
+  check('PC2 вставка в 23:30 задачи на 1,5 ч: конец прижат к 23:59 (в пределах суток)', c.start_at === wed + 'T23:30' && c.end_at === wed + 'T23:59' && c.last_day === wed, JSON.stringify(c));
+  c = pc(mk('p', 'П', wed), { kind: 'slot', date: tue, min: 600 });
+  check('PC3 оригинал без времени в ячейку 10:00: начало 10:00, конца нет', c.start_at === tue + 'T10:00' && c.end_at === null, JSON.stringify(c));
+  c = pc(mk('p', 'П', wed + 'T14:00', null), { kind: 'slot', date: tue, min: 660 });
+  check('PC4 оригинал только с началом: у копии тоже нет конца', c.start_at === tue + 'T11:00' && c.end_at === null);
+  c = pc(mk('p', 'П', wed + 'T09:00', wed + 'T10:30'), { kind: 'allday', date: sat });
+  check('PC5 вставка в полосу «Весь день»: без времени (start_at = дата), конца нет у однодневной', c.start_at === sat && c.end_at === null && c.first_day === sat && c.last_day === sat, JSON.stringify(c));
+  c = pc(mk('p', 'П', tue + 'T09:00', D(3) + 'T17:00', tue, D(3)), { kind: 'allday', date: sat });
+  check('PC5a многодневная в «Весь день»: длительность (3 дня) сохранена датами без времени', c.start_at === sat && c.end_at === D(7) && c.last_day === D(7), JSON.stringify(c));
+  c = pc(mk('p', 'П', wed + 'T14:30', wed + 'T15:30'), { kind: 'month', date: D(10) });
+  check('PC6 «Месяц»: то же время суток, что у оригинала (14:30–15:30), дата ячейки', c.start_at === D(10) + 'T14:30' && c.end_at === D(10) + 'T15:30', JSON.stringify(c));
+  c = pc(mk('p', 'П', tue + 'T09:00', D(3) + 'T17:00', tue, D(3)), { kind: 'slot', date: D(5), min: 600 });
+  check('PC7 многодневная (вт 09:00 → чт 17:00 = 2 дня 8 ч) в ячейку сб 10:00 → вс… конец = пн 18:00 (та же длительность)', c.start_at === D(5) + 'T10:00' && c.end_at === D(7) + 'T18:00' && c.last_day === D(7), JSON.stringify(c));
+  const srcT = mk('src', 'Исходная «задача» <b>', wed + 'T09:00', wed + 'T10:00', {
+    description: 'Описание\nв две строки', priority: 1, label: 'монтаж, срочно ',
+    assignees: [{ employee_id: 'emp_1', full_name: 'Иванов Иван', removed: false }, { employee_id: 'emp_9', full_name: 'Удалённый', removed: true }, { employee_id: 'emp_2', full_name: 'Петров Пётр', removed: false }],
+    watchers: [{ employee_id: 'emp_3', full_name: 'Сидорова Анна', removed: false }, { employee_id: 'emp_8', full_name: 'Удалённый наблюдатель', removed: true }],
+    checklist: [{ id: 5, text: 'Первый', done: true }, { id: 6, text: ' Второй ', done: false }, { id: 7, text: '   ', done: true }],
+    status: 'closed', version: 7,
+  });
+  const clip = U.calClipOf(srcT), pay = U.calCopyPayload(clip, { start_at: tue + 'T10:00', end_at: tue + 'T11:00' });
+  check('CL1 состав копии: тема, описание, приоритет, метка «как есть» (строка), исполнители и наблюдатели (без удалённых)',
+    pay.title === srcT.title && pay.description === 'Описание\nв две строки' && pay.priority === 1 && pay.label === 'монтаж, срочно ' &&
+    pay.assignees.join() === 'emp_1,emp_2' && pay.watchers.join() === 'emp_3', JSON.stringify(pay));
+  check('CL2 чек-лист копии: пункты без отметок (done=false у всех, даже у отмеченного оригинала), без id, пустые пункты не копируются',
+    pay.checklist.length === 2 && pay.checklist.every((x) => x.done === false && x.id === undefined) && pay.checklist.map((x) => x.text).join('|') === 'Первый|Второй', JSON.stringify(pay.checklist));
+  check('CL3 в запрос не попадают статус/версия/id/закрытие: статус «Открыта» ставит сервер при создании; start_at/end_at — по ячейке',
+    !('status' in pay) && !('version' in pay) && !('id' in pay) && pay.start_at === tue + 'T10:00' && pay.end_at === tue + 'T11:00');
+  check('CL4 снимок не зависит от оригинала: правка/удаление исходной задачи после «Копировать» не меняют буфер', (() => { srcT.title = 'Другое'; srcT.checklist.length = 0; srcT.assignees.length = 0; return clip.title.indexOf('Исходная') === 0 && clip.checklist.length === 2 && clip.assignees.length === 2; })());
+  check('CL5 label = null/пусто → пустая строка (не «null»)', U.calClipOf(mk('n', 'Н', wed, null, { label: null })).label === '' && U.calCopyPayload(U.calClipOf(mk('n', 'Н', wed, null, { label: null })), { start_at: wed, end_at: null }).label === '');
+
+  // ---- 7c. V6.2-2: права и мышь/касание (шим) -------------------------------------------------
+  console.log('-- W-5/W-6 права, касания');
+  const fakeTile = (id, date, timed, top) => {
+    const el = { dataset: { id, tkDnd: '1' }, classList: { add() {}, remove() {} }, getBoundingClientRect: () => ({ top: top === undefined ? 100 : top }), closest: (sel) => (sel === '[data-date]' ? { dataset: { date } } : null) };
+    if (timed) el.dataset.s = '540';
+    return el;
+  };
+  const onTile = (el) => ({ closest: (sel) => (sel === '.tk-wk' ? {} : (sel === '.tk-ev' || sel === '.tk-wk .tk-ev') ? el : null) });
+  const onCell = (date, min) => ({ closest: (sel) => (sel === '.tk-wk' ? {} : sel === '[data-tk-act="calCell"]' ? { dataset: { date, min: String(min) } } : null) });
+  const onStrip = (date) => ({ closest: (sel) => (sel === '.tk-wk' ? {} : sel === '.tk-ad-c' ? { dataset: { date } } : null) });
+  const onHead = { closest: (sel) => (sel === '.tk-wk' ? {} : null) };
+  const outside = { closest: () => null };
+  const mev = (target, extra) => Object.assign({ target, button: 0, pointerType: 'mouse', clientX: 200, clientY: 130, buttons: 1, prevented: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } }, extra || {});
+  const menuEls = (E) => E.body.children.filter((x) => x.className === 'tk-ctx');
+  const toastEls = (E) => E.body.children.filter((x) => x.className === 'tk-ctoast');
+  {
+    const Ad = makeEnv('http://127.0.0.1:1', '');
+    Ad.S.user = { role: 'admin', isAdmin: true }; Ad.S.employees = emps; Ad.S.empById = {}; emps.forEach((e) => { Ad.S.empById[e.id] = e; });
+    Ad.S.tasks = [mk('vt', 'Плитка', wed + 'T09:00', wed + 'T10:00'), mk('va', 'Весь день', wed)]; Ad.S.view = 'calendar'; Ad.S.cal.mode = 'week'; Ad.S.cal.anchor = wed; Ad.U.render();
+    check('RD1 admin: плитки помечены для перетаскивания (tk-dnd, data-tk-dnd) — и в сетке, и в «Весь день»', Ad.count('data-tk-dnd="1"') === 2 && Ad.count(' tk-dnd') >= 2);
+    const evTouch = mev(onTile(fakeTile('vt', wed, true)), { pointerType: 'touch' });
+    Ad.root.fire('pointerdown', evTouch);
+    check('RD2 касание (pointerType touch) не начинает перетаскивание: прокрутка пальцем остаётся прокруткой', Ad.U.drag() === null && Ad.docL.pointermove === undefined);
+    Ad.root.fire('pointerdown', mev(onTile(fakeTile('vt', wed, true)), { button: 2 }));
+    check('RD3 правая кнопка мыши не начинает перетаскивание', Ad.U.drag() === null);
+    Ad.root.fire('pointerdown', mev(onTile(fakeTile('vt', wed, true)), { pointerType: 'pen' }));
+    check('RD3a перо не начинает перетаскивание', Ad.U.drag() === null);
+    const ctTouch = mev(onTile(fakeTile('vt', wed, true)), { pointerType: 'touch' });
+    Ad.root.fire('contextmenu', ctTouch);
+    check('RD4 долгое касание (contextmenu от touch) — наше меню не открывается, родное поведение не подавляется', !ctTouch.prevented && menuEls(Ad).length === 0);
+    const ctHead = mev(onHead);
+    Ad.root.fire('contextmenu', ctHead);
+    const ctOut = mev(outside);
+    Ad.root.fire('contextmenu', ctOut);
+    check('RD5 родное меню браузера: над заголовком/колонкой часов календаря и вне календаря не подавляется', !ctHead.prevented && !ctOut.prevented && menuEls(Ad).length === 0);
+    const ctTile = mev(onTile(fakeTile('vt', wed, true)), { clientX: 310, clientY: 220 });
+    Ad.root.fire('contextmenu', ctTile);
+    check('RD6 ПКМ по плитке: родное меню подавлено, открыто своё меню с единственным пунктом «Копировать» (в позиции курсора)',
+      ctTile.prevented && menuEls(Ad).length === 1 && />Копировать</.test(menuEls(Ad)[0].innerHTML) && !/Вставить/.test(menuEls(Ad)[0].innerHTML) && menuEls(Ad)[0].style.left === '310px' && menuEls(Ad)[0].style.top === '220px', menuEls(Ad)[0] && menuEls(Ad)[0].innerHTML);
+    Ad.fireDoc('keydown', mev(null, { key: 'Escape' }));
+    check('RD7 меню закрывается по Esc', menuEls(Ad).length === 0 && !Ad.U.ctxOpen());
+    Ad.root.fire('contextmenu', mev(onCell(wed, 600)));
+    Ad.fireDoc('pointerdown', mev(outside));
+    check('RD8 меню закрывается кликом мимо (pointerdown вне меню)', menuEls(Ad).length === 0);
+    Ad.root.fire('contextmenu', mev(onCell(wed, 600)));
+    Ad.fireDoc('pointerdown', mev({ closest: (sel) => (sel === '.tk-ctx' ? {} : null) }));
+    check('RD8a клик по самому меню его не закрывает (закроет выбор пункта)', menuEls(Ad).length === 1);
+    Ad.fireDoc('scroll', mev(null));
+    check('RD9 меню закрывается прокруткой', menuEls(Ad).length === 0);
+    Ad.root.fire('contextmenu', mev(onCell(wed, 600)));
+    Ad.fireDoc('wheel', mev(null));
+    check('RD9a меню закрывается колесом мыши', menuEls(Ad).length === 0);
+    Ad.U.clearClip();
+    Ad.root.fire('contextmenu', mev(onCell(wed, 600)));
+    const m0 = menuEls(Ad)[0], callsBefore = Ad.calls.length;
+    check('RD10 ПКМ по пустой ячейке: пункт «Вставить», пока ничего не скопировано — неактивен (disabled), клик по нему ничего не создаёт',
+      m0 && />Вставить</.test(m0.innerHTML) && /disabled/.test(m0.innerHTML) && (m0.fire('click', { target: { closest: () => ({ dataset: { tkCtx: '0' } }) } }), Ad.calls.length === callsBefore && menuEls(Ad).length === 1));
+    Ad.U.ctxClose();
+    Ad.root.fire('contextmenu', mev(onStrip(sat)));
+    check('RD11 ПКМ по полосе «Весь день» (ячейка дня) тоже даёт «Вставить»', menuEls(Ad).length === 1 && />Вставить</.test(menuEls(Ad)[0].innerHTML));
+    Ad.U.ctxClose();
+    // клик без сдвига: перетаскивание не начинается, карточка открывается
+    Ad.root.fire('pointerdown', mev(onTile(fakeTile('vt', wed, true))));
+    check('RD12 нажатие мышью на плитку: жест «ждёт» сдвига (перетаскивание ещё не началось), слушатели повешены на document', Ad.U.drag() && Ad.U.drag().started === false && (Ad.docL.pointermove || []).length === 1);
+    Ad.fireDoc('pointermove', mev(null, { clientX: 202, clientY: 131 }));
+    check('RD13 сдвиг меньше порога (< 5 px) — всё ещё клик', Ad.U.drag() && Ad.U.drag().started === false);
+    Ad.fireDoc('pointerup', mev(null, { clientX: 202, clientY: 131 }));
+    check('RD14 отпустили без сдвига: жест снят, слушатели document сняты, следующий click не подавляется (карточка откроется)',
+      Ad.U.drag() === null && (Ad.docL.pointermove || []).length === 0 && (Ad.docL.pointerup || []).length === 0 &&
+      (() => { const ce = mev(outside); Ad.U.onClickCapture(ce); return !ce.stopped && !ce.prevented; })());
+    Ad.U.ACTIONS.openTask({ dataset: { id: 'vt' } });
+    check('RD14a клик по плитке по-прежнему открывает карточку', Ad.S.selectedId === 'vt' && Ad.has('class="tk-detail"'));
+    // перерисовка (синхронизация) во время перетаскивания: плитка пропала из DOM → жест отменяется без записи
+    {
+      const gone = fakeTile('vt', wed, true); gone.isConnected = false;
+      const pb4 = Ad.calls.length;
+      Ad.U.HOOK.hit = () => ({ date: tue, min: 600 });
+      Ad.root.fire('pointerdown', mev(onTile(gone)));
+      Ad.fireDoc('pointermove', mev(null, { clientX: 260, clientY: 190 }));
+      check('RD15 плитку убрали из DOM во время перетаскивания (перерисовка): жест отменён, слушатели сняты, запросов нет, следующий click подавлен',
+        Ad.U.drag() === null && (Ad.docL.pointermove || []).length === 0 && Ad.calls.length === pb4 && (() => { const ce = mev(outside); Ad.U.onClickCapture(ce); return !!ce.stopped; })());
+      Ad.U.HOOK.hit = null;
+      Ad.root.fire('pointerdown', mev(onTile(fakeTile('vt', wed, true))));
+      Ad.fireDoc('pointermove', mev(null, { clientX: 260, clientY: 190, buttons: 0 }));
+      check('RD16 кнопку отпустили вне окна (move с buttons=0): жест отменён', Ad.U.drag() === null && (Ad.docL.pointermove || []).length === 0);
+    }
+  }
+  for (const role of ['supervisor', 'viewer']) {
+    const Q = makeEnv('http://127.0.0.1:1', '');
+    Q.S.user = { role, isAdmin: false }; Q.S.employees = emps; Q.S.empById = {}; emps.forEach((e) => { Q.S.empById[e.id] = e; });
+    Q.S.tasks = [mk('rt', 'Плитка', wed + 'T09:00', wed + 'T10:00')]; Q.S.view = 'calendar'; Q.S.cal.mode = 'week'; Q.S.cal.anchor = wed; Q.U.render();
+    check('W56-' + role + '-1 плитки не помечены как перетаскиваемые: нет tk-dnd и data-tk-dnd (курсор «рука» не показывается)', Q.count('class="tk-ev') >= 1 && !Q.has('tk-dnd') && !Q.has('data-tk-dnd'));
+    Q.root.fire('pointerdown', mev(onTile(fakeTile('rt', wed, true))));
+    check('W56-' + role + '-2 нажатие мышью по плитке: перетаскивание не начинается, слушатели не вешаются', Q.U.drag() === null && Q.docL.pointermove === undefined);
+    const cev = mev(onTile(fakeTile('rt', wed, true)));
+    Q.root.fire('contextmenu', cev);
+    const cev2 = mev(onCell(wed, 600));
+    Q.root.fire('contextmenu', cev2);
+    check('W56-' + role + '-3 ПКМ: нативное меню браузера не подавляется, своего меню нет', !cev.prevented && !cev2.prevented && menuEls(Q).length === 0 && !Q.U.ctxOpen());
+    const nBefore = Q.calls.length;
+    Q.U.calCopy('rt');
+    Q.U.calPaste({ kind: 'slot', date: wed, min: 600 });
+    check('W56-' + role + '-4 принудительный вызов «Копировать»/«Вставить»: буфер пуст, запросов нет', Q.U.clip() === null && Q.calls.length === nBefore);
+    Q.U.calMove(Q.S.tasks[0], { start_at: wed + 'T10:00', end_at: wed + 'T11:00', first_day: wed, last_day: wed });
+    check('W56-' + role + '-5 принудительный перенос: запросов нет, плитка на месте', Q.calls.length === nBefore && Q.S.tasks[0].start_at === wed + 'T09:00');
+  }
+
+
   console.log('-- нагрузка');
   {
     const rnd = prng(7);
@@ -711,6 +902,171 @@ async function main() {
     // календарь: «День» по реальному API
     await A.click('calMode', (d) => d.mode === 'day');
     check('E10 «День» по реальному API: одна колонка, запрошен один день, плитка созданной задачи на месте', A.S.cal.mode === 'day' && A.count('class="tk-wk-h') === 1 && A.calls.some((c) => /api\/tasks\.php\?from=\d{4}-\d\d-\d\d&to=\d{4}-\d\d-\d\d$/.test(c.url)));
+
+    // ---- V6.2-2: перетаскивание и копирование по реальному API ------------------------------
+    console.log('-- W-5/W-6 e2e (реальный api/tasks.php)');
+    await A.T.open({ employeeId: '', date: day, view: 'calendar', mode: 'week' }); await A.settle();
+    const AD = (n) => A.U.addDays(A.U.weekStart(day), n);   // Пн 2099-06-08 … Вс 2099-06-14; day = среда
+    const e2 = A.S.employees[2].id, e3 = A.S.employees[3].id;
+    const mkS = async (body) => (await http(base, adminCk, 'POST', 'api/tasks.php', Object.assign({ assignees: [e1] }, body))).json.task;
+    const getS = async (id) => (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + id)).json.task;
+    const putN = () => A.calls.filter((q) => q.method === 'PUT').length;
+    const press = (id, date, timed) => A.root.fire('pointerdown', mev(onTile(fakeTile(id, date, timed)), { clientX: 200, clientY: 130 }));
+    const moveTo = (hit, x, y) => { A.U.HOOK.hit = () => hit; A.fireDoc('pointermove', mev(null, { clientX: x || 260, clientY: y || 190 })); };
+    const release = async () => { A.fireDoc('pointerup', mev(null, { clientX: 260, clientY: 190 })); await A.settle(); };
+    const clickSupp = () => { const ce = mev(outside); A.U.onClickCapture(ce); return !!ce.stopped; };
+
+    // DD1 «Неделя»: плитка 09:00–10:30 (ср) → чт 14:00
+    const d1 = await mkS({ title: 'DnD: неделя', start_at: day + 'T09:00', end_at: day + 'T10:30' });
+    await A.T.reload(); await A.settle();
+    press(d1.id, day, true);
+    check('DD1a нажатие на плитку мышью: жест начат, но до сдвига < 5 px перетаскивания нет', A.U.drag() && !A.U.drag().started);
+    moveTo({ date: AD(3), min: 840 });
+    const dg = A.U.drag();
+    check('DD1b сдвиг ≥ 5 px начинает перетаскивание; «тень» считается на лету: чт 14:00–15:30, длительность сохранена', dg && dg.started && dg.calc && dg.calc.start_at === AD(3) + 'T14:00' && dg.calc.end_at === AD(3) + 'T15:30', JSON.stringify(dg && dg.calc));
+    const putBefore = putN();
+    A.fireDoc('pointerup', mev(null, { clientX: 260, clientY: 190 }));
+    const optimistic = A.S.tasks.find((q) => q.id === d1.id);
+    check('DD1c сразу после отпускания плитка уже на новом месте (перенос показан до ответа сервера), жест снят, click подавлен',
+      optimistic.start_at === AD(3) + 'T14:00' && A.U.drag() === null && clickSupp() && (A.docL.pointermove || []).length === 0);
+    await A.settle();
+    const srv1 = await getS(d1.id), put1 = A.calls.filter((q) => q.method === 'PUT').pop();
+    check('DD1d PUT api/tasks.php?id=… с version=1 и новыми start_at/end_at; на сервере чт 14:00–15:30, версия 2',
+      putN() === putBefore + 1 && put1.body.version === 1 && put1.body.start_at === AD(3) + 'T14:00' && put1.body.end_at === AD(3) + 'T15:30' &&
+      srv1.start_at === AD(3) + 'T14:00' && srv1.end_at === AD(3) + 'T15:30' && srv1.version === 2, JSON.stringify([put1 && put1.body, srv1 && [srv1.start_at, srv1.end_at, srv1.version]]));
+    check('DD1e после ответа календарь перечитан: плитка в чт на top = 14×48 = 672 px, высота 72 px; тост «Задача перенесена»',
+      (() => { const q = (bodyTilesByDay(A)[AD(3)] || []).find((x) => x.id === d1.id); return q && q.top === 672 && q.h === 72; })() && A.toasts.some((q) => /Задача перенесена: 11\.06 14:00/.test(q.text)),
+      JSON.stringify(A.toasts.slice(-2)));
+
+    // DD2 Esc — ничего не меняется
+    const d2 = await mkS({ title: 'DnD: Esc', start_at: day + 'T11:00', end_at: day + 'T12:00' });
+    await A.T.reload(); await A.settle();
+    let pb = putN();
+    press(d2.id, day, true); moveTo({ date: AD(4), min: 600 });
+    check('DD2a перетаскивание идёт (рассчитан чт/пт 10:00)', A.U.drag() && A.U.drag().started && A.U.drag().calc.start_at === AD(4) + 'T10:00');
+    A.fireDoc('keydown', mev(null, { key: 'Escape' }));
+    check('DD2b Esc: перетаскивание отменено (тень убрана), кнопка ещё нажата — движения игнорируются', A.U.drag() && A.U.drag().cancelled === true && A.U.drag().shadow === null);
+    moveTo({ date: AD(5), min: 600 });
+    await release();
+    check('DD2c отпускание после Esc: запросов нет, на сервере всё прежнее, click после жеста подавлен (карточка/форма не открываются)',
+      putN() === pb && (await getS(d2.id)).start_at === day + 'T11:00' && A.U.drag() === null && clickSupp() && A.S.form === null);
+
+    // DD3 отпустили на старом месте и вне календаря — без изменений
+    press(d2.id, day, true); moveTo({ date: day, min: 660 });
+    check('DD3a над старым местом: расчёт «без изменений»', A.U.drag().calc && A.U.drag().calc.unchanged === true);
+    await release();
+    press(d2.id, day, true); moveTo(null);
+    check('DD3b над областью вне календаря: цели нет', A.U.drag().calc === null && A.U.drag().hit === null);
+    await release();
+    check('DD3c ни старое место, ни область вне календаря запросов не шлют', putN() === pb && (await getS(d2.id)).version === 1);
+
+    // DD4 «Весь день»: меняется только дата
+    const d3 = await mkS({ title: 'DnD: весь день', start_at: day });
+    const d4 = await mkS({ title: 'DnD: многодневная', start_at: AD(1) + 'T09:00', end_at: AD(3) + 'T17:00' });
+    await A.T.reload(); await A.settle();
+    press(d3.id, day, false); moveTo({ date: AD(4), min: null });
+    check('DD4a «Весь день» (ср → пт): расчёт — только дата, без времени', A.U.drag().calc.start_at === AD(4) && A.U.drag().calc.end_at === null);
+    await release();
+    const srv3 = await getS(d3.id);
+    check('DD4b на сервере start_at = пятница, времени нет', srv3.start_at === AD(4) && srv3.end_at === null && srv3.version === 2, JSON.stringify([srv3.start_at, srv3.end_at]));
+    press(d4.id, AD(1), false); moveTo({ date: AD(2), min: null });
+    await release();
+    const srv4 = await getS(d4.id);
+    check('DD4c многодневная (вт 09:00 → чт 17:00), перетащена на день вправо: оба конца со сдвигом, время прежнее (ср 09:00 → пт 17:00)', srv4.start_at === AD(2) + 'T09:00' && srv4.end_at === AD(4) + 'T17:00', JSON.stringify([srv4.start_at, srv4.end_at]));
+    const adTiles = adTilesByDay(A);
+    check('DD4d после перерисовки многодневная — в «Весь день» на ср, чт, пт', [2, 3, 4].every((n) => (adTiles[AD(n)] || []).some((q) => q.id === d4.id)) && !(adTiles[AD(1)] || []).some((q) => q.id === d4.id));
+
+    // DD5 конфликт версий (409): другой пользователь изменил задачу
+    const d5 = await mkS({ title: 'DnD: конфликт', start_at: day + 'T13:00', end_at: day + 'T14:00' });
+    await A.T.reload(); await A.settle();
+    const other = await http(base, adminCk, 'PUT', 'api/tasks.php?id=' + d5.id, { title: 'DnD: конфликт (изменил другой)', version: 1 });
+    check('DD5a (подготовка) вторая вкладка изменила задачу: версия 2', other.status === 200 && other.json.task.version === 2);
+    press(d5.id, day, true); moveTo({ date: AD(1), min: 900 });
+    await release();
+    const srv5 = await getS(d5.id), loc5 = A.S.tasks.find((q) => q.id === d5.id);
+    check('DD5b 409: понятное сообщение (баннер и тост), перенос не применён на сервере', srv5.start_at === day + 'T13:00' && A.S.msg && A.S.msg.type === 'error' && /другим пользователем/.test(A.S.msg.text) && A.toasts.some((q) => /Конфликт версий/.test(q.text)), JSON.stringify(A.S.msg));
+    check('DD5c после 409 задачи перечитаны: у плитки версия 2, свежее название, прежнее время; плитка вернулась на 13:00 (top 624)',
+      loc5 && loc5.version === 2 && loc5.title === 'DnD: конфликт (изменил другой)' && loc5.start_at === day + 'T13:00' && (() => { const q = (bodyTilesByDay(A)[day] || []).find((x) => x.id === d5.id); return q && q.top === 624; })());
+
+    // DD6 ошибка проверки на сервере — сообщение и откат плитки
+    const d6 = await mkS({ title: 'DnD: ошибка', start_at: day + 'T15:00', end_at: day + 'T16:00' });
+    await A.T.reload(); await A.settle();
+    const t6 = A.S.tasks.find((q) => q.id === d6.id);
+    A.S.msg = null;
+    const pr6 = A.U.calMove(t6, { start_at: AD(3) + 'T25:00', end_at: null, first_day: AD(3), last_day: AD(3) });
+    check('DD6a сразу после броска плитка показана на новом месте (до ответа)', A.S.tasks.find((q) => q.id === d6.id).first_day === AD(3));
+    await pr6; await A.settle();
+    check('DD6b ответ 400 (invalid_start_at): сообщение пользователю, плитка откатилась на прежнее место, запись на сервере прежняя',
+      A.S.msg && A.S.msg.type === 'error' && /Перенос не выполнен/.test(A.S.msg.text) && A.S.tasks.find((q) => q.id === d6.id).start_at === day + 'T15:00' && (await getS(d6.id)).start_at === day + 'T15:00' &&
+      (bodyTilesByDay(A)[day] || []).some((x) => x.id === d6.id), JSON.stringify(A.S.msg));
+    A.S.msg = null;
+
+    // CP: копирование ПКМ
+    const mm = (E, i) => menuEls(E)[0].fire('click', { target: { closest: () => ({ dataset: { tkCtx: String(i) } }) } });
+    const c1 = await mkS({
+      title: 'Копируемая <i>', description: 'Описание копии', priority: 1, label: 'метка1, метка2', assignees: [e1, e2], watchers: [e3],
+      checklist: [{ text: 'пункт а', done: true }, { text: 'пункт б', done: false }], start_at: day + 'T09:00', end_at: day + 'T10:30',
+    });
+    await A.T.reload(); await A.settle();
+    A.U.clearClip();
+    A.root.fire('contextmenu', mev(onTile(fakeTile(c1.id, day, true))));
+    mm(A, 0);
+    check('CP1 ПКМ по плитке → «Копировать»: буфер заполнен снимком (тема, исполнители, чек-лист), меню закрылось, запросов на сервер нет',
+      A.U.clip() && A.U.clip().title === 'Копируемая <i>' && A.U.clip().assignees.join() === e1 + ',' + e2 && menuEls(A).length === 0 && A.toasts.some((q) => /Скопировано: «Копируемая/.test(q.text)));
+    const nBefore = A.S.tasks.length;
+    A.root.fire('contextmenu', mev(onCell(AD(4), 900)));
+    check('CP2 после «Копировать» «Вставить» в пустой ячейке активно', menuEls(A).length === 1 && />Вставить</.test(menuEls(A)[0].innerHTML) && !/disabled/.test(menuEls(A)[0].innerHTML));
+    mm(A, 0);
+    await A.settle();
+    const copies = async () => (await http(base, adminCk, 'GET', 'api/tasks.php?from=' + AD(0) + '&to=' + AD(6))).json.tasks.filter((q) => q.title === 'Копируемая <i>' && q.id !== c1.id);
+    let cps = await copies();
+    const cp1 = cps.find((q) => q.start_at === AD(4) + 'T15:00');
+    check('CP3 «Вставить» в пт 15:00: на сервере новая задача, начало 15:00, длительность 1 ч 30 мин (конец 16:30)', cps.length === 1 && cp1 && cp1.end_at === AD(4) + 'T16:30', JSON.stringify(cps.map((q) => [q.start_at, q.end_at])));
+    check('CP4 поля копии: тема, описание, приоритет 1, метка «как есть», статус «Открыта»',
+      cp1.title === 'Копируемая <i>' && cp1.description === 'Описание копии' && cp1.priority === 1 && cp1.label === 'метка1, метка2' && cp1.status === 'open', JSON.stringify(cp1));
+    check('CP5 исполнители и наблюдатели копии те же', cp1.assignees.map((x) => x.employee_id).sort().join() === [e1, e2].sort().join() && cp1.watchers.map((x) => x.employee_id).join() === e3);
+    check('CP6 чек-лист копии: «пункт а», «пункт б», у всех done=false (оригинал отмечен)', cp1.checklist.map((x) => x.text + ':' + x.done).join('|') === 'пункт а:false|пункт б:false' && (await getS(c1.id)).checklist.some((x) => x.done), JSON.stringify(cp1.checklist));
+    check('CP7 оригинал не тронут (версия 1, время прежнее); в списке задач стало на одну больше', (await getS(c1.id)).version === 1 && (await getS(c1.id)).start_at === day + 'T09:00' && A.S.tasks.length === nBefore + 1);
+    const flashTile = (A.root.innerHTML.match(/<div class="tk-ev [^"]*tk-flash[^"]*"[^>]*>/) || [''])[0];
+    check('CP8 новая плитка подсвечена (tk-flash) и стоит в пт на 15:00 (top 720)', A.S.cal.flashId === cp1.id && flashTile.includes('data-id="' + cp1.id + '"') && /top:720px/.test(flashTile), flashTile);
+    check('CP9 всплывающее сообщение «Скопировано на 12.06 15:00» с действием «Открыть»', toastEls(A).length === 1 && toastEls(A)[0].innerHTML.includes('Скопировано на 12.06 15:00') && toastEls(A)[0].innerHTML.includes('>Открыть<'), toastEls(A)[0] && toastEls(A)[0].innerHTML);
+    toastEls(A)[0].fire('click', { target: { closest: () => ({ dataset: { tkCtoast: 'act' } }) } });
+    await A.settle();
+    check('CP10 «Открыть» открывает карточку копии (выбрана копия, справа её тема/описание), сообщение закрыто',
+      A.S.selectedId === cp1.id && A.has('class="tk-detail"') && A.has('Описание копии') && toastEls(A).length === 0);
+    // вторая вставка того же буфера — в «Весь день» (без времени)
+    A.root.fire('contextmenu', mev(onStrip(AD(5))));
+    mm(A, 0);
+    await A.settle();
+    cps = await copies();
+    const cp2 = cps.find((q) => q.start_at === AD(5));
+    check('CP11 тот же буфер вставляется повторно: вторая копия в «Весь день» сб — start_at = дата без времени, конца нет', cps.length === 2 && cp2 && cp2.end_at === null && cp2.status === 'open', JSON.stringify(cps.map((q) => [q.start_at, q.end_at])));
+    // ячейка 23:30: конец не за 23:59
+    A.root.fire('contextmenu', mev(onCell(AD(0), 1410)));
+    mm(A, 0);
+    await A.settle();
+    cps = await copies();
+    const cp3 = cps.find((q) => q.start_at === AD(0) + 'T23:30');
+    check('CP12 вставка в 23:30: конец прижат к 23:59 того же дня', cps.length === 3 && cp3 && cp3.end_at === AD(0) + 'T23:59', JSON.stringify(cps.map((q) => [q.start_at, q.end_at])));
+    // закрытая задача копируется «Открытой»
+    const c2 = await mkS({ title: 'Закрытая для копии', start_at: day + 'T16:00', end_at: day + 'T17:00' });
+    const cl = await http(base, adminCk, 'POST', 'api/tasks.php?id=' + c2.id + '&action=close', { version: 1 });
+    await A.T.reload(); await A.settle();
+    A.U.calCopy(c2.id);
+    await A.U.calPaste({ kind: 'slot', date: AD(1), min: 600 });
+    await A.settle();
+    const cpc = (await http(base, adminCk, 'GET', 'api/tasks.php?from=' + AD(1) + '&to=' + AD(1))).json.tasks.find((q) => q.title === 'Закрытая для копии' && q.id !== c2.id);
+    check('CP13 копия закрытой задачи — со статусом «Открыта»', cl.json.task && cl.json.task.status === 'closed' && cpc && cpc.status === 'open' && cpc.start_at === AD(1) + 'T10:00', JSON.stringify(cpc));
+    // роли по реальному API
+    {
+      const nb = S2.calls.filter((q) => q.method !== 'GET').length;
+      S2.root.fire('pointerdown', mev(onTile(fakeTile(d1.id, AD(3), true))));
+      const sc = mev(onTile(fakeTile(d1.id, AD(3), true))), sc2 = mev(onCell(AD(3), 600));
+      S2.root.fire('contextmenu', sc); S2.root.fire('contextmenu', sc2);
+      check('CP14 supervisor (реальная сессия): плитки без перетаскивания, ПКМ — родное меню браузера, наше не открывается, записей нет',
+        !S2.has('data-tk-dnd') && S2.U.drag() === null && !sc.prevented && !sc2.prevented && menuEls(S2).length === 0 && S2.calls.filter((q) => q.method !== 'GET').length === nb);
+    }
+    A.U.HOOK.hit = null;
   } catch (e) {
     check('E-FATAL необработанное исключение теста', false, (e && e.stack) || e);
   }
