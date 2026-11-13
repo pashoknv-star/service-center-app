@@ -160,11 +160,11 @@ $run('M3 миграция: существующие данные не трону
         }
         eq($snapAfter[$t], $s, 'таблица ' . $t);
     }
-    // groups: изменилась ТОЛЬКО g3 «В2С» → «Директор СЦ» (v11), остальные группы побайтово те же.
+    // groups: изменилась ТОЛЬКО g3 «В2С» → «Управление СЦ» (v11), остальные группы побайтово те же.
     $groupsAfter = $pdo->query('SELECT id, name, sort_order FROM groups ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
     $expectGroups = array_map(function ($g) {
         if ($g['id'] === 'g3' && $g['name'] === 'В2С') {
-            $g['name'] = 'Директор СЦ';
+            $g['name'] = 'Управление СЦ';
         }
         return $g;
     }, $groupsBefore);
@@ -208,8 +208,8 @@ $addTrip = function (string $emp, string $from, string $to, string $status = 'co
     return $tid;
 };
 
-// --- Миграция v10 → v11 (V6-3, R-2): g3 «В2С» → «Директор СЦ» -------------------
-$run('M6 миграция v10→v11: g3 «В2С»→«Директор СЦ»; прочие группы и данные не тронуты; повтор и чужое имя — no-op', function () use ($db, $pdo) {
+// --- Миграция v10 → v11 (V6-3, R-2): g3 «В2С» → «Управление СЦ» -------------------
+$run('M6 миграция v10→v11: g3 «В2С»/«Директор СЦ»→«Управление СЦ»; прочие группы и данные не тронуты; повтор и чужое имя — no-op', function () use ($db, $pdo) {
     $snapNoGroups = snapshotTables($pdo, ['audit_log', 'meta', 'groups']);
     $others = $pdo->query("SELECT id, name, sort_order FROM groups WHERE id != 'g3' ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
     // состояние v10: у g3 старое имя
@@ -217,14 +217,20 @@ $run('M6 миграция v10→v11: g3 «В2С»→«Директор СЦ»; �
     $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
     $db->migrate();
     eq($db->getSchemaVersion(), 11, 'schema_version');
-    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Директор СЦ', 'g3 переименована');
+    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Управление СЦ', 'g3 переименована');
     eq($pdo->query("SELECT COUNT(*) FROM groups WHERE name = 'В2С'")->fetchColumn() + 0, 0, 'старого имени не осталось');
     eq($pdo->query("SELECT id, name, sort_order FROM groups WHERE id != 'g3' ORDER BY id")->fetchAll(PDO::FETCH_ASSOC), $others, 'прочие группы не тронуты');
     eq(snapshotTables($pdo, ['audit_log', 'meta', 'groups']), $snapNoGroups, 'остальные таблицы побайтово равны');
     // повтор (версия снова 10) — no-op
     $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Директор СЦ', 'повтор: имя то же');
+    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Управление СЦ', 'повтор: имя то же');
+    // V6-6: копия, уже прошедшая первую редакцию v11 (g3 = «Директор СЦ») — тоже становится «Управление СЦ»
+    $pdo->exec("UPDATE groups SET name = 'Директор СЦ' WHERE id = 'g3'");
+    $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
+    $db->migrate();
+    eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Управление СЦ', 'g3 «Директор СЦ» → «Управление СЦ»');
+    eq($pdo->query("SELECT COUNT(*) FROM groups WHERE name = 'Директор СЦ'")->fetchColumn() + 0, 0, 'имени «Директор СЦ» не осталось');
     // чужое имя g3 (правка владельца) не перетирается, и «В2С» у другой группы — тоже
     $pdo->exec("UPDATE groups SET name = 'Мой отдел' WHERE id = 'g3'");
     $g4name = $pdo->query("SELECT name FROM groups WHERE id = 'g4'")->fetchColumn();
@@ -234,7 +240,7 @@ $run('M6 миграция v10→v11: g3 «В2С»→«Директор СЦ»; �
     eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Мой отдел', 'иное имя g3 не тронуто');
     eq($pdo->query("SELECT name FROM groups WHERE id = 'g4'")->fetchColumn(), 'В2С', 'другая группа не тронута');
     // вернуть как было
-    $pdo->exec("UPDATE groups SET name = 'Директор СЦ' WHERE id = 'g3'");
+    $pdo->exec("UPDATE groups SET name = 'Управление СЦ' WHERE id = 'g3'");
     $pdo->prepare("UPDATE groups SET name = :n WHERE id = 'g4'")->execute([':n' => $g4name]);
     eq($pdo->query('PRAGMA integrity_check')->fetchColumn(), 'ok', 'integrity_check');
     eq($pdo->query('PRAGMA foreign_key_check')->fetchAll(), [], 'foreign_key_check пуст');

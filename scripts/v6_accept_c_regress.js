@@ -90,7 +90,7 @@ const sleep = L.sleep;
     await k.shot('C10_orphan_assign_form_1280');
     await k.click('#tasksView [data-tk-act="saveForm"]'); await sleep(2000);
     const after = await ev(`(() => { const t = window.Tasks.__t.S.tasks.find(t => t.id === '${T.orph}'); return { as: t && (t.assignees || []).map(a => a.employee_id + ':' + !!a.removed), badge: (document.querySelector('[data-tk-badge=orphans]')||{}).textContent || null, secLeft: !!document.querySelector('[data-tk-sec="orphans"]'), err: window.Tasks.__t.S.form && window.Tasks.__t.S.form.error }; })()`);
-    C.check('admin: назначение директора (зона «Директор СЦ») на задачу без исполнителя прошло: счётчик ⚠ и секция пропали', after.as && after.as.join() === 'emp_101:false' && !after.badge && !after.secLeft, JSON.stringify(after));
+    C.check('admin: назначение директора (зона «Управление СЦ») на задачу без исполнителя прошло: счётчик ⚠ и секция пропали', after.as && after.as.join() === 'emp_101:false' && !after.badge && !after.secLeft, JSON.stringify(after));
     await k.shot('C11_orphan_after_assign_1280');
     // окно замены: РЕАЛЬНОЕ удаление сотрудника через редактор (index.html #deleteEmp) — у него 2 открытые задачи (одна — с соисполнителем)
     await ev('document.getElementById("vacationPanel").classList.remove("open"); window.scrollTo(0,0)'); await sleep(400);
@@ -106,9 +106,9 @@ const sleep = L.sleep;
     const mm = await ev(`(() => ({ has: !!document.querySelector('[data-tk-mtarget]'), items: [...document.querySelectorAll('[data-tk-mitem]')].length, btns: [...document.querySelectorAll('[data-tk-act="mAssign"],[data-tk-act="mLater"]')].map(b => b.textContent.trim()), dialogs: 0 }))()`);
     C.check('admin: после удаления сотрудника открылось окно замены (2 задачи, «Назначить»/«Позже»)', mm.has && mm.items === 2 && mm.btns.includes('Назначить'), JSON.stringify(mm) + ' диалоги: ' + JSON.stringify(A.cdp.dialogs));
     await k.shot('C13_replace_modal_1280');
-    // в списке «Передать» — директор из зоны «Директор СЦ»
+    // в списке «Передать» — директор из зоны «Управление СЦ»
     const tgt = await ev(`(() => { const e = document.querySelector('[data-tk-mtarget]'); return e ? [...e.options].map(o => o.textContent.trim()) : null; })()`);
-    C.check('admin: в окне замены среди сотрудников есть директор из зоны «Директор СЦ»', (tgt || []).some((x) => /Директор Тестов/.test(x)), JSON.stringify(tgt));
+    C.check('admin: в окне замены среди сотрудников есть директор из зоны «Управление СЦ»', (tgt || []).some((x) => /Директор Тестов/.test(x)), JSON.stringify(tgt));
     await ev(`(() => { const e = document.querySelector('[data-tk-mtarget]'); e.value = 'emp_101'; e.dispatchEvent(new Event('change', {bubbles:true})); })()`); await sleep(400);
     await k.click('[data-tk-act="mAssign"]'); await sleep(2500);
     const done = await ev(`(() => ({ items: [...document.querySelectorAll('[data-tk-mitem]')].map(li => li.className + '|' + li.textContent.replace(/\\s+/g,' ').slice(0,100)) }))()`);
@@ -180,7 +180,7 @@ const sleep = L.sleep;
     const ph = [await photoOf(A.cdp), await photoOf(B.cdp)];
     C.check('sync: у обоих окон photo_url обновился на images/photo_1794600000_d1ec7040.jpg', ph.every((x) => /photo_1794600000_d1ec7040\.jpg/.test(x || '')), JSON.stringify(ph));
     const grpA = await ev('document.querySelector(\'.zone[data-zone="3"] .zt-title\').textContent');
-    C.check('sync: плитка по-прежнему «Директор СЦ» (зона g3)', grpA === 'Директор СЦ', grpA);
+    C.check('sync: плитка по-прежнему «Управление СЦ» (зона g3)', grpA === 'Управление СЦ', grpA);
     // задача из «окна A» в Доске окна B (API-создание само по себе sync_log не пишет; перечитывание — по дельте сотрудника)
     let seen = false;
     for (let i = 0; i < 25 && !seen; i++) { seen = await B.cdp.ev('!!window.Tasks.__t.S.tasks.find(t => t.title === "Sync-задача из окна A")'); if (!seen) await sleep(1000); }

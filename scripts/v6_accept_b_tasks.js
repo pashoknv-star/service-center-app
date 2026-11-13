@@ -237,7 +237,7 @@ const sleep = L.sleep;
       await ev(`(() => { const e = document.querySelector('#tasksView [data-tk-field="assigneePick"]'); e.value = 'emp_101'; e.dispatchEvent(new Event('change', {bubbles:true})); })()`); await sleep(300);
       await ev(`(() => { const e = document.querySelector('#tasksView [data-tk-field="title"]'); e.value = 'Создано кликом (директор ' + '${tag}' + ')'; e.dispatchEvent(new Event('input', {bubbles:true})); e.dispatchEvent(new Event('change', {bubbles:true})); })()`); await sleep(200);
       const chips = await ev('document.getElementById("tkAssignees").textContent');
-      C.check(tag + ' СТЫК R-10→R-2: исполнитель из зоны «Директор СЦ» выбран (чип)', /Директор Тестов/.test(chips), chips);
+      C.check(tag + ' СТЫК R-10→R-2: исполнитель из зоны «Управление СЦ» выбран (чип)', /Директор Тестов/.test(chips), chips);
       await k.shot('B21_form_director_selected_' + tag);
       await k.click('#tasksView [data-tk-act="saveForm"]'); await sleep(1500);
       const saved = await S('({ err: S.form && S.form.error, formOpen: !!S.form, n: S.tasks.filter(t => t.title === "Создано кликом (директор ' + tag + ')").length })');

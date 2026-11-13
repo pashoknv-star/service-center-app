@@ -1,0 +1,192 @@
+### 0. dev-БД: sha1 до = a2e65ae47cc7
+### 1. миграция до v11 (штатный код), затем «состояние v10» с g3=прежнее имя
+schema_version|11
+g3|Управление СЦ
+schema_version|10
+g3|В2С
+--- миграция v10→v11 на копии с историей: строки ДО / ПОСЛЕ
+ДО:    audit_log=53 employees=6 groups=7 holidays=0 meta=4 positions=27 schedule_entries=7 sync_log=7709 task_assignees=8 task_checklist=1 tasks=6 trip_participants=4 trip_requests=2 trips=3 users=4 vacation_balances=3 
+ПОСЛЕ: audit_log=54 employees=6 groups=7 holidays=0 meta=4 positions=27 schedule_entries=7 sync_log=7709 task_assignees=8 task_checklist=1 tasks=6 trip_participants=4 trip_requests=2 trips=3 users=4 vacation_balances=3 
+schema_version|11
+g3|Управление СЦ
+ok
+  [ok]   миграция: дамп без groups/meta/audit_log идентичен
+  [ok]   миграция: g3 = «Управление СЦ» (было «В2С»)
+  [ok]   миграция: повтор — no-op (дамп идентичен; audit_log исключён — запись о входе curl)
+  [ok]   миграция: g3 «Директор СЦ» (первая редакция v11) → «Управление СЦ»
+  [ok]   миграция: чужое имя g3 не затирается
+
+### 2. DRY-RUN (sed … | sqlite3 -readonly) на мигрированной копии (+ «Тестова» в g3 — проверка сигнала СТОП)
+schema_version|11
+g3|Управление СЦ
+what | value
+schema_version | 11
+what | n
+matches (нужно ровно 1) | 1
+what | n
+target already exists (нужно 0) | 0
+what | id | name
+group g3 | g3 | Управление СЦ
+what | n
+другие сотрудники g3 (до APPLY; ожидается 0) | 1
+what | id | full_name
+другой сотрудник g3 | emp_k2 | Тестова Анна Сергеевна
+id | full_name | group_id | group_name | cur_position_id | cur_position | photo_url | location | updated_at
+emp_k1 | Костецкий Андрей Николаевич | g3 | Управление СЦ | pos_master | Master | images/old_photo.webp | Офис | 2026-01-01T00:00:00+00:00
+what | position_id | action
+новая должность «Директор» | pos_директор | нет в positions — будет СОЗДАНА
+what | n | first_date | last_date
+УДАЛИТСЯ: schedule_entries | 4 | 2026-07-01 | 2026-09-04
+what | status | n
+   по статусам | dayoff | 1
+   по статусам | sick | 1
+   по статусам | vacation | 2
+what | n | first_year | last_year
+УДАЛИТСЯ: vacation_balances | 2 | 2025 | 2026
+what | n
+УДАЛИТСЯ: trip_participants | 2
+what | n
+УДАЛИТСЯ: trip_requests (очередь RPA) | 1
+what | n
+УДАЛИТСЯ: task_assignees (все роли) | 5
+what | role | status | archived | n
+   по ролям и статусам задач | assignee | closed | 0 | 1
+   по ролям и статусам задач | assignee | open | 0 | 2
+   по ролям и статусам задач | assignee | open | 1 | 1
+   по ролям и статусам задач | watcher | open | 0 | 1
+what | n
+ОСТАНУТСЯ, version+1: задач | 5
+what | n
+ОСТАНУТСЯ, version+1: командировок | 2
+what | n
+командировок останется БЕЗ участников | 1
+what | id | title | status
+   командировка без участников | trip_1 | Командировка: только он | confirmed
+what | n
+станут «Без исполнителя» (открытых задач) | 1
+what | id | title | start_at
+   задача без исполнителя | t_only | Задача: он единственный исполнитель | 2026-11-20T10:00
+  [ok]   DRY-RUN: БД не изменилась (дамп идентичен, -readonly)
+  [ok]   DRY-RUN: matches = 1
+  [ok]   DRY-RUN: «другие сотрудники g3» = 1 (здесь нарочно — сигнал СТОП; на проде ожидается 0)
+  [ok]   DRY-RUN: текущая должность Master (pos_master)
+  [ok]   DRY-RUN: новая должность — pos_директор, будет создана
+  [ok]   DRY-RUN: счётчики УДАЛИТСЯ = 4 / 2 / 2 / 1 / 5
+  [ok]   DRY-RUN: задач 5 и командировок 2 останутся (version+1); командировок без участников 1
+  [ok]   DRY-RUN: «станут Без исполнителя» = 1, название выведено
+
+### 3. бэкап до APPLY (.backup) и APPLY
+backup: ok
+история emp_k1 ДО (sched,bal,trip_part,trip_req,task_assign): 4,2,2,1,5;  контроль emp_o1: 2,1,2,1,3
+what | value
+schema_version | 11
+what | n
+matches (нужно ровно 1) | 1
+what | n
+target already exists (нужно 0) | 0
+what | id | name
+group g3 | g3 | Управление СЦ
+what | n
+другие сотрудники g3 (до APPLY; ожидается 0) | 0
+id | full_name | group_id | group_name | cur_position_id | cur_position | photo_url | location | updated_at
+emp_k1 | Костецкий Андрей Николаевич | g3 | Управление СЦ | pos_master | Master | images/old_photo.webp | Офис | 2026-01-01T00:00:00+00:00
+what | position_id | action
+новая должность «Директор» | pos_директор | нет в positions — будет СОЗДАНА
+what | n | first_date | last_date
+УДАЛИТСЯ: schedule_entries | 4 | 2026-07-01 | 2026-09-04
+what | status | n
+   по статусам | dayoff | 1
+   по статусам | sick | 1
+   по статусам | vacation | 2
+what | n | first_year | last_year
+УДАЛИТСЯ: vacation_balances | 2 | 2025 | 2026
+what | n
+УДАЛИТСЯ: trip_participants | 2
+what | n
+УДАЛИТСЯ: trip_requests (очередь RPA) | 1
+what | n
+УДАЛИТСЯ: task_assignees (все роли) | 5
+what | role | status | archived | n
+   по ролям и статусам задач | assignee | closed | 0 | 1
+   по ролям и статусам задач | assignee | open | 0 | 2
+   по ролям и статусам задач | assignee | open | 1 | 1
+   по ролям и статусам задач | watcher | open | 0 | 1
+what | n
+ОСТАНУТСЯ, version+1: задач | 5
+what | n
+ОСТАНУТСЯ, version+1: командировок | 2
+what | n
+командировок останется БЕЗ участников | 1
+what | id | title | status
+   командировка без участников | trip_1 | Командировка: только он | confirmed
+what | n
+станут «Без исполнителя» (открытых задач) | 1
+what | id | title | start_at
+   задача без исполнителя | t_only | Задача: он единственный исполнитель | 2026-11-20T10:00
+result
+APPLIED: 1 сотрудник обновлён, история очищена
+what | n
+удалено: schedule_entries | 4
+удалено: vacation_balances | 2
+удалено: trip_participants | 2
+удалено: trip_requests | 1
+удалено: task_assignees | 5
+id | full_name | group_id | position_id | position | photo_url | updated_at
+emp_k1 | Игнатенко Павел Валерьевич | g3 | pos_директор | Директор | images/photo_1794600000_d1ec7040.jpg | 2026-11-13T02:30:03+00:00
+what | n
+остаток «Костецкий…» (после APPLY должно быть 0) | 0
+what | schedule_entries | vacation_balances | trip_participants | trip_requests | task_assignees
+история «Игнатенко…» (после APPLY везде 0) | 0 | 0 | 0 | 0 | 0
+integrity_check
+ok
+  [ok]   APPLY: «APPLIED … история очищена»
+  [ok]   APPLY: integrity_check ok, foreign_key_check пуст
+  [ok]   APPLY: ФИО, группа g3, фото
+  [ok]   APPLY: должность «Директор» (pos_директор) создана и назначена
+  [ok]   APPLY: ОЧИСТКА — у сотрудника 0 записей в КАЖДОЙ из 5 таблиц (график, остатки, участие в командировках, RPA-заявки, назначения задач): 0,0,0,0,0
+  [ok]   APPLY: контрольный сотрудник не тронут (2,1,2,1,3)
+  [ok]   APPLY: задачи (6), командировки (3) и чек-лист на месте
+  [ok]   APPLY: trip_1/trip_2 version+1, trip_3 — нет
+  [ok]   APPLY: затронутые задачи version+1, t_o1 — нет
+--- «⚠ Без исполнителя» после APPLY (правило api/tasks.php ?orphans=1):
+t_only|Задача: он единственный исполнитель
+  [ok]   APPLY: без исполнителя стала ровно t_only
+--- audit_log / sync_log:
+employee.update|emp_k1|{"changes":{"full_name":"Игнатенко Павел Валерьевич","group_id":"g3","photo_url":"images/photo_1794600000_d1ec7040.jpg","position_id":"pos_директор"}}
+employee.history_clear|emp_k1|{"deleted":{"schedule_entries":4,"vacation_balances":2,"trip_participants":2,"trip_requests":1,"task_assignees":5}}
+employee|emp_k1|upsert
+entry|emp_k1:2026-07-01|delete
+entry|emp_k1:2026-07-02|delete
+entry|emp_k1:2026-08-03|delete
+entry|emp_k1:2026-09-04|delete
+trip|trip_1|upsert
+trip|trip_2|upsert
+  [ok]   APPLY: audit_log +2 (employee.update, employee.history_clear со счётчиками 4/2/2/1/5); журнал не чистился
+  [ok]   APPLY: sync_log +7 (employee/upsert, 4 × entry/delete, 2 × trip/upsert)
+
+### 4. повтор APPLY = no-op
+NO-OP: условия не выполнены (нужно: ровно 1 «Костецкий…», 0 «Игнатенко…», g3, schema>=10, должность «Директор» найдена или id pos_директор свободен) — ничего не изменено
+  [ok]   повтор: БД побайтово идентична (дамп), в т.ч. audit/sync/version/positions
+  [ok]   повтор: итог «NO-OP»
+ok
+
+### 5. откат: .restore из бэкапа внутрь существующего файла
+emp_k1|Костецкий Андрей Николаевич|pos_master|images/old_photo.webp
+ok
+  [ok]   откат: БД побайтово как до APPLY (дамп)
+  [ok]   откат: история (4,2,2,1,5) и прежняя должность вернулись, «Директор» не создана
+
+### 6. негативные случаи (NO-OP, дамп не меняется)
+  [ok]   2 «Костецких» → NO-OP, БД не изменена
+  [ok]   0 «Костецких» → NO-OP, БД не изменена
+  [ok]   «Игнатенко» уже есть → NO-OP, БД не изменена
+  [ok]   schema_version=9 → NO-OP, БД не изменена
+  [ok]   id pos_директор занят другим именем → NO-OP, БД не изменена
+
+### 7. должность «Директор» уже есть в positions (под другим id) → назначается, не создаётся
+APPLIED: 1 сотрудник обновлён, история очищена
+  [ok]   должность найдена по имени (pos_dir_prod), новая не создана
+
+### dev-БД: sha1 после = a2e65ae47cc7
+  [ok]   data/app.db не изменена
+ИТОГ: 36 passed, 0 failed

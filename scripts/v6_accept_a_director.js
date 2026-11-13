@@ -1,4 +1,4 @@
-// V6-4 (приёмка, вне gate): A — «Директор СЦ» (R-2): золотая плитка, матрица, openMatrixAt, иконки задач.
+// V6-4 (приёмка, вне gate): A — «Управление СЦ» (R-2): золотая плитка, матрица, openMatrixAt, иконки задач.
 // Запуск: node scripts/v6_accept_a_director.js  → reports/V6/V6-4_screens/A_*.png, A_results.json
 'use strict';
 const path = require('path'), fs = require('fs');
@@ -42,7 +42,7 @@ const sleep = L.sleep;
       })()`);
       console.log(JSON.stringify(zi));
       C.note('zone3_' + tag, zi);
-      C.check(tag + ' плитка называется «Директор СЦ» (в DOM, а не старое имя зоны)', zi.title === 'Директор СЦ', zi.title);
+      C.check(tag + ' плитка называется «Управление СЦ» (в DOM, а не старое имя зоны)', zi.title === 'Управление СЦ', zi.title);
       C.check(tag + ' на боковой плашке бриллианты: 5–9 слоёв (inline-SVG), без анимации, pointer-events:none', zi.gemLayers >= 5 && zi.gemLayers <= 9 && (zi.beforeAnim === 'none' || !zi.beforeAnim) && zi.beforePE === 'none', JSON.stringify([zi.gemLayers, zi.beforeAnim, zi.beforePE]));
       C.check(tag + ' в зоне 3 один сотрудник с фото (img)', zi.emp === 1 && /^data:image\/jpeg/.test(zi.imgSrcPrefix || ''), JSON.stringify([zi.emp, zi.imgSrcPrefix]));
       C.check(tag + ' остальные зоны не золотые (у соседней зоны нет золотого градиента)', !/rgb\(2[0-4]\d, 2[0-4]\d, 1\d\d\)|#e2c677/i.test(zi.otherBg), zi.otherBg);
@@ -61,7 +61,7 @@ const sleep = L.sleep;
       })()`);
       console.log(JSON.stringify(mi));
       C.note('matrix_' + tag, mi);
-      C.check(tag + ' матрица: группа «Директор СЦ» — первая, строка директора — первая', mi.groups[0] === 'Директор СЦ' && /Директор Тестов/.test(mi.firstEmp) && mi.dirRows.length === 1 && mi.dirGroupRows === 1, JSON.stringify(mi));
+      C.check(tag + ' матрица: группа «Управление СЦ» — первая, строка директора — первая', mi.groups[0] === 'Управление СЦ' && /Директор Тестов/.test(mi.firstEmp) && mi.dirRows.length === 1 && mi.dirGroupRows === 1, JSON.stringify(mi));
       // перейти к ноябрю директорa и снять
       await cdp.ev('window.openMatrixAt({employeeId:"emp_101", date:"2026-11-18"})');
       await sleep(250);
