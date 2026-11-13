@@ -42,7 +42,8 @@ handleOptions();
 
 const TASKS_TITLE_MAX = 200;
 const TASKS_DESC_MAX = 5000;
-const TASKS_LABEL_MAX = 50;
+const TASKS_LABEL_MAX = 200;       // V6.2 (W-4): вся строка тегов «тег1, тег2»
+const TASKS_LABEL_TAG_MAX = 30;    // V6.2 (W-4): один тег
 const TASKS_CHECK_TEXT_MAX = 300;
 const TASKS_CHECK_MAX_ITEMS = 50;
 const TASKS_MAX_PEOPLE = 50;
@@ -259,6 +260,7 @@ function tasks_build(PDO $pdo, array $row, array $people, array $checks): array
         'end_at'        => $row['end_at'],
         'priority'      => (int) $row['priority'],
         'label'         => $row['label'],
+        'labels'        => tasks_label_tags($row['label'] !== null ? (string) $row['label'] : null),   // V6.2 (W-4)
         'status'        => (string) $row['status'],
         'check_state'   => (string) $row['check_state'],
         'version'       => (int) $row['version'],
@@ -397,6 +399,58 @@ function tasks_norm_text(mixed $v, int $max, string $errCode): ?string
         tasks_fail($errCode);
     }
     return $v === '' ? null : $v;
+}
+
+/**
+ * V6.2 (W-4): метка = теги через запятую. Нормализация: split по «,», trim, схлопнуть пробелы,
+ * убрать пустые и дубли (без учёта регистра, первая форма побеждает). Каждый тег ≤ 30 символов,
+ * вся строка «тег1, тег2» ≤ 200. Пусто → NULL. Ошибка — invalid_label с понятным message.
+ *
+ * @return string[]
+ */
+function tasks_label_tags(?string $v): array
+{
+    if ($v === null) {
+        return [];
+    }
+    $out = [];
+    $seen = [];
+    foreach (explode(',', $v) as $part) {
+        $tag = trim((string) preg_replace('/\s+/u', ' ', $part));
+        if ($tag === '') {
+            continue;
+        }
+        $key = mb_strtolower($tag);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $out[] = $tag;
+    }
+    return $out;
+}
+
+function tasks_norm_label(mixed $v): ?string
+{
+    if ($v === null) {
+        return null;
+    }
+    if (!is_string($v)) {
+        tasks_fail('invalid_label', 400, ['message' => 'Метка должна быть строкой: теги через запятую.']);
+    }
+    $tags = tasks_label_tags($v);
+    foreach ($tags as $tag) {
+        if (mb_strlen($tag) > TASKS_LABEL_TAG_MAX) {
+            tasks_fail('invalid_label', 400, [
+                'message' => 'Тег «' . mb_substr($tag, 0, 20) . '…» длиннее ' . TASKS_LABEL_TAG_MAX . ' символов.',
+            ]);
+        }
+    }
+    $joined = implode(', ', $tags);
+    if (mb_strlen($joined) > TASKS_LABEL_MAX) {
+        tasks_fail('invalid_label', 400, ['message' => 'Все теги вместе длиннее ' . TASKS_LABEL_MAX . ' символов — уберите лишние.']);
+    }
+    return $joined === '' ? null : $joined;
 }
 
 function tasks_norm_priority(mixed $v): int
@@ -718,7 +772,7 @@ try {
             tasks_fail('title_required');
         }
         $description = tasks_norm_text($body['description'] ?? null, TASKS_DESC_MAX, 'invalid_description');
-        $label = tasks_norm_text($body['label'] ?? null, TASKS_LABEL_MAX, 'invalid_label');
+        $label = tasks_norm_label($body['label'] ?? null);
         $priority = array_key_exists('priority', $body) && $body['priority'] !== null
             ? tasks_norm_priority($body['priority']) : 2;
         $startAt = $body['start_at'] ?? null;
@@ -922,7 +976,7 @@ try {
         $new['description'] = tasks_norm_text($body['description'], TASKS_DESC_MAX, 'invalid_description');
     }
     if (array_key_exists('label', $body)) {
-        $new['label'] = tasks_norm_text($body['label'], TASKS_LABEL_MAX, 'invalid_label');
+        $new['label'] = tasks_norm_label($body['label']);
     }
     if (array_key_exists('priority', $body)) {
         $new['priority'] = tasks_norm_priority($body['priority']);
