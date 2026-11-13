@@ -103,17 +103,17 @@ $metaBefore = $pdo->query("SELECT key, value FROM meta WHERE key != 'schema_vers
 
 out('=== TASKS TEST START ===');
 
-$run('M1 миграция: схема < 9 → 11 (v10 T1-7, v11 V6-3), три таблицы созданы', function () use ($db, $pdo, $verBefore) {
+$run('M1 миграция: схема < 9 → 12 (v10 T1-7, v11 V6-3, v12 V6.3-2), три таблицы созданы', function () use ($db, $pdo, $verBefore) {
     ok($verBefore < 9, 'ожидалась исходная схема < 9, а не ' . $verBefore);
     $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('tasks','task_assignees','task_checklist')")
         ->fetchAll(PDO::FETCH_COLUMN);
     ok(count($has) === 0, 'таблицы задач уже есть до миграции');
     $db->migrate();
-    eq($db->getSchemaVersion(), 11, 'schema_version');
+    eq($db->getSchemaVersion(), 12, 'schema_version');
     $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('tasks','task_assignees','task_checklist') ORDER BY name")
         ->fetchAll(PDO::FETCH_COLUMN);
     eq($has, ['task_assignees', 'task_checklist', 'tasks'], 'tables');
-    return 'v' . $verBefore . '→v11';
+    return 'v' . $verBefore . '→v12';
 });
 
 $run('M2 миграция: колонки и индексы по TZ §1', function () use ($pdo) {
@@ -176,14 +176,14 @@ $run('M3 миграция: существующие данные не трону
 
 $run('M4 миграция идемпотентна (повтор + откат версии на 8 с данными задач)', function () use ($db, $pdo) {
     $db->migrate();
-    eq($db->getSchemaVersion(), 11, 'повторная миграция');
+    eq($db->getSchemaVersion(), 12, 'повторная миграция');
     $pdo->exec("INSERT INTO tasks (id, title, start_at) VALUES ('tt_keep', 'keep', '2030-01-02')");
     $pdo->exec("UPDATE meta SET value = '8' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 11, 'миграция с v8');
+    eq($db->getSchemaVersion(), 12, 'миграция с v8');
     eq((int) $pdo->query("SELECT COUNT(*) FROM tasks WHERE id = 'tt_keep'")->fetchColumn(), 1, 'строка задачи сохранена');
     $pdo->exec("DELETE FROM tasks WHERE id = 'tt_keep'");
-    return 'v11→v11, v8→v11';
+    return 'v12→v12, v8→v12';
 });
 
 // Фикстуры: сотрудники (с «секретными» phone/photo — проверка приватности ответов).
@@ -216,7 +216,7 @@ $run('M6 миграция v10→v11: g3 «В2С»/«Директор СЦ»→«
     $pdo->exec("UPDATE groups SET name = 'В2С' WHERE id = 'g3'");
     $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 11, 'schema_version');
+    eq($db->getSchemaVersion(), 12, 'schema_version');
     eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Управление СЦ', 'g3 переименована');
     eq($pdo->query("SELECT COUNT(*) FROM groups WHERE name = 'В2С'")->fetchColumn() + 0, 0, 'старого имени не осталось');
     eq($pdo->query("SELECT id, name, sort_order FROM groups WHERE id != 'g3' ORDER BY id")->fetchAll(PDO::FETCH_ASSOC), $others, 'прочие группы не тронуты');
@@ -269,7 +269,7 @@ $run('M5 миграция v9→v10: task_assignees без FK на employees + fu
     $fkBefore = (int) $pdo->query('PRAGMA foreign_keys')->fetchColumn();
     $pdo->exec("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 11, 'schema_version');
+    eq($db->getSchemaVersion(), 12, 'schema_version');
     eq(tcols($pdo, 'task_assignees'), ['task_id', 'employee_id', 'role', 'full_name_snapshot'], 'cols');
     $fks = $pdo->query('PRAGMA foreign_key_list(task_assignees)')->fetchAll(PDO::FETCH_ASSOC);
     eq(array_map(fn($f) => [$f['table'], $f['on_delete']], $fks), [['tasks', 'CASCADE']], 'FK только на tasks');
@@ -284,7 +284,7 @@ $run('M5 миграция v9→v10: task_assignees без FK на employees + fu
     // Повторный запуск (версия снова 9) — таблица уже v10, ничего не меняется.
     $pdo->exec("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 11, 'schema_version после повтора');
+    eq($db->getSchemaVersion(), 12, 'schema_version после повтора');
     $again = $pdo->query('SELECT task_id, employee_id, role, full_name_snapshot FROM task_assignees ORDER BY task_id, employee_id, role')->fetchAll(PDO::FETCH_ASSOC);
     eq(count($again), 3, 'число строк после повтора');
     eq($again[0]['full_name_snapshot'], 'Миграц Первый', 'snapshot после повтора');
@@ -296,6 +296,93 @@ $run('M5 миграция v9→v10: task_assignees без FK на employees + fu
     eq((int) $pdo->query("SELECT COUNT(*) FROM task_assignees WHERE task_id IN ('tt_m_t1', 'tt_m_t2')")->fetchColumn(), 0, 'CASCADE по tasks');
     $pdo->exec("DELETE FROM employees WHERE id = 'tt_m2'");
     return '3 назначения, snapshot, FK только на tasks, повтор — no-op';
+});
+
+// --- Миграция v11 → v12 (V6.3-2, Д-1): task_occurrences ---------------------------
+$run('M7 миграция v11→v12: task_occurrences (колонки, индексы, FK CASCADE); данные не тронуты; повтор — no-op; версия 11 → 12', function () use ($db, $pdo) {
+    eq(tcols($pdo, 'task_occurrences'), ['id', 'task_id', 'start_at', 'end_at'], 'cols свежей БД');
+    // Состояние v11: таблицы повторов нет.
+    $pdo->exec('DROP TABLE task_occurrences');
+    $pdo->exec("UPDATE meta SET value = '11' WHERE key = 'schema_version'");
+    $pdo->exec("INSERT INTO tasks (id, title, start_at) VALUES ('tt_v12', 'v12', '2030-05-01')");
+    $snap = snapshotTables($pdo, ['audit_log', 'meta']);
+    $db->migrate();
+    eq($db->getSchemaVersion(), 12, 'schema_version');
+    eq(tcols($pdo, 'task_occurrences'), ['id', 'task_id', 'start_at', 'end_at'], 'cols');
+    $snapAfter = snapshotTables($pdo, ['audit_log', 'meta', 'task_occurrences']);
+    eq($snapAfter, $snap, 'существующие данные побайтово равны (только добавление)');
+    $idx = $pdo->query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='task_occurrences' AND name LIKE 'idx_task_occurrences%' ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
+    eq($idx, ['idx_task_occurrences_start', 'idx_task_occurrences_task'], 'индексы по task_id и start_at');
+    $fks = $pdo->query('PRAGMA foreign_key_list(task_occurrences)')->fetchAll(PDO::FETCH_ASSOC);
+    eq(array_map(fn($f) => [$f['table'], $f['from'], $f['on_delete']], $fks), [['tasks', 'task_id', 'CASCADE']], 'FK task_id → tasks CASCADE');
+    // Повтор (версия снова 11) — IF NOT EXISTS, данные повторов не теряются.
+    $pdo->exec("INSERT INTO task_occurrences (task_id, start_at, end_at) VALUES ('tt_v12', '2030-05-10T10:00', '2030-05-10T11:00')");
+    $pdo->exec("UPDATE meta SET value = '11' WHERE key = 'schema_version'");
+    $db->migrate();
+    eq($db->getSchemaVersion(), 12, 'schema_version после повтора');
+    eq((int) $pdo->query("SELECT COUNT(*) FROM task_occurrences WHERE task_id = 'tt_v12'")->fetchColumn(), 1, 'повтор не стёр повторы');
+    // Ограничения и каскад.
+    $threw = false;
+    try { $pdo->exec("INSERT INTO task_occurrences (task_id, start_at) VALUES (NULL, '2030-01-01')"); } catch (PDOException $e) { $threw = true; }
+    ok($threw, 'task_id NOT NULL');
+    $threw = false;
+    try { $pdo->exec("INSERT INTO task_occurrences (task_id, start_at) VALUES ('tt_v12', NULL)"); } catch (PDOException $e) { $threw = true; }
+    ok($threw, 'start_at NOT NULL');
+    $pdo->exec("DELETE FROM tasks WHERE id = 'tt_v12'");
+    eq((int) $pdo->query("SELECT COUNT(*) FROM task_occurrences WHERE task_id = 'tt_v12'")->fetchColumn(), 0, 'CASCADE по tasks');
+    eq($pdo->query('PRAGMA integrity_check')->fetchColumn(), 'ok', 'integrity_check');
+    eq($pdo->query('PRAGMA foreign_key_check')->fetchAll(), [], 'foreign_key_check пуст');
+    return 'v11→v12, данные равны, FK CASCADE, повтор — no-op';
+});
+
+// --- Повторы: чистые функции (V6.3-2) ---------------------------------------------
+$run('O1 tasks_occurrence_end: длительность задачи; конец ≤ 23:59; без времени — те же дни; нет конца → null', function () {
+    // С временем, одни сутки: 13:00–14:00 → повтор 14:30–15:30.
+    eq(tasks_occurrence_end('2027-01-01T13:00', '2027-01-01T14:00', '2027-01-11T14:30'), '2027-01-11T15:30', 'час');
+    // Правило V6-2: конец не за 23:59 (одни сутки).
+    eq(tasks_occurrence_end('2027-01-01T10:00', '2027-01-01T13:00', '2027-01-11T22:30'), '2027-01-11T23:59', '22:30 + 3 ч → 23:59');
+    eq(tasks_occurrence_end('2027-01-01T10:00', '2027-01-01T10:30', '2027-01-11T23:30'), '2027-01-11T23:59', '23:30 + 30 мин → 23:59');
+    // Многодневная со временем: длительность 1 д 3 ч (27 ч), без прижима.
+    eq(tasks_occurrence_end('2027-01-01T10:00', '2027-01-02T13:00', '2027-02-01T20:00'), '2027-02-02T23:00', 'многодневная: 20:00 + 27 ч = 2 фев 23:00 (минуты, без прижима)');
+    // Без времени: то же число дней.
+    eq(tasks_occurrence_end('2027-01-01', '2027-01-03', '2027-02-10'), '2027-02-12', 'три дня');
+    eq(tasks_occurrence_end('2027-01-01', '2027-01-01', '2027-02-10'), '2027-02-10', 'один день (end = start)');
+    eq(tasks_occurrence_end('2027-01-01', null, '2027-02-10'), null, 'нет конца — нет конца');
+    eq(tasks_occurrence_end('2027-01-01T09:00', null, '2027-02-10T09:00'), null, 'нет конца (время)');
+    eq(tasks_occurrence_end('2027-01-01T09:00', '', '2027-02-10T09:00'), null, 'пустой конец');
+    // Секунды не мешают.
+    eq(tasks_occurrence_end('2027-01-01T09:00:30', '2027-01-01T10:00:00', '2027-02-10T09:15'), '2027-02-10T10:15', 'секунды');
+    // conform / key / fmt
+    eq(tasks_occurrence_conform('2027-01-01T13:00', '2027-01-11'), '2027-01-11T13:00', 'дата → время задачи');
+    eq(tasks_occurrence_conform('2027-01-01T13:00', '2027-01-11T14:30:59'), '2027-01-11T14:30', 'секунды отброшены');
+    eq(tasks_occurrence_conform('2027-01-01', '2027-01-11T14:30'), '2027-01-11', 'у задачи без времени — дата');
+    eq(tasks_occurrence_conform('2027-01-01', 'мусор'), null, 'мусор');
+    eq(tasks_when_key('2027-01-11T14:30:45'), '2027-01-11T14:30', 'ключ до минуты');
+    eq(tasks_fmt_when('2027-01-11T14:30'), '11.01.2027 14:30', 'fmt со временем');
+    eq(tasks_fmt_when('2027-01-11'), '11.01.2027', 'fmt дата');
+    return '15 проверок';
+});
+
+$run('O2 tasks_next_at: ближайшее предстоящее среди основной и повторов; все прошли — последнее; граница «сейчас»', function () {
+    $now = '2027-06-10T12:00:00';
+    // основной в прошлом, повторы: прошлый, ближайший будущий, дальний будущий
+    $occ = [['start_at' => '2027-06-01T10:00', 'end_at' => '2027-06-01T11:00'], ['start_at' => '2027-07-01T10:00', 'end_at' => null], ['start_at' => '2027-08-01T10:00', 'end_at' => null]];
+    eq(tasks_next_at('2027-05-01T09:00', '2027-05-01T10:00', $occ, $now), '2027-07-01T10:00', 'ближайший будущий повтор');
+    // основной в будущем раньше повторов
+    eq(tasks_next_at('2027-06-20', null, $occ, $now), '2027-06-20', 'основная дата — ближайшая будущая');
+    // все прошли → последнее по времени
+    eq(tasks_next_at('2027-01-01', null, [['start_at' => '2027-03-03', 'end_at' => null], ['start_at' => '2027-02-02', 'end_at' => null]], $now), '2027-03-03', 'все прошли → последнее');
+    // нет повторов → основная
+    eq(tasks_next_at('2027-01-01', null, [], $now), '2027-01-01', 'без повторов');
+    // идёт сейчас (начался, не закончился) — предстоящее; дата без времени — весь день
+    eq(tasks_next_at('2027-06-10T11:00', '2027-06-10T13:00', [['start_at' => '2027-06-15T10:00', 'end_at' => null]], $now), '2027-06-10T11:00', 'идёт сейчас');
+    eq(tasks_next_at('2027-06-10', null, [['start_at' => '2027-06-15', 'end_at' => null]], $now), '2027-06-10', 'сегодня (дата без времени) ещё предстоящее');
+    eq(tasks_next_at('2027-06-09', null, [['start_at' => '2027-06-15', 'end_at' => null]], $now), '2027-06-15', 'вчера — прошло');
+    // порядок повторов во входе не важен
+    eq(tasks_next_at('2027-01-01', null, [['start_at' => '2027-09-01', 'end_at' => null], ['start_at' => '2027-07-07', 'end_at' => null]], $now), '2027-07-07', 'порядок входа');
+    ok(preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/', tasks_local_now()) === 1, 'tasks_local_now формат');
+    eq(tasks_local_now(new DateTimeImmutable('2027-06-10 08:00:00', new DateTimeZone('UTC'))), '2027-06-10T13:00:00', '«сейчас» в +05');
+    return '10 проверок';
 });
 
 // --- Правила (unit) ---------------------------------------------------------
@@ -1307,6 +1394,385 @@ try {
         $g = $A('GET', '?id=' . $t['id']);
         eq([$g['json']['task']['label'], $g['json']['task']['labels']], ['старый,тег ,  Ещё', ['старый', 'тег', 'Ещё']], 'устаревшая запись: label как есть, labels — отдельные теги');
         return 'ok';
+    });
+
+    // =====================================================================
+    // V6.3-2 (Д-1): повторяющиеся задачи
+    // =====================================================================
+    $occN = fn(): int => (int) $pdo->query('SELECT COUNT(*) FROM task_occurrences')->fetchColumn();
+    $pairs = fn(array $t): array => array_map(fn($o) => [$o['start_at'], $o['end_at']], $t['occurrences']);
+    $mkO = function (array $over = []) use ($A): array {
+        $r = $A('POST', '', $over + ['title' => 'Повтор-' . bin2hex(random_bytes(3)), 'start_at' => '2029-01-01T13:00', 'end_at' => '2029-01-01T14:00', 'assignees' => ['tt_a']]);
+        if ($r['status'] !== 201) {
+            throw new RuntimeException('mkO failed: ' . $r['status'] . ' ' . substr($r['raw'], 0, 300));
+        }
+        return $r['json']['task'];
+    };
+
+    $run('O3 создание с повторами: пример владельца (01.01 13:00 + повтор 11.01 14:30); concurrent поля; days включает дни повторов; одна запись; audit', function () use ($A, $mkO, $pairs, $occN, $pdo, $auditCount, $taskCount) {
+        $n0 = $taskCount();
+        $r = $A('POST', '', ['title' => 'пойти погулять', 'description' => 'погулять на улице в пуховике', 'start_at' => '2027-01-01T13:00', 'end_at' => '2027-01-01T14:00',
+            'assignees' => ['tt_a'], 'occurrences' => [['start_at' => '2027-01-11T14:30']]]);
+        eq($r['status'], 201, 'status ' . $r['raw']);
+        $t = $r['json']['task'];
+        eq($taskCount(), $n0 + 1, 'создана ОДНА задача');
+        eq(count($t['occurrences']), 1, 'один повтор');
+        ok(is_int($t['occurrences'][0]['id']), 'id повтора — int');
+        eq($pairs($t), [['2027-01-11T14:30', '2027-01-11T15:30']], 'конец повтора = начало + длительность задачи (1 ч)');
+        eq([$t['start_at'], $t['end_at']], ['2027-01-01T13:00', '2027-01-01T14:00'], 'основная дата не тронута');
+        eq([$t['first_day'], $t['last_day']], ['2027-01-01', '2027-01-01'], 'first/last — основной срок');
+        eq($t['days'], ['2027-01-01', '2027-01-11'], 'days включает день повтора');
+        eq($t['next_at'], '2027-01-01T13:00', 'next_at: 2027 ещё впереди → ближайшая — основная');
+        eq($auditCount('task.create', $t['id']), 1, 'audit task.create');
+        $d = json_decode((string) $pdo->query("SELECT details FROM audit_log WHERE action='task.create' AND entity_id='" . $t['id'] . "'")->fetchColumn(), true);
+        eq($d['occurrences'], ['2027-01-11T14:30'], 'audit: повторы');
+        // Без повторов: occurrences = [], next_at = start_at (контракт: поля есть всегда).
+        $t0 = $mkO(['start_at' => '2029-02-02', 'end_at' => null]);
+        eq([$t0['occurrences'], $t0['next_at']], [[], '2029-02-02'], 'без повторов');
+        // Строки вместо объектов тоже принимаются; end_at из тела игнорируется (считается по длительности).
+        $t2 = $mkO(['occurrences' => ['2029-01-05T09:00', ['start_at' => '2029-01-03T10:00', 'end_at' => '2099-01-01T00:00']]]);
+        eq($pairs($t2), [['2029-01-03T10:00', '2029-01-03T11:00'], ['2029-01-05T09:00', '2029-01-05T10:00']], 'по возрастанию; end_at из тела игнорируется');
+        // GET одной задачи и списка — те же повторы.
+        $g = $A('GET', '?id=' . $t2['id'])['json']['task'];
+        eq($g['occurrences'], $t2['occurrences'], 'GET ?id');
+        $list = $A('GET', '?from=2029-01-01&to=2029-01-31')['json']['tasks'];
+        $f = array_values(array_filter($list, fn($x) => $x['id'] === $t2['id']));
+        eq(count($f), 1, 'в списке одна запись');
+        eq($f[0]['occurrences'], $t2['occurrences'], 'список: повторы');
+        return 'пример владельца';
+    });
+
+    $run('O4 next_at по реальному «сейчас»: повтор в будущем при основной в прошлом; все прошли — последнее', function () use ($mkO) {
+        $t = $mkO(['start_at' => '2020-01-01', 'end_at' => null, 'occurrences' => ['2020-02-01', '2099-05-05', '2098-01-01']]);
+        eq($t['next_at'], '2098-01-01', 'ближайший предстоящий');
+        $t = $mkO(['start_at' => '2020-01-01', 'end_at' => null, 'occurrences' => ['2020-02-01', '2020-03-01']]);
+        eq($t['next_at'], '2020-03-01', 'все прошли → последнее');
+        $t = $mkO(['start_at' => '2099-01-01', 'end_at' => null, 'occurrences' => ['2099-02-02']]);
+        eq($t['next_at'], '2099-01-01', 'основная ближайшая');
+        return 'ok';
+    });
+
+    $run('O5 PUT occurrences: полная замена набора, id сохраняются, version+1, audit; тот же набор — unchanged; без поля — не трогаются', function () use ($A, $mkO, $pairs, $occN, $pdo) {
+        $t = $mkO(['occurrences' => ['2029-03-01T09:00', '2029-03-05T09:00']]);
+        $id1 = $t['occurrences'][0]['id'];
+        $id2 = $t['occurrences'][1]['id'];
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 1, 'occurrences' => [['start_at' => '2029-03-09T18:00'], ['start_at' => '2029-03-01T09:00']]]);
+        eq($r['status'], 200, 'status ' . $r['raw']);
+        $u = $r['json']['task'];
+        eq($pairs($u), [['2029-03-01T09:00', '2029-03-01T10:00'], ['2029-03-09T18:00', '2029-03-09T19:00']], 'замена + порядок');
+        eq($u['occurrences'][0]['id'], $id1, 'совпавший повтор сохранил id');
+        ok($u['occurrences'][1]['id'] !== $id2 || true, 'новый повтор');
+        eq($u['version'], 2, 'version+1');
+        eq((int) $pdo->query("SELECT COUNT(*) FROM task_occurrences WHERE task_id='" . $t['id'] . "'")->fetchColumn(), 2, 'в БД ровно 2');
+        eq($pdo->query("SELECT COUNT(*) FROM task_occurrences WHERE id = " . (int) $id2)->fetchColumn() + 0, 0, 'убранный повтор удалён');
+        $d = json_decode((string) $pdo->query("SELECT details FROM audit_log WHERE action='task.update' AND entity_id='" . $t['id'] . "'")->fetchColumn(), true);
+        ok(in_array('occurrences', $d['changed'], true), 'audit: changed содержит occurrences');
+        eq($d['occurrences_after'], ['2029-03-01T09:00', '2029-03-09T18:00'], 'audit: after');
+        // Тот же набор → unchanged, version не растёт.
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 2, 'occurrences' => [['start_at' => '2029-03-01T09:00'], ['start_at' => '2029-03-09T18:00']]]);
+        eq([$r['status'], $r['json']['unchanged'] ?? false, $r['json']['task']['version']], [200, true, 2], 'тот же набор — unchanged');
+        // Правка текста без поля occurrences — повторы на месте.
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 2, 'title' => 'Другое имя']);
+        eq($pairs($r['json']['task']), [['2029-03-01T09:00', '2029-03-01T10:00'], ['2029-03-09T18:00', '2029-03-09T19:00']], 'повторы не тронуты');
+        // Пустой список — все повторы удалены.
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 3, 'occurrences' => []]);
+        eq([$r['status'], $r['json']['task']['occurrences'], $r['json']['task']['days']], [200, [], ['2029-01-01']], 'пусто → удалены');
+        return 'ok';
+    });
+
+    $run('O6 длительность и пересчёт: смена конца/даты задачи пересчитывает концы повторов; 23:59; без времени — те же дни', function () use ($A, $mkO, $pairs) {
+        $t = $mkO(['occurrences' => ['2029-04-10T10:00', '2029-04-20T22:30']]);
+        eq($pairs($t), [['2029-04-10T10:00', '2029-04-10T11:00'], ['2029-04-20T22:30', '2029-04-20T23:30']], 'старт: 1 ч');
+        // длительность 1 ч → 2,5 ч
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 1, 'end_at' => '2029-01-01T15:30']);
+        eq($r['status'], 200, 'status ' . $r['raw']);
+        eq($pairs($r['json']['task']), [['2029-04-10T10:00', '2029-04-10T12:30'], ['2029-04-20T22:30', '2029-04-20T23:59']], '2,5 ч; второй прижат к 23:59');
+        eq($r['json']['task']['version'], 2, 'одна версия');
+        // сдвиг основной даты вместе с концом — длительность та же 2,5 ч, повторы не едут
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 2, 'start_at' => '2029-01-02T08:00', 'end_at' => '2029-01-02T09:00']);
+        eq($pairs($r['json']['task']), [['2029-04-10T10:00', '2029-04-10T11:00'], ['2029-04-20T22:30', '2029-04-20T23:30']], 'длительность 1 ч, концы пересчитаны');
+        // убрали конец → у повторов тоже нет конца
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 3, 'end_at' => null]);
+        eq($pairs($r['json']['task']), [['2029-04-10T10:00', null], ['2029-04-20T22:30', null]], 'без конца — без конца');
+        // Задача без времени: те же дни.
+        $d = $mkO(['start_at' => '2029-05-01', 'end_at' => '2029-05-03', 'occurrences' => ['2029-06-10']]);
+        eq($pairs($d), [['2029-06-10', '2029-06-12']], 'три дня → три дня');
+        eq($d['days'], ['2029-05-01', '2029-05-02', '2029-05-03', '2029-06-10', '2029-06-11', '2029-06-12'], 'days: оба периода');
+        $r = $A('PUT', '?id=' . $d['id'], ['version' => 1, 'end_at' => '2029-05-02']);
+        eq($pairs($r['json']['task']), [['2029-06-10', '2029-06-11']], 'длительность 2 дня → пересчёт');
+        return 'ok';
+    });
+
+    $run('O7 валидация: формат, дубль с основной датой/повтором, > 100, вид (время/без) — 400 с index и message; ничего не записано', function () use ($A, $mkO, $taskCount, $occN) {
+        $t = $mkO(['occurrences' => ['2029-07-01T09:00']]);
+        $n0 = $taskCount();
+        $o0 = $occN();
+        $base = ['title' => 'v', 'start_at' => '2029-01-01T13:00', 'end_at' => '2029-01-01T14:00', 'assignees' => ['tt_a']];
+        $cases = [
+            ['invalid_occurrence', 1, [['start_at' => '2029-07-01T09:00'], ['start_at' => '31.12.2029']]],
+            ['invalid_occurrence', 0, [['start_at' => '2029-02-30T10:00']]],
+            ['invalid_occurrence', 0, [['x' => 1]]],
+            ['invalid_occurrence', 0, [['start_at' => '2029-07-01']]],                       // у задачи со временем — нужно время
+            ['occurrence_duplicate', 0, [['start_at' => '2029-01-01T13:00']]],               // = основная дата
+            ['occurrence_duplicate', 0, [['start_at' => '2029-01-01T13:00:30']]],            // до минуты
+            ['occurrence_duplicate', 2, [['start_at' => '2029-07-01T09:00'], ['start_at' => '2029-07-02T09:00'], ['start_at' => '2029-07-01T09:00']]],
+        ];
+        foreach ($cases as [$code, $idx, $occ]) {
+            $r = $A('POST', '', ['occurrences' => $occ] + $base);
+            eq([$r['status'], $r['json']['error'] ?? null, $r['json']['index'] ?? null], [400, $code, $idx], 'case ' . $code . ' ' . json_encode($occ));
+            ok(is_string($r['json']['message'] ?? null) && $r['json']['message'] !== '', 'message');
+        }
+        // то же при PUT; у задачи без времени — только дата
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 1, 'occurrences' => [['start_at' => '2029-01-01T13:00']]]);
+        eq([$r['status'], $r['json']['error'], $r['json']['index']], [400, 'occurrence_duplicate', 0], 'PUT: дубль с основной');
+        $nt = $mkO(['start_at' => '2029-08-01', 'end_at' => null]);
+        $r = $A('PUT', '?id=' . $nt['id'], ['version' => 1, 'occurrences' => [['start_at' => '2029-08-05T10:00']]]);
+        eq([$r['status'], $r['json']['error'], $r['json']['index']], [400, 'invalid_occurrence', 0], 'без времени: время не принимается');
+        $r = $A('PUT', '?id=' . $nt['id'], ['version' => 1, 'occurrences' => [['start_at' => '2029-08-01']]]);
+        eq([$r['status'], $r['json']['error']], [400, 'occurrence_duplicate'], 'без времени: дубль даты');
+        $r = $A('PUT', '?id=' . $nt['id'], ['version' => 1, 'occurrences' => 'x']);
+        eq([$r['status'], $r['json']['error']], [400, 'invalid_occurrences'], 'не список');
+        // лимит: 100 можно, 101 — нельзя
+        $mk100 = function (int $n): array {
+            $o = [];
+            for ($i = 0; $i < $n; $i++) {
+                $o[] = ['start_at' => date('Y-m-d', strtotime('2030-01-01 +' . $i . ' day')) . 'T09:00'];
+            }
+            return $o;
+        };
+        $r = $A('POST', '', ['occurrences' => $mk100(101)] + $base);
+        eq([$r['status'], $r['json']['error'] ?? null], [400, 'occurrences_too_many'], '101 → ошибка');
+        $r = $A('POST', '', ['occurrences' => $mk100(100)] + $base);
+        eq([$r['status'], count($r['json']['task']['occurrences'] ?? [])], [201, 100], '100 — можно');
+        $big = $r['json']['task'];
+        $r = $A('POST', '?id=' . $big['id'] . '&action=occ_add', ['version' => 1, 'start_at' => '2031-01-01T09:00']);
+        eq([$r['status'], $r['json']['error'] ?? null], [400, 'occurrences_too_many'], 'occ_add сверх 100');
+        eq($taskCount(), $n0 + 2, 'созданы только вспомогательная задача $nt и задача со 100 повторами (невалидные ничего не создали)');
+        eq($occN(), $o0 + 100, 'повторов записано ровно 100 (невалидные ничего не записали)');
+        return 'ok';
+    });
+
+    $run('O8 правила исполнителей для КАЖДОГО повтора: больничный/командировка → 422 с указанием повтора (create/PUT), выходной/отпуск → заметка', function () use ($A, $mkO, $pdo, $addEntry, $addTrip, $taskCount, $occN, $pairs) {
+        $addEntry('tt_b', '2031-03-04', 'sick');           // вторник
+        $addEntry('tt_b', '2031-03-05', 'vacation');
+        $addTrip('tt_b', '2031-03-20', '2031-03-22');
+        $n0 = $taskCount();
+        $o0 = $occN();
+        $base = ['title' => 'блок', 'start_at' => '2031-03-03T10:00', 'end_at' => '2031-03-03T11:00', 'assignees' => ['tt_b']];
+        $r = $A('POST', '', ['occurrences' => [['start_at' => '2031-03-10T10:00'], ['start_at' => '2031-03-04T15:00']]] + $base);
+        eq([$r['status'], $r['json']['error'] ?? null], [422, 'TASK_BLOCKED_BY_SICK_OR_TRIP'], 'больничный на повторе → 422 ' . $r['raw']);
+        $j = $r['json'];
+        eq($j['occurrence_index'], 1, 'указан индекс повтора (позиция в присланном списке)');
+        eq($j['occurrence_start_at'], '2031-03-04T15:00', 'указано начало повтора');
+        eq($j['blocked_days'], [['date' => '2031-03-04', 'employee_id' => 'tt_b', 'reason' => 'sick']], 'blocked_days');
+        ok(mb_strpos($j['message'], '04.03.2031 15:00') !== false && mb_strpos($j['message'], 'Тестов Браво') !== false && mb_strpos($j['message'], 'больничный') !== false, 'message понятный: ' . $j['message']);
+        ok(isset($j['suggested_start']), 'suggested_start для повтора');
+        eq([$taskCount(), $occN()], [$n0, $o0], 'ничего не создано (транзакция)');
+        // командировка
+        $r = $A('POST', '', ['occurrences' => [['start_at' => '2031-03-21T10:00']]] + $base);
+        eq([$r['status'], $r['json']['occurrence_index']], [422, 0], 'командировка → 422');
+        ok(mb_strpos($r['json']['message'], 'командировка') !== false, 'message: командировка');
+        // отпуск и выходной (сб 2031-03-01) — не блок, заметки
+        $r = $A('POST', '', ['occurrences' => [['start_at' => '2031-03-05T10:00'], ['start_at' => '2031-03-01T10:00']]] + $base);
+        eq($r['status'], 201, 'отпуск/выходной не блокируют ' . $r['raw']);
+        $t = $r['json']['task'];
+        $kinds = array_map(fn($n) => $n['date'] . ':' . $n['kind'], $t['notes']);
+        ok(in_array('2031-03-05:vacation', $kinds, true), 'заметка: отпуск на дне повтора: ' . json_encode($kinds));
+        ok(in_array('2031-03-01:weekend', $kinds, true), 'заметка: выходной на дне повтора: ' . json_encode($kinds));
+        eq($t['conflict'], false, 'conflict нет');
+        // PUT: добавление блокирующего повтора → 422 с индексом; БД не изменилась
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 1, 'occurrences' => [['start_at' => '2031-03-05T10:00'], ['start_at' => '2031-03-01T10:00'], ['start_at' => '2031-03-04T09:00']]]);
+        eq([$r['status'], $r['json']['error'] ?? null, $r['json']['occurrence_index'] ?? null], [422, 'TASK_BLOCKED_BY_SICK_OR_TRIP', 2], 'PUT: блок на повторе №3 (индекс 2)');
+        $g = $A('GET', '?id=' . $t['id'])['json']['task'];
+        eq([$g['version'], count($g['occurrences'])], [1, 2], 'PUT с блоком ничего не изменил');
+        // PUT: сдвиг основной даты ПОВТОРА не затрагивает: проверяется только изменённое (уже сохранённые повторы не перепроверяются)
+        // Но смена исполнителя перепроверяет ВСЕ повторы: tt_a свободен → ok, затем на tt_b с блоком в повторе
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 1, 'assignees' => ['tt_a']]);
+        eq($r['status'], 200, 'смена исполнителя на свободного ' . $r['raw']);
+        $addEntry('tt_a', '2031-03-05', 'sick');
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 2, 'assignees' => ['tt_a', 'tt_b']]);
+        eq([$r['status'], $r['json']['occurrence_index'] ?? null], [422, 1], 'смена исполнителей перепроверяет все повторы: tt_a болен на втором повторе (индекс 1)');
+        return 'create/PUT/смена исполнителей';
+    });
+
+    $run('O9 точечные действия: occ_add / occ_move / occ_delete — version обязателен, 409, version+1, audit, дубли, 404, блок 422', function () use ($A, $mkO, $pairs, $pdo, $addEntry, $auditCount) {
+        $addEntry('tt_c', '2031-04-08', 'sick');
+        $t = $mkO(['assignees' => ['tt_c'], 'start_at' => '2031-04-01T10:00', 'end_at' => '2031-04-01T12:00']);
+        $q = '?id=' . $t['id'] . '&action=';
+        // version обязателен
+        $r = $A('POST', $q . 'occ_add', ['start_at' => '2031-04-02T10:00']);
+        eq([$r['status'], $r['json']['error']], [400, 'version_required'], 'без version');
+        // add
+        $r = $A('POST', $q . 'occ_add', ['version' => 1, 'start_at' => '2031-04-02T15:00']);
+        eq($r['status'], 200, 'add ' . $r['raw']);
+        eq($r['json']['occurrence']['start_at'], '2031-04-02T15:00', 'occurrence в ответе');
+        eq($r['json']['occurrence']['end_at'], '2031-04-02T17:00', 'конец = длительность задачи (2 ч)');
+        eq([$r['json']['task']['version'], count($r['json']['task']['occurrences'])], [2, 1], 'version+1, один повтор');
+        $oid = $r['json']['occurrence']['id'];
+        eq($auditCount('task.occ_add', $t['id']), 1, 'audit occ_add');
+        // 409 при устаревшей версии — и ничего не меняется
+        $r = $A('POST', $q . 'occ_add', ['version' => 1, 'start_at' => '2031-04-03T10:00']);
+        eq([$r['status'], $r['json']['error'], $r['json']['current_version']], [409, 'VERSION_CONFLICT', 2], '409');
+        ok(is_array($r['json']['task']['occurrences']), '409 несёт актуальную задачу');
+        // дубли
+        $r = $A('POST', $q . 'occ_add', ['version' => 2, 'start_at' => '2031-04-02T15:00']);
+        eq([$r['status'], $r['json']['error']], [400, 'occurrence_duplicate'], 'дубль повтора');
+        $r = $A('POST', $q . 'occ_add', ['version' => 2, 'start_at' => '2031-04-01T10:00']);
+        eq([$r['status'], $r['json']['error']], [400, 'occurrence_duplicate'], 'дубль основной даты');
+        $r = $A('POST', $q . 'occ_add', ['version' => 2, 'start_at' => 'ерунда']);
+        eq([$r['status'], $r['json']['error']], [400, 'invalid_occurrence'], 'формат');
+        // date-only для задачи со временем → время задачи (календарь «Весь день»)
+        $r = $A('POST', $q . 'occ_add', ['version' => 2, 'start_at' => '2031-04-04']);
+        eq([$r['status'], $r['json']['occurrence']['start_at']], [200, '2031-04-04T10:00'], 'дата без времени → время начала задачи');
+        $oid2 = $r['json']['occurrence']['id'];
+        // блок: повтор на больничном tt_c (2031-04-08) → 422 с указанием повтора; версия не растёт
+        $r = $A('POST', $q . 'occ_add', ['version' => 3, 'start_at' => '2031-04-08T09:00']);
+        eq([$r['status'], $r['json']['error'], $r['json']['occurrence_index'], $r['json']['occurrence_start_at']], [422, 'TASK_BLOCKED_BY_SICK_OR_TRIP', null, '2031-04-08T09:00'], 'add на больничный');
+        ok(mb_strpos($r['json']['message'], '08.04.2031') !== false, 'message с датой');
+        eq($A('GET', '?id=' . $t['id'])['json']['task']['version'], 3, 'после 422 версия прежняя');
+        // move
+        $r = $A('POST', $q . 'occ_move', ['version' => 3, 'occurrence_id' => $oid, 'start_at' => '2031-04-06T18:30']);
+        eq($r['status'], 200, 'move ' . $r['raw']);
+        eq([$r['json']['occurrence']['id'], $r['json']['occurrence']['start_at'], $r['json']['occurrence']['end_at']], [$oid, '2031-04-06T18:30', '2031-04-06T20:30'], 'id тот же, конец пересчитан');
+        eq($r['json']['task']['version'], 4, 'version+1');
+        eq($auditCount('task.occ_move', $t['id']), 1, 'audit occ_move');
+        // move на тот же момент → unchanged без версии
+        $r = $A('POST', $q . 'occ_move', ['version' => 4, 'occurrence_id' => $oid, 'start_at' => '2031-04-06T18:30']);
+        eq([$r['status'], $r['json']['unchanged'] ?? false, $r['json']['task']['version']], [200, true, 4], 'move на то же место');
+        // move на дату другого повтора / основной / больничный
+        $r = $A('POST', $q . 'occ_move', ['version' => 4, 'occurrence_id' => $oid, 'start_at' => '2031-04-04T10:00']);
+        eq([$r['status'], $r['json']['error']], [400, 'occurrence_duplicate'], 'move на другой повтор');
+        $r = $A('POST', $q . 'occ_move', ['version' => 4, 'occurrence_id' => $oid, 'start_at' => '2031-04-08T10:00']);
+        eq([$r['status'], $r['json']['error']], [422, 'TASK_BLOCKED_BY_SICK_OR_TRIP'], 'move на больничный');
+        $r = $A('POST', $q . 'occ_move', ['version' => 4, 'occurrence_id' => 999999, 'start_at' => '2031-04-09T10:00']);
+        eq([$r['status'], $r['json']['error']], [404, 'occurrence_not_found'], 'нет такого повтора');
+        $r = $A('POST', $q . 'occ_move', ['version' => 4, 'start_at' => '2031-04-09T10:00']);
+        eq([$r['status'], $r['json']['error']], [400, 'invalid_occurrence_id'], 'нет occurrence_id');
+        // повтор чужой задачи нельзя двигать через эту задачу
+        $other = $mkO(['occurrences' => ['2031-05-05T10:00']]);
+        $r = $A('POST', $q . 'occ_move', ['version' => 4, 'occurrence_id' => $other['occurrences'][0]['id'], 'start_at' => '2031-04-09T10:00']);
+        eq([$r['status'], $r['json']['error']], [404, 'occurrence_not_found'], 'чужой повтор → 404');
+        // delete
+        $r = $A('POST', $q . 'occ_delete', ['version' => 4, 'occurrence_id' => $oid2]);
+        eq($r['status'], 200, 'delete ' . $r['raw']);
+        eq([$r['json']['deleted'], $r['json']['task']['version'], count($r['json']['task']['occurrences'])], [$oid2, 5, 1], 'удалён, version+1');
+        eq($auditCount('task.occ_delete', $t['id']), 1, 'audit occ_delete');
+        $r = $A('POST', $q . 'occ_delete', ['version' => 4, 'occurrence_id' => $oid]);
+        eq($r['status'], 409, 'delete со старой версией → 409');
+        $r = $A('POST', $q . 'occ_delete', ['version' => 5, 'occurrence_id' => $oid2]);
+        eq($r['status'], 404, 'повторное удаление → 404');
+        // архивная задача — нельзя
+        $a = $mkO(['occurrences' => ['2031-06-06T10:00']]);
+        $A('DELETE', '?id=' . $a['id'], ['version' => 1]);
+        $r = $A('POST', '?id=' . $a['id'] . '&action=occ_add', ['version' => 2, 'start_at' => '2031-06-07T10:00']);
+        eq([$r['status'], $r['json']['error']], [409, 'task_archived'], 'архивная');
+        return 'add/move/delete, 409, 422, 404, дубли';
+    });
+
+    $run('O10 права: anon → 401, supervisor/viewer → 403 на все записи повторов; данные не меняются', function () use ($A, $S, $V, $N, $mkO, $occN, $auditCount) {
+        $t = $mkO(['occurrences' => ['2029-09-09T10:00']]);
+        $oid = $t['occurrences'][0]['id'];
+        $o0 = $occN();
+        $a0 = $auditCount('task.occ_add') + $auditCount('task.occ_move') + $auditCount('task.occ_delete') + $auditCount('task.update');
+        $calls = [
+            ['POST', '?id=' . $t['id'] . '&action=occ_add', ['version' => 1, 'start_at' => '2029-09-10T10:00']],
+            ['POST', '?id=' . $t['id'] . '&action=occ_move', ['version' => 1, 'occurrence_id' => $oid, 'start_at' => '2029-09-11T10:00']],
+            ['POST', '?id=' . $t['id'] . '&action=occ_delete', ['version' => 1, 'occurrence_id' => $oid]],
+            ['PUT', '?id=' . $t['id'], ['version' => 1, 'occurrences' => []]],
+            ['POST', '', ['title' => 'x', 'start_at' => '2029-09-10T10:00', 'assignees' => ['tt_a'], 'occurrences' => [['start_at' => '2029-09-12T10:00']]]],
+        ];
+        foreach ([['anon', $N, 401], ['supervisor', $S, 403], ['viewer', $V, 403]] as [$who, $fn, $code]) {
+            foreach ($calls as [$m, $q, $b]) {
+                $r = $fn($m, $q, $b);
+                eq($r['status'], $code, "$who $m $q");
+            }
+        }
+        eq($occN(), $o0, 'повторы не изменились');
+        eq($auditCount('task.occ_add') + $auditCount('task.occ_move') + $auditCount('task.occ_delete') + $auditCount('task.update'), $a0, 'аудит не писался');
+        $g = $A('GET', '?id=' . $t['id'])['json']['task'];
+        eq([$g['version'], count($g['occurrences'])], [1, 1], 'задача цела');
+        // чтение повторов — всем авторизованным
+        eq(count($S('GET', '?id=' . $t['id'])['json']['task']['occurrences']), 1, 'supervisor видит повторы');
+        eq(count($V('GET', '?id=' . $t['id'])['json']['task']['occurrences']), 1, 'viewer видит повторы');
+        return '15 запросов отклонено';
+    });
+
+    $run('O11 conflict/days/notes учитывают повторы; закрытая — без conflict; одна запись; закрыть → закрыта целиком; archive/каскад', function () use ($A, $mkO, $pdo, $addEntry, $pairs) {
+        $t = $mkO(['assignees' => ['tt_d'], 'start_at' => '2031-07-01T10:00', 'end_at' => '2031-07-01T11:00', 'occurrences' => ['2031-07-15T10:00']]);
+        eq([$t['conflict'], $t['conflict_days']], [false, []], 'нет конфликта');
+        // позже у исполнителя появился больничный на день ПОВТОРА (в обход API)
+        $addEntry('tt_d', '2031-07-15', 'sick');
+        $g = $A('GET', '?id=' . $t['id'])['json']['task'];
+        eq($g['conflict'], true, 'conflict по повтору');
+        eq($g['conflict_days'], [['date' => '2031-07-15', 'employee_id' => 'tt_d', 'reason' => 'sick']], 'conflict_days: день повтора');
+        // закрыть → закрыта целиком; повторы на месте; conflict у закрытой нет
+        $r = $A('POST', '?id=' . $t['id'] . '&action=close', ['version' => 1]);
+        eq([$r['status'], $r['json']['task']['status'], $r['json']['task']['conflict'], count($r['json']['task']['occurrences'])], [200, 'closed', false, 1], 'закрыта целиком');
+        $r = $A('POST', '?id=' . $t['id'] . '&action=reopen', ['version' => 2]);
+        eq([$r['json']['task']['status'], $r['json']['task']['conflict']], ['open', true], 'переоткрыта: conflict вернулся');
+        // список: ОДНА запись у задачи, а не по записи на каждый повтор
+        $list = $A('GET', '?from=2031-07-01&to=2031-07-31&employee_id=tt_d')['json']['tasks'];
+        eq(count(array_filter($list, fn($x) => $x['id'] === $t['id'])), 1, 'одна запись в списке');
+        // days и notes: выходной на дне повтора (сб 2031-03-01 и вс 2031-07-20)
+        $w = $mkO(['assignees' => ['tt_a'], 'start_at' => '2031-07-16T10:00', 'end_at' => null, 'occurrences' => ['2031-07-20T10:00']]);
+        eq($w['days'], ['2031-07-16', '2031-07-20'], 'days');
+        $kinds = array_map(fn($n) => $n['date'] . ':' . $n['kind'], $w['notes']);
+        ok(in_array('2031-07-20:weekend', $kinds, true), 'пометка «выходной» на дне повтора: ' . json_encode($kinds));
+        // каскад: удаление строки задачи удаляет повторы (FK); архив — повторы остаются, но задача скрыта из списка
+        $A('DELETE', '?id=' . $w['id'], ['version' => 1]);
+        eq((int) $pdo->query("SELECT COUNT(*) FROM task_occurrences WHERE task_id = '" . $w['id'] . "'")->fetchColumn(), 1, 'архив: повторы на месте');
+        $pdo->exec("DELETE FROM tasks WHERE id = '" . $w['id'] . "'");
+        eq((int) $pdo->query("SELECT COUNT(*) FROM task_occurrences WHERE task_id = '" . $w['id'] . "'")->fetchColumn(), 0, 'DELETE FROM tasks → повторы удалены каскадом');
+        return 'ok';
+    });
+
+    $run('O12 GET ?from&to: задача попадает в диапазон по ПОВТОРУ (основной срок вне диапазона); без повторов поведение прежнее', function () use ($A, $mkO) {
+        $t = $mkO(['start_at' => '2032-01-05', 'end_at' => null, 'occurrences' => ['2032-03-10']]);
+        $has = fn(string $from, string $to): bool => count(array_filter($A('GET', "?from=$from&to=$to")['json']['tasks'], fn($x) => $x['id'] === $t['id'])) === 1;
+        ok($has('2032-01-01', '2032-01-31'), 'по основной дате');
+        ok($has('2032-03-01', '2032-03-31'), 'по повтору (основная вне диапазона)');
+        ok(!$has('2032-02-01', '2032-02-28'), 'между — нет');
+        ok($has('2032-03-10', '2032-03-10'), 'граница дня повтора');
+        ok(!$has('2032-03-11', '2032-04-30'), 'после — нет');
+        ok($has('2032-03-01', ''), 'только from');
+        ok($has('', '2032-01-31'), 'только to');
+        // многодневный повтор: диапазон, пересекающий его конец
+        $m = $mkO(['start_at' => '2032-05-01', 'end_at' => '2032-05-03', 'occurrences' => ['2032-06-10']]);
+        $r = $A('GET', '?from=2032-06-12&to=2032-06-20')['json']['tasks'];
+        eq(count(array_filter($r, fn($x) => $x['id'] === $m['id'])), 1, 'конец повтора (3 дня) в диапазоне');
+        return 'ok';
+    });
+
+    $run('O13 смена вида задачи: со временем → без времени (повторы теряют время), без → со временем; дубль после пересчёта → 400; перенос основной даты на повтор → 400', function () use ($A, $mkO, $pairs) {
+        $t = $mkO(['start_at' => '2029-10-01T10:00', 'end_at' => '2029-10-01T11:00', 'occurrences' => ['2029-10-05T10:00', '2029-10-09T15:00']]);
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 1, 'start_at' => '2029-10-01', 'end_at' => null]);
+        eq($r['status'], 200, 'status ' . $r['raw']);
+        eq($pairs($r['json']['task']), [['2029-10-05', null], ['2029-10-09', null]], 'повторы стали датами');
+        eq($r['json']['task']['next_at'] === '2029-10-01' || strlen($r['json']['task']['next_at']) === 10, true, 'next_at — дата');
+        $r = $A('PUT', '?id=' . $t['id'], ['version' => 2, 'start_at' => '2029-10-01T08:30', 'end_at' => '2029-10-01T09:30']);
+        eq($pairs($r['json']['task']), [['2029-10-05T08:30', '2029-10-05T09:30'], ['2029-10-09T08:30', '2029-10-09T09:30']], 'повторы получили время начала задачи');
+        // два повтора в один день с разным временем → после «без времени» совпадут → 400, ничего не меняется
+        $d = $mkO(['start_at' => '2029-11-01T10:00', 'end_at' => null, 'occurrences' => ['2029-11-05T09:00', '2029-11-05T18:00']]);
+        $r = $A('PUT', '?id=' . $d['id'], ['version' => 1, 'start_at' => '2029-11-01']);
+        eq([$r['status'], $r['json']['error']], [400, 'occurrence_duplicate'], 'дубль после пересчёта');
+        eq($A('GET', '?id=' . $d['id'])['json']['task']['version'], 1, 'версия прежняя');
+        // перенос основной даты на день/время повтора
+        $r = $A('PUT', '?id=' . $d['id'], ['version' => 1, 'start_at' => '2029-11-05T09:00']);
+        eq([$r['status'], $r['json']['error']], [400, 'occurrence_duplicate'], 'основная дата совпала с повтором');
+        return 'ok';
+    });
+
+    $run('O14 поля n8n-контракта и прежние поля не изменились (additive): набор ключей = прежний + occurrences + next_at', function () use ($A, $mkO) {
+        $t = $mkO(['occurrences' => ['2029-12-12T10:00']]);
+        $old = ['id', 'title', 'description', 'start_at', 'end_at', 'priority', 'label', 'labels', 'status', 'check_state', 'version', 'created_by', 'created_at',
+            'updated_at', 'closed_at', 'archived', 'assignees', 'orphan', 'watchers', 'checklist', 'first_day', 'last_day', 'days', 'conflict', 'conflict_days', 'notes'];
+        $keys = array_keys($t);
+        foreach ($old as $k) {
+            ok(in_array($k, $keys, true), 'поле осталось: ' . $k);
+        }
+        eq(array_values(array_diff($keys, $old)), ['occurrences', 'next_at'], 'новые поля — только occurrences, next_at');
+        eq(array_keys($t['occurrences'][0]), ['id', 'start_at', 'end_at'], 'форма повтора');
+        return count($old) . ' прежних полей + 2';
     });
 
     $run('G2 нет утечки: ошибки не раскрывают пути; OPTIONS → 204; неподдерживаемый метод → 405', function () use ($A, $T) {

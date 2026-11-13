@@ -267,3 +267,16 @@ CREATE INDEX IF NOT EXISTS idx_tasks_start_at ON tasks (start_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
 CREATE INDEX IF NOT EXISTS idx_task_assignees_emp ON task_assignees (employee_id);
 CREATE INDEX IF NOT EXISTS idx_task_checklist_task ON task_checklist (task_id);
+
+-- task_occurrences (v12, V6.3-2, Д-1): повторы задачи — конкретные дата/время начала; конец =
+--   начало + длительность задачи (пересчитывается при смене длительности/дат). Всё остальное
+--   (тема, исполнители, статус…) общее с задачей. Удаление задачи каскадом удаляет повторы.
+CREATE TABLE IF NOT EXISTS task_occurrences (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id  TEXT NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at   TEXT,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_occurrences_task ON task_occurrences (task_id);
+CREATE INDEX IF NOT EXISTS idx_task_occurrences_start ON task_occurrences (start_at);

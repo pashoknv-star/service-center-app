@@ -32,7 +32,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 11;
+    private const SCHEMA_VERSION = 12;
 
     private static ?Database $instance = null;
 
@@ -333,6 +333,24 @@ final class Database
             $this->pdo->exec(
                 "UPDATE groups SET name = 'Управление СЦ' WHERE id = 'g3' AND name IN ('В2С', 'Директор СЦ')"
             );
+        }
+
+        // --- v11 → v12 (V6.3-2, Д-1): повторения задач ---
+        // Только добавление: таблица task_occurrences (дата начала и конец каждого повтора задачи)
+        // + индексы. Существующие данные не затрагиваются; IF NOT EXISTS — повтор — no-op
+        // (свежая БД получает ту же таблицу из schema.sql).
+        if ($current < 12) {
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS task_occurrences (' .
+                "    id       INTEGER PRIMARY KEY AUTOINCREMENT," .
+                "    task_id  TEXT NOT NULL," .
+                "    start_at TEXT NOT NULL," .
+                "    end_at   TEXT," .
+                "    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE" .
+                ')'
+            );
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_occurrences_task ON task_occurrences (task_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_occurrences_start ON task_occurrences (start_at)');
         }
 
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---

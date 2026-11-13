@@ -17,6 +17,10 @@ declare(strict_types=1);
  * PUT    api/tasks.php?id=...                    — править/переназначать; body.version ОБЯЗАТЕЛЕН
  *        (проверка FR-10 — только если изменились срок или исполнители)
  * POST   api/tasks.php?id=...&action=close|reopen — сменить статус (version опционален)
+ * POST   api/tasks.php?id=...&action=occ_add|occ_move|occ_delete — повторы задачи (V6.3-2, Д-1; version ОБЯЗАТЕЛЕН):
+ *        occ_add {start_at} · occ_move {occurrence_id, start_at} · occ_delete {occurrence_id}
+ *        Повторы также в теле create/PUT: occurrences: [{start_at}] (полная замена набора; конец = начало +
+ *        длительность задачи). В ответе задачи: occurrences: [{id,start_at,end_at}], next_at; days[] включает дни повторов.
  * DELETE api/tasks.php?id=...                    — архив (archived=1; version опционален)
  * GET    api/tasks.php?calendar_facts&employee_id=a[,b]&from=&to=
  *                                                — факты матрицы для n8n; Authorization: Bearer
@@ -226,28 +230,70 @@ function tasks_load_related(PDO $pdo, array $ids): array
 }
 
 /**
+ * V6.3-2 (Д-1): повторы задач пачкой.
+ *
+ * @param string[] $ids
+ * @return array<string, array<int, array{id: int, start_at: string, end_at: ?string}>> task_id => повторы по возрастанию
+ */
+function tasks_load_occurrences(PDO $pdo, array $ids): array
+{
+    $out = [];
+    if ($ids === []) {
+        return $out;
+    }
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $pdo->prepare(
+        "SELECT id, task_id, start_at, end_at FROM task_occurrences WHERE task_id IN ($in) ORDER BY start_at, id"
+    );
+    $stmt->execute(array_values($ids));
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(string) $r['task_id']][] = [
+            'id'       => (int) $r['id'],
+            'start_at' => (string) $r['start_at'],
+            'end_at'   => $r['end_at'] !== null ? (string) $r['end_at'] : null,
+        ];
+    }
+    return $out;
+}
+
+/**
  * Собирает задачу для ответа с вычисляемыми полями:
  * first_day, last_day, days[], conflict (+conflict_days), notes[].
+ * V6.3-2: occurrences[], next_at; days[]/conflict/notes учитывают дни всех повторов
+ * (first_day/last_day — по-прежнему основной срок задачи).
+ *
+ * @param array<string, array>|null $occMap task_id => повторы (tasks_load_occurrences); null — загрузить для этой задачи
  */
-function tasks_build(PDO $pdo, array $row, array $people, array $checks): array
+function tasks_build(PDO $pdo, array $row, array $people, array $checks, ?array $occMap = null): array
 {
     $id = (string) $row['id'];
     $assignees = $people[$id]['assignee'] ?? [];
     $watchers = $people[$id]['watcher'] ?? [];
+    $occurrences = $occMap !== null ? ($occMap[$id] ?? []) : (tasks_load_occurrences($pdo, [$id])[$id] ?? []);
     $p = tasks_validate_period($row['start_at'], $row['end_at']);
-    $days = $p['error'] === null ? $p['days'] : [];
+    $mainDays = $p['error'] === null ? $p['days'] : [];
     $first = $p['error'] === null ? $p['first_day'] : substr((string) $row['start_at'], 0, 10);
     $last = $p['error'] === null ? $p['last_day'] : $first;
+    $days = $mainDays;
+    foreach ($occurrences as $o) {
+        $days = array_merge($days, tasks_occurrence_days($o['start_at'], $o['end_at']));
+    }
+    $days = array_values(array_unique($days));
+    sort($days);
 
     $conflictDays = [];
     $notes = [];
     if ($days !== []) {
         // Удалённые исполнители фактов не имеют и в проверках не участвуют.
         $assigneeIds = array_column(array_filter($assignees, static fn($a) => !$a['removed']), 'employee_id');
-        $facts = tasks_matrix_facts($pdo, $assigneeIds, $first, $last);
+        $facts = tasks_matrix_facts($pdo, $assigneeIds, $days[0], $days[count($days) - 1]);
         // conflict — только у ОТКРЫТОЙ неархивной задачи (AC-4).
         if ($row['status'] === 'open' && (int) $row['archived'] === 0) {
-            $conflictDays = tasks_blocked_from_facts($facts, $first, $last);
+            $set = array_flip($days);
+            $conflictDays = array_values(array_filter(
+                tasks_blocked_from_facts($facts, $days[0], $days[count($days) - 1]),
+                static fn(array $b): bool => isset($set[$b['date']])
+            ));
         }
         $notes = tasks_notes_from_facts($pdo, $facts, $days);
     }
@@ -280,6 +326,8 @@ function tasks_build(PDO $pdo, array $row, array $people, array $checks): array
         'conflict'      => $conflictDays !== [],
         'conflict_days' => $conflictDays,
         'notes'         => $notes,
+        'occurrences'   => $occurrences,                                                              // V6.3-2 (Д-1)
+        'next_at'       => tasks_next_at((string) $row['start_at'], $row['end_at'], $occurrences),    // V6.3-2 (Д-1)
     ];
 }
 
@@ -498,7 +546,7 @@ function tasks_version_conflict(PDO $pdo, string $id): void
  * @param string[] $assigneeIds
  * @return string check_state для сохраняемой задачи: 'ok' | 'pending' (n8n настроен, но недоступен — AC-8)
  */
-function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?string $endAt): string
+function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?string $endAt, ?array $occ = null): string
 {
     // T1-7 (D-1): удалённые исполнители фактов не имеют — в проверке (и n8n) не участвуют.
     $assigneeIds = tasks_existing_employee_ids($pdo, $assigneeIds);
@@ -524,11 +572,218 @@ function tasks_enforce_fr10(PDO $pdo, array $assigneeIds, string $startAt, ?stri
             $sugEnd = tasks_date_add($e['date'], $shift) . ($e['time'] !== null ? 'T' . $e['time'] : '');
         }
     }
-    tasks_fail('TASK_BLOCKED_BY_SICK_OR_TRIP', 422, [
+    $extra = [
         'blocked_days'    => $res['blocked_days'],
         'suggested_start' => $sugStart,
         'suggested_end'   => $sugEnd,
-    ]);
+    ];
+    if ($occ !== null) {
+        // V6.3-2 (Д-1): блок на повторе — указываем, какой именно (index — позиция в присланном списке; null — точечное действие).
+        $extra['occurrence_index'] = $occ['index'] ?? null;
+        $extra['occurrence_start_at'] = $startAt;
+        $extra['message'] = tasks_occurrence_blocked_message($pdo, $startAt, $res['blocked_days']);
+    }
+    tasks_fail('TASK_BLOCKED_BY_SICK_OR_TRIP', 422, $extra);
+}
+
+/** Понятное сообщение о блоке повтора: «Повтор 11.01.2027 14:30: Иванов — больничный (11.01.2027)». */
+function tasks_occurrence_blocked_message(PDO $pdo, string $occStart, array $blocked): string
+{
+    $names = [];
+    $parts = [];
+    foreach (array_slice($blocked, 0, 3) as $b) {
+        $eid = (string) $b['employee_id'];
+        if (!isset($names[$eid])) {
+            $st = $pdo->prepare('SELECT full_name FROM employees WHERE id = :id');
+            $st->execute([':id' => $eid]);
+            $n = $st->fetchColumn();
+            $names[$eid] = $n !== false && $n !== null ? (string) $n : $eid;
+        }
+        $parts[] = $names[$eid] . ' — ' . ($b['reason'] === 'sick' ? 'больничный' : 'командировка') . ' (' . tasks_fmt_when((string) $b['date']) . ')';
+    }
+    return 'Повтор ' . tasks_fmt_when($occStart) . ' нельзя поставить: ' . implode('; ', $parts)
+        . (count($blocked) > 3 ? ' и ещё ' . (count($blocked) - 3) : '') . '. Выберите другую дату.';
+}
+
+/**
+ * V6.3-2 (Д-1): нормализация повторов из тела запроса.
+ * Вход: [{start_at}|"start_at", …] (end_at из тела игнорируется — конец считается по длительности задачи).
+ * Проверки: формат (и «вид» — со временем/без, как у задачи), ≤ 100, не совпадает с основной датой
+ * и с другим повтором (дата+время до минуты). Ошибки: 400 invalid_occurrence / occurrence_duplicate
+ * / occurrences_too_many с `index` (позиция в присланном списке) и понятным `message`.
+ *
+ * @return array<int, array{start_at: string, end_at: ?string, index: int}> по возрастанию начала
+ */
+function tasks_norm_occurrences(mixed $raw, string $taskStart, ?string $taskEnd): array
+{
+    if (!is_array($raw)) {
+        tasks_fail('invalid_occurrences', 400, ['message' => 'Повторы должны быть списком.']);
+    }
+    if (count($raw) > TASKS_MAX_OCCURRENCES) {
+        tasks_fail('occurrences_too_many', 400, ['message' => 'Повторов не больше ' . TASKS_MAX_OCCURRENCES . '.']);
+    }
+    $taskKind = tasks_parse_when($taskStart);
+    $mainKey = tasks_when_key($taskStart);
+    $seen = [$mainKey => -1];
+    $out = [];
+    foreach (array_values($raw) as $i => $it) {
+        $s = is_array($it) ? ($it['start_at'] ?? null) : $it;
+        $n = $i + 1;
+        $p = tasks_parse_when($s);
+        if ($p === null) {
+            tasks_fail('invalid_occurrence', 400, ['index' => $i, 'message' => 'Повтор ' . $n . ': неверная дата или время.']);
+        }
+        if ($taskKind !== null && $taskKind['time'] === null && $p['time'] !== null) {
+            tasks_fail('invalid_occurrence', 400, ['index' => $i, 'message' => 'Повтор ' . $n . ': у задачи без времени повтор задаётся только датой.']);
+        }
+        if ($taskKind !== null && $taskKind['time'] !== null && $p['time'] === null) {
+            tasks_fail('invalid_occurrence', 400, ['index' => $i, 'message' => 'Повтор ' . $n . ': укажите время начала повтора.']);
+        }
+        $start = (string) $s;
+        $key = tasks_when_key($start);
+        if (isset($seen[$key])) {
+            tasks_fail('occurrence_duplicate', 400, [
+                'index'   => $i,
+                'message' => $seen[$key] === -1
+                    ? 'Повтор ' . $n . ' (' . tasks_fmt_when($start) . ') совпадает с основной датой задачи.'
+                    : 'Повтор ' . $n . ' (' . tasks_fmt_when($start) . ') совпадает с повтором ' . ($seen[$key] + 1) . '.',
+            ]);
+        }
+        $seen[$key] = $i;
+        $end = tasks_occurrence_end($taskStart, $taskEnd, $start);
+        $per = tasks_validate_period($start, $end);
+        if ($per['error'] !== null) {
+            tasks_fail('invalid_occurrence', 400, ['index' => $i, 'message' => 'Повтор ' . $n . ': ' . $per['error']]);
+        }
+        $out[] = ['start_at' => $start, 'end_at' => $end, 'index' => $i];
+    }
+    usort($out, static fn(array $a, array $b): int => strcmp(tasks_when_key($a['start_at']), tasks_when_key($b['start_at'])));
+    return $out;
+}
+
+/**
+ * V6.3-2: уже сохранённые повторы после смены срока задачи — вид приводится к виду задачи
+ * (время добавляется/убирается), концы пересчитываются по новой длительности.
+ * Совпадение с основной датой/другим повтором после пересчёта → 400 occurrence_duplicate.
+ *
+ * @param array<int, array{id: int, start_at: string, end_at: ?string}> $stored
+ * @return array<int, array{start_at: string, end_at: ?string, index: int, id: int}>
+ */
+function tasks_recompute_occurrences(array $stored, string $taskStart, ?string $taskEnd): array
+{
+    $mainKey = tasks_when_key($taskStart);
+    $seen = [$mainKey => -1];
+    $out = [];
+    foreach (array_values($stored) as $i => $o) {
+        $start = tasks_occurrence_conform($taskStart, $o['start_at']) ?? $o['start_at'];
+        $key = tasks_when_key($start);
+        if (isset($seen[$key])) {
+            tasks_fail('occurrence_duplicate', 400, [
+                'index'   => $i,
+                'message' => 'После изменения срока повтор ' . tasks_fmt_when($start) . ' совпал с '
+                    . ($seen[$key] === -1 ? 'основной датой задачи' : 'другим повтором') . ' — измените или удалите повтор.',
+            ]);
+        }
+        $seen[$key] = $i;
+        $out[] = ['id' => $o['id'], 'start_at' => $start, 'end_at' => tasks_occurrence_end($taskStart, $taskEnd, $start), 'index' => $i];
+    }
+    usort($out, static fn(array $a, array $b): int => strcmp(tasks_when_key($a['start_at']), tasks_when_key($b['start_at'])));
+    return $out;
+}
+
+/**
+ * FR-10 для повторов: тем же tasks_enforce_fr10 (n8n/PHP) по каждому повтору.
+ * $only — ключи (tasks_when_key + '|' + end) повторов, которые надо проверить (null — все).
+ *
+ * @param array<int, array{start_at: string, end_at: ?string, index: int}> $occ
+ * @return string 'ok' | 'pending' (pending, если хотя бы одна проверка ушла в fallback)
+ */
+function tasks_enforce_occurrences(PDO $pdo, array $assigneeIds, array $occ, ?array $only = null): string
+{
+    $state = 'ok';
+    foreach ($occ as $o) {
+        if ($only !== null && !isset($only[tasks_when_key($o['start_at']) . '|' . (string) $o['end_at']])) {
+            continue;
+        }
+        if (tasks_enforce_fr10($pdo, $assigneeIds, $o['start_at'], $o['end_at'], ['index' => $o['index']]) === 'pending') {
+            $state = 'pending';
+        }
+    }
+    return $state;
+}
+
+/** Ключи повторов (начало+конец) — для сравнения наборов. @return array<string, true> */
+function tasks_occurrence_keys(array $occ): array
+{
+    $k = [];
+    foreach ($occ as $o) {
+        $k[tasks_when_key($o['start_at']) . '|' . (string) $o['end_at']] = true;
+    }
+    return $k;
+}
+
+/**
+ * V6.3-2: проверка ОДНОГО повтора для точечных действий календаря (добавить/перенести).
+ * Начало приводится к виду задачи (у задачи со временем без времени — берётся время начала задачи;
+ * у задачи без времени — только дата). Совпадение с основной датой или другим повтором —
+ * 400 occurrence_duplicate; формат — 400 invalid_occurrence.
+ *
+ * @param array<int, array{id: int, start_at: string, end_at: ?string}> $stored
+ * @return array{start_at: string, end_at: ?string}
+ */
+function tasks_single_occurrence(array $row, array $stored, mixed $start, ?int $selfId): array
+{
+    if (tasks_parse_when($start) === null) {
+        tasks_fail('invalid_occurrence', 400, ['index' => null, 'message' => 'Неверная дата или время повтора.']);
+    }
+    $start = tasks_occurrence_conform((string) $row['start_at'], (string) $start);
+    $key = tasks_when_key((string) $start);
+    if ($key === tasks_when_key((string) $row['start_at'])) {
+        tasks_fail('occurrence_duplicate', 400, [
+            'index' => null, 'message' => 'Повтор ' . tasks_fmt_when((string) $start) . ' совпадает с основной датой задачи.',
+        ]);
+    }
+    foreach ($stored as $o) {
+        if ($o['id'] !== $selfId && tasks_when_key($o['start_at']) === $key) {
+            tasks_fail('occurrence_duplicate', 400, [
+                'index' => null, 'message' => 'Повтор на ' . tasks_fmt_when((string) $start) . ' у этой задачи уже есть.',
+            ]);
+        }
+    }
+    return ['start_at' => (string) $start, 'end_at' => tasks_occurrence_end((string) $row['start_at'], $row['end_at'], (string) $start)];
+}
+
+/** Записывает набор повторов: совпавшие по началу строки сохраняют id (обновляется конец),
+ * лишние удаляются, новые добавляются.
+ *
+ * @param array<int, array{start_at: string, end_at: ?string}> $occ
+ */
+function tasks_write_occurrences(PDO $pdo, string $taskId, array $occ): void
+{
+    $st = $pdo->prepare('SELECT id, start_at FROM task_occurrences WHERE task_id = :t');
+    $st->execute([':t' => $taskId]);
+    $byKey = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $byKey[tasks_when_key((string) $r['start_at'])] = (int) $r['id'];
+    }
+    $keep = [];
+    $upd = $pdo->prepare('UPDATE task_occurrences SET start_at = :s, end_at = :e WHERE id = :id AND task_id = :t');
+    $ins = $pdo->prepare('INSERT INTO task_occurrences (task_id, start_at, end_at) VALUES (:t, :s, :e)');
+    foreach ($occ as $o) {
+        $key = tasks_when_key($o['start_at']);
+        if (isset($byKey[$key])) {
+            $upd->execute([':s' => $o['start_at'], ':e' => $o['end_at'], ':id' => $byKey[$key], ':t' => $taskId]);
+            $keep[$byKey[$key]] = true;
+        } else {
+            $ins->execute([':t' => $taskId, ':s' => $o['start_at'], ':e' => $o['end_at']]);
+        }
+    }
+    $del = $pdo->prepare('DELETE FROM task_occurrences WHERE id = :id AND task_id = :t');
+    foreach ($byKey as $id) {
+        if (!isset($keep[$id])) {
+            $del->execute([':id' => $id, ':t' => $taskId]);
+        }
+    }
 }
 
 // =====================================================================
@@ -662,9 +917,10 @@ try {
             $stmt->execute();
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             [$people, $checks] = tasks_load_related($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
+            $occMap = tasks_load_occurrences($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
             $tasks = [];
             foreach ($rows as $r) {
-                $tasks[] = tasks_build($pdo, $r, $people, $checks);
+                $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap);
             }
             sendJson(['success' => true, 'count' => count($tasks), 'tasks' => $tasks]);
         }
@@ -706,13 +962,22 @@ try {
         if (!(isset($_GET['include_archived']) && strToBool($_GET['include_archived']))) {
             $where[] = 't.archived = 0';
         }
+        // V6.3-2: задача попадает в диапазон, если в него попадает основной срок ИЛИ любой повтор.
+        $mainRange = [];
+        $occRange = [];
         if ($to !== null && $to !== '') {
-            $where[] = 'substr(t.start_at, 1, 10) <= :to';
+            $mainRange[] = 'substr(t.start_at, 1, 10) <= :to';
+            $occRange[] = 'substr(o.start_at, 1, 10) <= :to';
             $params[':to'] = $to;
         }
         if ($from !== null && $from !== '') {
-            $where[] = 'COALESCE(substr(t.end_at, 1, 10), substr(t.start_at, 1, 10)) >= :from';
+            $mainRange[] = 'COALESCE(substr(t.end_at, 1, 10), substr(t.start_at, 1, 10)) >= :from';
+            $occRange[] = 'COALESCE(substr(o.end_at, 1, 10), substr(o.start_at, 1, 10)) >= :from';
             $params[':from'] = $from;
+        }
+        if ($mainRange !== []) {
+            $where[] = '((' . implode(' AND ', $mainRange) . ') OR EXISTS (SELECT 1 FROM task_occurrences o WHERE o.task_id = t.id AND '
+                . implode(' AND ', $occRange) . '))';
         }
         if (isset($_GET['status']) && $_GET['status'] !== '') {
             if (!in_array($_GET['status'], ['open', 'closed'], true)) {
@@ -733,9 +998,10 @@ try {
         $stmt->execute($params);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         [$people, $checks] = tasks_load_related($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
+        $occMap = tasks_load_occurrences($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
         $tasks = [];
         foreach ($rows as $r) {
-            $tasks[] = tasks_build($pdo, $r, $people, $checks);
+            $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap);
         }
         $listPayload = [
             'success' => true,
@@ -794,6 +1060,8 @@ try {
         $watchers = array_key_exists('watchers', $body) ? tasks_norm_ids($body['watchers'], 'watchers') : [];
         $watchers = array_values(array_diff($watchers, $assignees));
         $checklist = array_key_exists('checklist', $body) ? tasks_norm_checklist($body['checklist']) : [];
+        $occurrences = array_key_exists('occurrences', $body)
+            ? tasks_norm_occurrences($body['occurrences'], (string) $startAt, $endAt) : [];   // V6.3-2 (Д-1)
         tasks_assert_employees($pdo, array_merge($assignees, $watchers));
 
         $user = current_user();
@@ -803,6 +1071,10 @@ try {
         try {
             // FR-10 внутри транзакции: проверка и вставка согласованы.
             $checkState = tasks_enforce_fr10($pdo, $assignees, (string) $startAt, $endAt);
+            // V6.3-2: тем же правилом — каждый повтор (ошибка указывает, какой).
+            if (tasks_enforce_occurrences($pdo, $assignees, $occurrences) === 'pending') {
+                $checkState = 'pending';
+            }
 
             $newId = genId('task_');
             $ts = now();
@@ -816,14 +1088,19 @@ try {
             ]);
             tasks_replace_people($pdo, $newId, $assignees, $watchers);
             tasks_sync_checklist($pdo, $newId, $checklist);
-            tasks_audit($pdo, 'task.create', $newId, [
+            tasks_write_occurrences($pdo, $newId, $occurrences);
+            $auditDetails = [
                 'title'       => $title,
                 'start_at'    => $startAt,
                 'end_at'      => $endAt,
                 'assignees'   => $assignees,
                 'watchers'    => $watchers,
                 'check_state' => $checkState,
-            ]);
+            ];
+            if ($occurrences !== []) {
+                $auditDetails['occurrences'] = array_column($occurrences, 'start_at');
+            }
+            tasks_audit($pdo, 'task.create', $newId, $auditDetails);
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -845,6 +1122,112 @@ try {
         tasks_fail('not_found', 404);
     }
     $username = (string) ((current_user()['username'] ?? null) ?: 'api');
+
+    // -----------------------------------------------------------------
+    // POST ?id&action=occ_add|occ_move|occ_delete — точечные действия с повторами (календарь, V6.3-2).
+    // version ОБЯЗАТЕЛЕН (409 при расхождении); версия задачи растёт на 1; только admin (require_admin выше).
+    //   occ_add    {version, start_at}                    → { task, occurrence }
+    //   occ_move   {version, occurrence_id, start_at}     → { task, occurrence }
+    //   occ_delete {version, occurrence_id}               → { task, deleted }
+    // -----------------------------------------------------------------
+    if ($method === 'POST' && in_array($action, ['occ_add', 'occ_move', 'occ_delete'], true)) {
+        $body = getJsonBody();
+        $ver = tasks_read_version($body);
+        if ($ver === null) {
+            tasks_fail('version_required');
+        }
+        if ($ver !== (int) $row['version']) {
+            tasks_version_conflict($pdo, $id);
+        }
+        if ((int) $row['archived'] === 1) {
+            tasks_fail('task_archived', 409);
+        }
+        $stored = tasks_load_occurrences($pdo, [$id])[$id] ?? [];
+        [$peopleOcc] = tasks_load_related($pdo, [$id]);
+        $assigneesOcc = array_column($peopleOcc[$id]['assignee'] ?? [], 'employee_id');
+
+        $occId = null;
+        $target = null;
+        if ($action !== 'occ_add') {
+            $rawId = $body['occurrence_id'] ?? null;
+            if (is_string($rawId) && ctype_digit($rawId)) {
+                $rawId = (int) $rawId;
+            }
+            if (!is_int($rawId)) {
+                tasks_fail('invalid_occurrence_id');
+            }
+            foreach ($stored as $o) {
+                if ($o['id'] === $rawId) {
+                    $target = $o;
+                }
+            }
+            if ($target === null) {
+                tasks_fail('occurrence_not_found', 404);
+            }
+            $occId = $rawId;
+        }
+        $newOne = null;
+        if ($action !== 'occ_delete') {
+            if (!array_key_exists('start_at', $body)) {
+                tasks_fail('invalid_occurrence', 400, ['index' => null, 'message' => 'Не указана дата повтора.']);
+            }
+            if ($action === 'occ_add' && count($stored) >= TASKS_MAX_OCCURRENCES) {
+                tasks_fail('occurrences_too_many', 400, ['message' => 'Повторов не больше ' . TASKS_MAX_OCCURRENCES . '.']);
+            }
+            $newOne = tasks_single_occurrence($row, $stored, $body['start_at'], $occId);
+            if ($action === 'occ_move' && tasks_when_key($newOne['start_at']) === tasks_when_key($target['start_at'])
+                && $newOne['end_at'] === $target['end_at']) {
+                sendJson(['success' => true, 'unchanged' => true, 'task' => tasks_fetch($pdo, $id), 'occurrence' => $target]);
+            }
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $checkState = (string) $row['check_state'];
+            if ($newOne !== null) {
+                // Тем же правилом, что и задача (больничный/командировка → 422 с указанием повтора).
+                $st = tasks_enforce_fr10($pdo, $assigneesOcc, $newOne['start_at'], $newOne['end_at'], ['index' => null]);
+                if ($st === 'pending') {
+                    $checkState = 'pending';
+                }
+            }
+            $ts = now();
+            $upd = $pdo->prepare(
+                'UPDATE tasks SET check_state = :cs, version = version + 1, updated_at = :ts WHERE id = :id AND version = :v'
+            );
+            $upd->execute([':cs' => $checkState, ':ts' => $ts, ':id' => $id, ':v' => (int) $row['version']]);
+            if ($upd->rowCount() !== 1) {
+                $pdo->rollBack();
+                tasks_version_conflict($pdo, $id);
+            }
+            $details = ['title' => $row['title'], 'from_version' => (int) $row['version'], 'to_version' => (int) $row['version'] + 1];
+            $result = [];
+            if ($action === 'occ_add') {
+                $pdo->prepare('INSERT INTO task_occurrences (task_id, start_at, end_at) VALUES (:t, :s, :e)')
+                    ->execute([':t' => $id, ':s' => $newOne['start_at'], ':e' => $newOne['end_at']]);
+                $result['occurrence'] = ['id' => (int) $pdo->lastInsertId(), 'start_at' => $newOne['start_at'], 'end_at' => $newOne['end_at']];
+                $details['occurrence'] = $newOne['start_at'];
+            } elseif ($action === 'occ_move') {
+                $pdo->prepare('UPDATE task_occurrences SET start_at = :s, end_at = :e WHERE id = :oid AND task_id = :t')
+                    ->execute([':s' => $newOne['start_at'], ':e' => $newOne['end_at'], ':oid' => $occId, ':t' => $id]);
+                $result['occurrence'] = ['id' => $occId, 'start_at' => $newOne['start_at'], 'end_at' => $newOne['end_at']];
+                $details['occurrence_before'] = $target['start_at'];
+                $details['occurrence_after'] = $newOne['start_at'];
+            } else {
+                $pdo->prepare('DELETE FROM task_occurrences WHERE id = :oid AND task_id = :t')->execute([':oid' => $occId, ':t' => $id]);
+                $result['deleted'] = $occId;
+                $details['occurrence'] = $target['start_at'];
+            }
+            tasks_audit($pdo, 'task.' . $action, $id, $details);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+        sendJson(['success' => true, 'task' => tasks_fetch($pdo, $id)] + $result);
+    }
 
     // -----------------------------------------------------------------
     // POST ?id&action=close|reopen
@@ -1018,6 +1401,20 @@ try {
     ));
     $newChecklist = array_key_exists('checklist', $body) ? tasks_norm_checklist($body['checklist']) : null;
 
+    // V6.3-2 (Д-1): повторы. С телом `occurrences` — полная замена набора; без него — сохранённые повторы
+    // пересчитываются под новый срок (вид «со временем/без», концы по новой длительности).
+    $storedOcc = tasks_load_occurrences($pdo, [$id])[$id] ?? [];
+    if (array_key_exists('occurrences', $body)) {
+        $newOcc = tasks_norm_occurrences($body['occurrences'], (string) $new['start_at'], $new['end_at']);
+    } else {
+        $newOcc = $storedOcc === [] ? [] : tasks_recompute_occurrences($storedOcc, (string) $new['start_at'], $new['end_at']);
+    }
+    $occBeforeKeys = tasks_occurrence_keys($storedOcc);
+    $occAfterKeys = tasks_occurrence_keys($newOcc);
+    ksort($occBeforeKeys);
+    ksort($occAfterKeys);
+    $occChanged = $occBeforeKeys !== $occAfterKeys;
+
     // Что изменилось.
     $changed = [];
     foreach ($new as $k => $v) {
@@ -1041,6 +1438,9 @@ try {
             $changed[] = 'checklist';
         }
     }
+    if ($occChanged) {
+        $changed[] = 'occurrences';
+    }
     if ($changed === []) {
         sendJson(['success' => true, 'unchanged' => true, 'task' => tasks_fetch($pdo, $id)]);
     }
@@ -1052,6 +1452,17 @@ try {
             // FR-10 — только при смене срока/исполнителей: правка текста задачи,
             // у которой позже появился больничный (conflict), не блокируется.
             $checkState = tasks_enforce_fr10($pdo, $newAssignees, (string) $new['start_at'], $new['end_at']);
+            // Смена исполнителей — проверяются все повторы; смена срока — те, у кого изменились начало/конец.
+            $onlyNew = $assigneesChanged ? null : array_diff_key($occAfterKeys, $occBeforeKeys);
+            if (tasks_enforce_occurrences($pdo, $newAssignees, $newOcc, $onlyNew) === 'pending') {
+                $checkState = 'pending';
+            }
+        } elseif ($occChanged) {
+            // Только повторы: проверяются новые/изменённые (прочие уже проходили проверку при сохранении).
+            $onlyNew = array_diff_key($occAfterKeys, $occBeforeKeys);
+            if (tasks_enforce_occurrences($pdo, $newAssignees, $newOcc, $onlyNew) === 'pending') {
+                $checkState = 'pending';
+            }
         }
         $ts = now();
         $upd = $pdo->prepare(
@@ -1075,12 +1486,19 @@ try {
         if (in_array('checklist', $changed, true)) {
             tasks_sync_checklist($pdo, $id, $newChecklist);
         }
+        if ($occChanged) {
+            tasks_write_occurrences($pdo, $id, $newOcc);
+        }
         $details = [
             'title'        => $new['title'],
             'changed'      => $changed,
             'from_version' => (int) $row['version'],
             'to_version'   => (int) $row['version'] + 1,
         ];
+        if ($occChanged) {
+            $details['occurrences_before'] = array_column($storedOcc, 'start_at');
+            $details['occurrences_after'] = array_column($newOcc, 'start_at');
+        }
         if ($assigneesChanged) {
             $details['assignees_before'] = $curAssignees;
             $details['assignees_after'] = $newAssignees;

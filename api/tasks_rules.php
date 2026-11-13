@@ -139,6 +139,144 @@ function tasks_validate_period(mixed $startAt, mixed $endAt): array
 }
 
 // =====================================================================
+// Повторения задачи (V6.3-2, Д-1)
+// =====================================================================
+//
+// Повтор = конкретные дата(+время) начала; всё остальное — общее с задачей. Конец повтора
+// вычисляется по длительности задачи (tasks_occurrence_end), хранится в task_occurrences.end_at.
+
+/** Максимум повторов у одной задачи. */
+const TASKS_MAX_OCCURRENCES = 100;
+
+/** Часовой пояс отображения/«сейчас» блока задач (+05). */
+const TASKS_LOCAL_TZ = '+05:00';
+
+/** Минуты от начала суток для 'HH:MM[:SS]'. */
+function tasks_time_minutes(string $time): int
+{
+    return ((int) substr($time, 0, 2)) * 60 + (int) substr($time, 3, 2);
+}
+
+/** Ключ сравнения «дата + время (до минуты)»: 'YYYY-MM-DD' или 'YYYY-MM-DDTHH:MM'. */
+function tasks_when_key(string $when): string
+{
+    $p = tasks_parse_when($when);
+    if ($p === null) {
+        return $when;
+    }
+    return $p['date'] . ($p['time'] !== null ? 'T' . substr($p['time'], 0, 5) : '');
+}
+
+/** 'ДД.ММ.ГГГГ[ ЧЧ:ММ]' для сообщений об ошибках. */
+function tasks_fmt_when(string $when): string
+{
+    $p = tasks_parse_when($when);
+    if ($p === null) {
+        return $when;
+    }
+    return substr($p['date'], 8, 2) . '.' . substr($p['date'], 5, 2) . '.' . substr($p['date'], 0, 4)
+        . ($p['time'] !== null ? ' ' . substr($p['time'], 0, 5) : '');
+}
+
+/**
+ * Начало повтора, приведённое к «виду» задачи: у задачи со временем — дата+время (если у повтора
+ * времени нет — берётся время начала задачи), у задачи без времени — только дата.
+ * null — формат повтора некорректен.
+ */
+function tasks_occurrence_conform(string $taskStart, string $occStart): ?string
+{
+    $t = tasks_parse_when($taskStart);
+    $o = tasks_parse_when($occStart);
+    if ($t === null || $o === null) {
+        return null;
+    }
+    if ($t['time'] === null) {
+        return $o['date'];
+    }
+    return $o['date'] . 'T' . substr($o['time'] ?? $t['time'], 0, 5);
+}
+
+/**
+ * Конец повтора = начало повтора + длительность задачи.
+ *  - у задачи нет конца → у повтора тоже нет (null);
+ *  - начало и конец задачи со временем → та же длительность в минутах; в пределах одних суток
+ *    конец не позже 23:59 (правило V6-2);
+ *  - задача без времени → то же число дней (конец — дата).
+ */
+function tasks_occurrence_end(string $taskStart, ?string $taskEnd, string $occStart): ?string
+{
+    if ($taskEnd === null || $taskEnd === '') {
+        return null;
+    }
+    $s = tasks_parse_when($taskStart);
+    $e = tasks_parse_when($taskEnd);
+    $o = tasks_parse_when($occStart);
+    if ($s === null || $e === null || $o === null) {
+        return null;
+    }
+    $dayDiff = tasks_date_diff($s['date'], $e['date']);
+    if ($s['time'] !== null && $e['time'] !== null && $o['time'] !== null) {
+        $mins = $dayDiff * 1440 + tasks_time_minutes($e['time']) - tasks_time_minutes($s['time']);
+        $total = tasks_time_minutes($o['time']) + max(0, $mins);
+        if ($dayDiff === 0) {
+            $total = min($total, 23 * 60 + 59);
+        }
+        return tasks_date_add($o['date'], intdiv($total, 1440)) . 'T' . sprintf('%02d:%02d', intdiv($total % 1440, 60), $total % 60);
+    }
+    return tasks_date_add($o['date'], $dayDiff);
+}
+
+/** Дни повтора (включая конец) — как у задачи. @return string[] */
+function tasks_occurrence_days(string $startAt, ?string $endAt): array
+{
+    $p = tasks_validate_period($startAt, $endAt);
+    return $p['error'] === null ? $p['days'] : [];
+}
+
+/**
+ * «Конец» для сравнения с «сейчас»: конец, иначе начало; дата без времени — до конца суток.
+ * Возвращает 'YYYY-MM-DDTHH:MM:SS'.
+ */
+function tasks_when_edge(string $startAt, ?string $endAt): string
+{
+    $p = tasks_parse_when(($endAt !== null && $endAt !== '') ? $endAt : $startAt);
+    if ($p === null) {
+        return '9999-12-31T23:59:59';
+    }
+    return $p['date'] . 'T' . ($p['time'] !== null ? substr($p['time'] . ':00', 0, 8) : '23:59:59');
+}
+
+/** 'YYYY-MM-DDTHH:MM:SS' «сейчас» в +05 (параметр — для тестов). */
+function tasks_local_now(?DateTimeImmutable $at = null): string
+{
+    $d = $at ?? new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    return $d->setTimezone(new DateTimeZone(TASKS_LOCAL_TZ))->format('Y-m-d\TH:i:s');
+}
+
+/**
+ * next_at: start_at ближайшего предстоящего выполнения среди основной даты и повторов
+ * (выполнение предстоящее, пока его конец — или начало, у даты без времени конец суток — не раньше «сейчас»);
+ * все прошли — start_at последнего по времени.
+ *
+ * @param array<int, array{start_at: string, end_at: ?string}> $occurrences
+ */
+function tasks_next_at(string $startAt, ?string $endAt, array $occurrences, ?string $nowLocal = null): string
+{
+    $nowLocal = $nowLocal ?? tasks_local_now();
+    $all = [['start_at' => $startAt, 'end_at' => $endAt]];
+    foreach ($occurrences as $o) {
+        $all[] = ['start_at' => (string) $o['start_at'], 'end_at' => $o['end_at'] ?? null];
+    }
+    usort($all, static fn(array $a, array $b): int => strcmp(tasks_when_key($a['start_at']), tasks_when_key($b['start_at'])));
+    foreach ($all as $x) {
+        if (tasks_when_edge($x['start_at'], $x['end_at']) >= $nowLocal) {
+            return $x['start_at'];
+        }
+    }
+    return $all[count($all) - 1]['start_at'];
+}
+
+// =====================================================================
 // Календарные факты
 // =====================================================================
 
@@ -448,6 +586,9 @@ const TASKS_RECHECK_INTERVAL_SEC = 900;
 
 /** Максимум задач в одном пакете перепроверки. */
 const TASKS_RECHECK_BATCH = 200;
+
+/** Максимум записей (основные сроки + повторы) в одном пакете tasks-recheck (лимит сценария n8n — 500). */
+const TASKS_RECHECK_MAX_ENTRIES = 500;
 
 /** Ключ meta с меткой времени (unix-секунды) последней попытки перепроверки. */
 const TASKS_RECHECK_META_KEY = 'tasks_recheck_at';
@@ -812,7 +953,9 @@ function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH, int $
          WHERE ta.task_id = :t AND ta.role = 'assignee' ORDER BY ta.employee_id"
     );
 
-    $batch = [];   // id => ['version' => int, 'ids' => string[], 'from' => string, 'to' => string]
+    $batch = [];   // id => ['version' => int, 'ids' => string[], 'periods' => [[from, to], …] (первый — основной срок, далее повторы V6.3-2)]
+    $occSt = $pdo->prepare('SELECT id, start_at, end_at FROM task_occurrences WHERE task_id = :t ORDER BY start_at, id');
+    $entryCount = 0;
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $p = tasks_validate_period($r['start_at'], $r['end_at']);
         $assg->execute([':t' => $r['id']]);
@@ -820,7 +963,19 @@ function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH, int $
         if ($p['error'] !== null || $ids === []) {
             continue;
         }
-        $batch[(string) $r['id']] = ['version' => (int) $r['version'], 'ids' => $ids, 'from' => $p['first_day'], 'to' => $p['last_day']];
+        $periods = [['key' => (string) $r['id'], 'from' => $p['first_day'], 'to' => $p['last_day']]];
+        $occSt->execute([':t' => $r['id']]);
+        foreach ($occSt->fetchAll(PDO::FETCH_ASSOC) as $o) {
+            $op = tasks_validate_period($o['start_at'], $o['end_at']);
+            if ($op['error'] === null) {
+                $periods[] = ['key' => $r['id'] . '#' . $o['id'], 'from' => $op['first_day'], 'to' => $op['last_day']];
+            }
+        }
+        if ($entryCount > 0 && $entryCount + count($periods) > TASKS_RECHECK_MAX_ENTRIES) {
+            break;   // n8n принимает ≤ 500 записей в пакете; остальное — следующим проходом
+        }
+        $entryCount += count($periods);
+        $batch[(string) $r['id']] = ['version' => (int) $r['version'], 'ids' => $ids, 'periods' => $periods];
     }
     if ($batch === []) {
         return $stat + ['reason' => 'nothing_pending'];
@@ -832,14 +987,17 @@ function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH, int $
     $tasks = [];
     foreach ($batch as $id => $b) {
         $allIds = array_merge($allIds, $b['ids']);
-        $min = $min === null || $b['from'] < $min ? $b['from'] : $min;
-        $max = $max === null || $b['to'] > $max ? $b['to'] : $max;
-        $tasks[] = ['id' => $id, 'employee_ids' => $b['ids'], 'from' => $b['from'], 'to' => $b['to']];
+        foreach ($b['periods'] as $per) {
+            $min = $min === null || $per['from'] < $min ? $per['from'] : $min;
+            $max = $max === null || $per['to'] > $max ? $per['to'] : $max;
+            // V6.3-2: повтор проверяется как отдельная запись пакета (id «задача#повтор»); сценарий n8n не меняется.
+            $tasks[] = ['id' => $per['key'], 'employee_ids' => $b['ids'], 'from' => $per['from'], 'to' => $per['to']];
+        }
     }
     $allIds = array_values(array_unique($allIds));
     $matrix = tasks_matrix_facts($pdo, $allIds, $min, $max);
     $facts = tasks_sparse_rows_from_matrix($pdo, $matrix, $min, $max);
-    $stat['checked'] = count($tasks);
+    $stat['checked'] = count($batch);
 
     $r = tasks_n8n_post($cfg['recheck_url'], $cfg['secret'], ['tasks' => $tasks, 'facts' => (object) $facts], $timeoutMs, 'tasks-recheck');
     if (!$r['ok'] || !isset($r['json']['results']) || !is_array($r['json']['results'])) {
@@ -848,23 +1006,43 @@ function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH, int $
     }
     $stat['available'] = true;
 
+    // Вердикты по записям пакета (ключ «задача» / «задача#повтор»).
+    $verdicts = [];
+    foreach ($r['json']['results'] as $res) {
+        $key = is_array($res) && is_string($res['id'] ?? null) ? $res['id'] : null;
+        if ($key === null || !array_key_exists('conflict', $res) || !is_bool($res['conflict']) || !is_array($res['blocked_days'] ?? null)) {
+            continue;   // вердикт с ошибкой — запись без вердикта
+        }
+        $verdicts[$key] = $res;
+    }
+
     $upd = $pdo->prepare(
         "UPDATE tasks SET check_state = 'ok'
          WHERE id = :id AND version = :v AND check_state = 'pending' AND archived = 0"
     );
-    foreach ($r['json']['results'] as $res) {
-        $id = is_array($res) && is_string($res['id'] ?? null) ? $res['id'] : null;
-        if ($id === null || !isset($batch[$id]) || !array_key_exists('conflict', $res) || !is_bool($res['conflict'])
-            || !is_array($res['blocked_days'] ?? null)) {
-            continue;   // вердикт с ошибкой/неизвестная задача — остаётся pending
+    foreach ($batch as $id => $b) {
+        // Задача снимается с pending только если вердикт получен по ВСЕМ её датам (основной и повторам).
+        $conflict = false;
+        $blockedCount = 0;
+        $complete = true;
+        foreach ($b['periods'] as $per) {
+            if (!isset($verdicts[$per['key']])) {
+                $complete = false;
+                break;
+            }
+            $res = $verdicts[$per['key']];
+            $conflict = $conflict || $res['conflict'];
+            $blockedCount += count($res['blocked_days']);
+            // Сверка с PHP-эталоном (логируем расхождение, запись идёт по вердикту n8n).
+            $phpConf = tasks_blocked_from_facts($matrix, $per['from'], $per['to']);
+            $phpConf = array_values(array_filter($phpConf, static fn($x) => in_array($x['employee_id'], $b['ids'], true)));
+            if (($phpConf !== []) !== $res['conflict']) {
+                error_log('[tasks] n8n/php DIVERGENCE (recheck) task=' . $per['key'] . ' n8n_conflict=' . json_encode($res['conflict'])
+                    . ' php_conflict=' . json_encode($phpConf !== []));
+            }
         }
-        $b = $batch[$id];
-        // Сверка с PHP-эталоном (логируем расхождение, запись идёт по вердикту n8n).
-        $phpConf = tasks_blocked_from_facts($matrix, $b['from'], $b['to']);
-        $phpConf = array_values(array_filter($phpConf, static fn($x) => in_array($x['employee_id'], $b['ids'], true)));
-        if (($phpConf !== []) !== $res['conflict']) {
-            error_log('[tasks] n8n/php DIVERGENCE (recheck) task=' . $id . ' n8n_conflict=' . json_encode($res['conflict'])
-                . ' php_conflict=' . json_encode($phpConf !== []));
+        if (!$complete) {
+            continue;
         }
         $pdo->beginTransaction();
         try {
@@ -872,11 +1050,11 @@ function tasks_recheck_pending(PDO $pdo, int $limit = TASKS_RECHECK_BATCH, int $
             if ($upd->rowCount() === 1) {
                 audit($pdo, 'task.recheck', 'system', null, 'task', $id, [
                     'check_state'        => 'ok',
-                    'conflict'           => $res['conflict'],
-                    'blocked_days_count' => count($res['blocked_days']),
+                    'conflict'           => $conflict,
+                    'blocked_days_count' => $blockedCount,
                 ]);
                 $stat['resolved']++;
-                if ($res['conflict']) {
+                if ($conflict) {
                     $stat['conflicts']++;
                 }
             }
