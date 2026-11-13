@@ -89,29 +89,45 @@
    * tasks → { empId: { api, frames:[{s,e,l,r}], icons:{doy:{count,conflict,titles[]}} } }
    * Только status==='open' и не архив. Рамка — union периодов задач сотрудника (пересекающиеся
    * сливаются, смежные — нет). Иконка — только если первый день срока попал в показанный год.
+   * V6.3-2 (Д-1): у задачи с повторами «срок» = основной период + период каждого повтора
+   * (t.occurrences[{start_at,end_at}]): рамка и иконка (первый день каждого периода) — на днях всех повторов;
+   * иконка считает ЗАДАЧИ, а не выполнения (основной срок и повтор в один день — одна задача).
    */
+  function taskSegments(t) {
+    var segs = [], f = ymdOf(t.first_day || t.start_at);
+    if (!f) return segs;
+    segs.push({ f: f, l: ymdOf(t.last_day || t.end_at) || f });
+    (Array.isArray(t.occurrences) ? t.occurrences : []).forEach(function (o) {
+      var of = ymdOf(o && o.start_at);
+      if (!of) return;
+      segs.push({ f: of, l: ymdOf(o.end_at) || of });
+    });
+    return segs;
+  }
   function buildPlan(tasks, year) {
     var total = isLeap(year) ? 366 : 365, byEmp = {};
     (tasks || []).forEach(function (t) {
       if (!t || t.status !== 'open' || Number(t.archived) === 1) return;
-      var f = ymdOf(t.first_day || t.start_at);
-      if (!f) return;
-      var l = ymdOf(t.last_day || t.end_at) || f;
-      var ts = doyIn(f, year), te = doyIn(l, year);
-      if (te < ts) te = ts;
-      if (te < 1 || ts > total) return;                 // срок вне показанного года
-      var firstInYear = ts >= 1 && ts <= total;
+      var segs = taskSegments(t).map(function (s) {
+        var ts = doyIn(s.f, year), te = doyIn(s.l, year);
+        if (te < ts) te = ts;
+        return { ts: ts, te: te };
+      }).filter(function (s) { return !(s.te < 1 || s.ts > total); });          // срок вне показанного года
+      if (!segs.length) return;
       (t.assignees || []).forEach(function (a) {
         var e = domEmp(a && a.employee_id);
         if (!e) return;
-        var rec = byEmp[e] || (byEmp[e] = { api: String(a.employee_id), iv: [], icons: {} });
-        rec.iv.push({ ts: ts, te: te });
-        if (firstInYear) {
-          var ic = rec.icons[ts] || (rec.icons[ts] = { count: 0, conflict: false, titles: [] });
-          ic.count++;
-          if (t.conflict) ic.conflict = true;
-          ic.titles.push(String(t.title || ''));
-        }
+        var rec = byEmp[e] || (byEmp[e] = { api: String(a.employee_id), iv: [], icons: {} }), iconDays = {};
+        segs.forEach(function (s) {
+          rec.iv.push({ ts: s.ts, te: s.te });
+          if (s.ts >= 1 && s.ts <= total && !iconDays[s.ts]) {
+            iconDays[s.ts] = true;
+            var ic = rec.icons[s.ts] || (rec.icons[s.ts] = { count: 0, conflict: false, titles: [] });
+            ic.count++;
+            if (t.conflict) ic.conflict = true;
+            ic.titles.push(String(t.title || ''));
+          }
+        });
       });
     });
     Object.keys(byEmp).forEach(function (e) {

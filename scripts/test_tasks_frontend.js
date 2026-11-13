@@ -1547,6 +1547,110 @@ async function main() {
         w.every((r) => r.status === 403) && still.title === 'Правка из другой вкладки' && still.status === 'open' && still.archived === 0, w.map((r) => r.status).join(','));
     }
 
+    // ---------- V6.3-2 (Д-1): повторяющиеся задачи — форма, Список, Доска, карточка ----------
+    {
+      const OD = '2099-05-04';                                   // основная дата (понедельник)
+      const getT = async (id) => (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + id)).json.task;
+      await A.T.open({ view: 'list' }); await A.settle();
+      await A.click('newTask');
+      check('V632-1 форма создания: раздел «Повторения» с «+ Добавить повтор»; повторов нет', A.has('data-tk-act="addOcc"') && A.has('+ Добавить повтор') && A.has('Повторения') && A.has('повторов нет') && A.S.form.draft.occ.length === 0);
+      await A.field('title', 'Пойти погулять');
+      await A.field('assigneePick', e1);
+      await A.field('kind', 'period');
+      await A.field('startDate', OD); await A.field('startTime', '13:00');
+      await A.field('endDate', OD); await A.field('endTime', '14:00');
+      await A.click('addOcc');
+      check('V632-2 «+ Добавить повтор»: строка с датой (день после основной) и временем задачи 13:00; поля даты и времени, кнопка ×',
+        A.S.form.draft.occ.length === 1 && A.S.form.draft.occ[0].date === U.addDays(OD, 1) && A.S.form.draft.occ[0].time === '13:00' && A.findTag('data-tk-occ-date', '0') && A.findTag('data-tk-occ-time', '0') && A.has('data-tk-act="removeOcc"'));
+      await A.change('data-tk-occ-date', '0', U.addDays(OD, 10));
+      await A.change('data-tk-occ-time', '0', '14:30');
+      await A.click('addOcc');
+      await A.change('data-tk-occ-date', '1', U.addDays(OD, 2));
+      check('V632-3 список повторов отсортирован по возрастанию после правки даты (строка с 06.05 встала первой, 14.05 14:30 — второй)',
+        A.S.form.draft.occ.map((r) => r.date + 'T' + r.time).join() === [U.addDays(OD, 2) + 'T13:00', U.addDays(OD, 10) + 'T14:30'].join() &&
+        A.findTag('data-tk-occ-date', '0').attrs.value === U.addDays(OD, 2) && A.findTag('data-tk-occ-date', '1').attrs.value === U.addDays(OD, 10));
+      // ошибка у нужной строки: повтор = основная дата и время
+      await A.change('data-tk-occ-date', '0', OD);
+      const p0 = A.calls.filter((c) => c.method === 'POST').length;
+      await A.click('saveForm');
+      check('V632-4 повтор совпал с основной датой (04.05 13:00): запрос не ушёл, ошибка у строки 1 (tk-occ-bad), форма открыта',
+        A.calls.filter((c) => c.method === 'POST').length === p0 && A.S.form && A.S.form.occErr && A.S.form.occErr.index === 0 && A.has('tk-occ-bad') && A.has('data-tk-occ-err="0"') && /совпадает с основной/.test(A.root.innerHTML));
+      await A.change('data-tk-occ-time', '0', '15:00');
+      check('V632-5 после правки строки ошибка снята', A.S.form.occErr === null && !A.has('tk-occ-bad'));
+      // дубль между повторами
+      await A.change('data-tk-occ-date', '0', U.addDays(OD, 10)); await A.change('data-tk-occ-time', '1', '14:30');
+      await A.click('saveForm');
+      check('V632-6 два одинаковых повтора: ошибка «совпадает с повтором 1» у второй строки, запрос не ушёл', A.S.form && A.S.form.occErr && A.S.form.occErr.index === 1 && /совпадает с повтором 1/.test(A.root.innerHTML));
+      await A.click('removeOcc', (d) => d.idx === '1');
+      check('V632-7 × удаляет именно эту строку, ошибка снята', A.S.form.draft.occ.length === 1 && A.S.form.occErr === null);
+      await A.click('addOcc'); await A.change('data-tk-occ-date', '1', U.addDays(OD, 2));
+      await A.click('saveForm');
+      const post = A.calls.filter((c) => c.method === 'POST' && c.url === 'api/tasks.php').pop();
+      check('V632-8 POST: occurrences — по возрастанию, только start_at (конец считает сервер)',
+        post && JSON.stringify(post.body.occurrences) === JSON.stringify([{ start_at: U.addDays(OD, 2) + 'T13:00' }, { start_at: U.addDays(OD, 10) + 'T14:30' }]), JSON.stringify(post && post.body.occurrences));
+      const wk = A.S.tasks.find((t) => t.title === 'Пойти погулять');
+      const wks = wk && await getT(wk.id);
+      check('V632-9 задача создана: одна запись, два повтора; концы повторов по длительности задачи (1 ч): 06.05 13:00–14:00, 14.05 14:30–15:30; форма закрыта',
+        wk && A.S.form === null && wks.occurrences.length === 2 && wks.occurrences[0].end_at === U.addDays(OD, 2) + 'T14:00' && wks.occurrences[1].end_at === U.addDays(OD, 10) + 'T15:30' && A.S.tasks.filter((t) => t.title === 'Пойти погулять').length === 1, JSON.stringify(wks && wks.occurrences));
+      // Список
+      await A.T.open({ view: 'list' }); await A.settle();
+      const rowsHtml = A.root.innerHTML.split('<tr').filter((r) => r.includes('Пойти погулять'));
+      check('V632-10 Список: одна строка, в «Сроке» ближайшая дата и «↻ 2», в подсказке все даты выполнения (основная + повторы)',
+        rowsHtml.length === 1 && rowsHtml[0].includes('data-tk-occ-n="2"') && rowsHtml[0].includes('↻ 2') && /Повторов: 2/.test(rowsHtml[0]) && rowsHtml[0].includes('06.05') && rowsHtml[0].includes('14.05'), rowsHtml[0] && rowsHtml[0].slice(0, 400));
+      check('V632-11 «Срок» строки — next_at (ближайшее выполнение 04.05 13:00 — 14:00)', rowsHtml[0].includes('04.05') && A.S.tasks.find((t) => t.id === wk.id).next_at === OD + 'T13:00');
+      // Доска
+      await A.click('setView', (d) => d.view === 'board');
+      const tile = A.root.innerHTML.split('class="tk-card').filter((x) => x.includes('data-id="' + wk.id + '"'));
+      check('V632-12 Доска: одна плитка, в плитке «↻ 2»', tile.length === 1 && tile[0].includes('data-tk-occ-n="2"'));
+      // Карточка
+      await A.click('openTask', (d) => d.id === wk.id);
+      const dates = (A.root.innerHTML.split('class="tk-dates"')[1] || '').split('</ul>')[0];
+      check('V632-13 карточка: блок «Даты выполнения · 3» — основная и два повтора по возрастанию, ближайшая отмечена',
+        A.has('Даты выполнения · 3') && (dates.match(/<li/g) || []).length === 3 && dates.indexOf('04.05') < dates.indexOf('06.05') && dates.indexOf('06.05') < dates.indexOf('14.05') && /tk-next/.test(dates) && /ближайшая/.test(dates), dates);
+      // правка: повторы подгружены; удалить один; сохранить → PUT с полным набором
+      await A.click('editTask', (d) => d.id === wk.id);
+      check('V632-14 правка: два повтора подгружены в форму (дата + время)', A.S.form.draft.occ.length === 2 && A.S.form.draft.occ[0].date === U.addDays(OD, 2) && A.S.form.draft.occ[1].time === '14:30' && A.count('data-tk-occrow=') === 2);
+      await A.click('removeOcc', (d) => d.idx === '0');
+      await A.click('saveForm');
+      const put = A.calls.filter((c) => c.method === 'PUT').pop(), wks2 = await getT(wk.id);
+      check('V632-15 PUT с occurrences (1 шт.) — полная замена набора; на сервере остался 14.05 14:30, основная дата прежняя',
+        put && put.body.occurrences.length === 1 && wks2.occurrences.length === 1 && wks2.occurrences[0].start_at === U.addDays(OD, 10) + 'T14:30' && wks2.start_at === OD + 'T13:00', JSON.stringify(put && put.body.occurrences));
+      // смена длительности пересчитывает концы повторов
+      await A.click('editTask', (d) => d.id === wk.id);
+      await A.field('endTime', '16:00');
+      await A.click('saveForm');
+      const wks3 = await getT(wk.id);
+      check('V632-16 длительность задачи изменена (13:00–16:00): конец повтора пересчитан (14:30–17:30)', wks3.occurrences[0].end_at === U.addDays(OD, 10) + 'T17:30', JSON.stringify(wks3.occurrences));
+      // все повторы убраны
+      await A.click('editTask', (d) => d.id === wk.id);
+      await A.click('removeOcc', (d) => d.idx === '0');
+      await A.click('saveForm');
+      const wks4 = await getT(wk.id);
+      check('V632-17 все повторы убраны: occurrences = [], в Списке «↻» нет', wks4.occurrences.length === 0 && (await A.T.open({ view: 'list' }), await A.settle(), !A.root.innerHTML.split('<tr').filter((r) => r.includes('Пойти погулять'))[0].includes('data-tk-occ-n')));
+      // задача без времени: в форме у повтора только дата
+      await A.click('newTask');
+      await A.field('title', 'Повтор без времени');
+      await A.field('assigneePick', e1);
+      await A.field('startDate', OD);
+      await A.click('addOcc');
+      check('V632-18 задача без времени: у строки повтора только дата (селектора времени нет)', A.findTag('data-tk-occ-date', '0') && !A.findTag('data-tk-occ-time', '0'));
+      await A.click('saveForm');
+      const nt = A.calls.filter((c) => c.method === 'POST' && c.url === 'api/tasks.php').pop();
+      check('V632-19 задача без времени: occurrences уходят датой без времени', nt && nt.body.occurrences.length === 1 && nt.body.occurrences[0].start_at === U.addDays(OD, 1), JSON.stringify(nt && nt.body.occurrences));
+      // блок: повтор на день больничного исполнителя (e3 болен 2099-06-10, см. E35)
+      await A.click('newTask');
+      await A.field('title', 'Повтор на больничный');
+      await A.field('assigneePick', e3);
+      await A.field('startDate', '2099-06-01'); await A.field('startTime', '10:00'); await A.field('kind', 'period'); await A.field('endDate', '2099-06-01'); await A.field('endTime', '11:00');
+      await A.click('addOcc'); await A.change('data-tk-occ-date', '0', '2099-06-03');
+      await A.click('addOcc'); await A.change('data-tk-occ-date', '1', '2099-06-10');
+      await A.click('saveForm');
+      check('V632-20 повтор на больничном: задача не создана, ошибка у нужной строки (2), человеческий текст с датой и ФИО, форма открыта',
+        A.S.form && A.S.form.occErr && A.S.form.occErr.index === 1 && A.has('data-tk-occ-err="1"') && /10\.06/.test(A.S.form.occErr.text) && /больнич/.test(A.S.form.occErr.text) &&
+        !(await http(base, adminCk, 'GET', 'api/tasks.php')).json.tasks.some((t) => t.title === 'Повтор на больничный'), JSON.stringify(A.S.form && A.S.form.occErr));
+      await A.click('cancelForm');
+    }
+
     // вкладка не залипает: уход на «Матрицу»
     A.els.matrixWrapper.style.display = 'block';
     A.els.tabMatrix.click();

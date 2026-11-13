@@ -57,8 +57,15 @@
     invalid_checklist: 'Пункты чек-листа не должны быть пустыми (максимум 300 символов).',
     checklist_too_many: 'Слишком много пунктов чек-листа (максимум 50).',
     task_archived: 'Задача в архиве и не может быть изменена.',
-    version_required: 'Не передана версия задачи — перезагрузите карточку.'
+    version_required: 'Не передана версия задачи — перезагрузите карточку.',
+    // V6.3-2 (Д-1): повторы; понятный текст приходит с сервера (message), эти — запасные
+    invalid_occurrence: 'Повтор указан неверно.',
+    occurrence_duplicate: 'Повтор совпадает с основной датой задачи или другим повтором.',
+    occurrences_too_many: 'Повторов не больше 100.',
+    invalid_occurrences: 'Повторы заданы неверно.',
+    occurrence_not_found: 'Повтор не найден (возможно, уже удалён) — календарь обновлён.'
   };
+  var OCC_MAX = 100;                           // V6.3-2: максимум повторов у задачи (как на сервере)
 
   // ---------------------------------------------------------------- state
   var S = {
@@ -71,7 +78,7 @@
     view: 'list',                 // list | board | calendar
     filters: { emp: '', due: '', priority: '', label: '', status: '' },
     selectedId: null,
-    cal: { mode: 'week', anchor: null, emp: '', only: false, adAll: false, scrollTop: null, scrollLeft: 0, fresh: false },
+    cal: { mode: 'week', anchor: null, emp: '', only: false, adAll: false, scrollTop: null, scrollLeft: 0, fresh: false, flashOcc: null },
     form: null,                   // { id, version, draft, blocked, error } | null
     msg: null,                    // { type: 'error'|'ok'|'info', text }
     loading: false,
@@ -123,6 +130,38 @@
     if (sd === ed) return fmtDay(sd) + (st ? ' ' + st : '') + (et ? ' — ' + et : '');
     return fmtDay(sd) + (st ? ' ' + st : '') + ' — ' + fmtDay(ed) + (et ? ' ' + et : '');
   }
+
+  // ---- V6.3-2 (Д-1): повторы. Задача = одна запись; выполнений несколько: основная дата + t.occurrences[{id,start_at,end_at}]
+  function occsOf(t) { return Array.isArray(t && t.occurrences) ? t.occurrences : []; }
+  function whenKey(s) { var m = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/.exec(String(s || '')); return m ? m[1] + (m[2] ? 'T' + m[2] : '') : String(s || ''); }
+  // все выполнения по возрастанию: [{ start_at, end_at, main, id }]
+  function allWhens(t) {
+    var out = [{ start_at: t.start_at, end_at: t.end_at == null ? null : t.end_at, main: true, id: null }];
+    occsOf(t).forEach(function (o) { out.push({ start_at: o.start_at, end_at: o.end_at == null ? null : o.end_at, main: false, id: o.id }); });
+    return out.sort(function (a, b) { return whenKey(a.start_at) < whenKey(b.start_at) ? -1 : whenKey(a.start_at) > whenKey(b.start_at) ? 1 : 0; });
+  }
+  // ближайшее предстоящее выполнение (сервер: next_at = start_at этого выполнения; все прошли — последнее)
+  function nextWhen(t) {
+    var all = allWhens(t), key = whenKey(t.next_at || t.start_at);
+    for (var i = 0; i < all.length; i++) if (whenKey(all[i].start_at) === key) return all[i];
+    return all[0];
+  }
+  function dueText(t) { return fmtPeriod(nextWhen(t)); }                       // «Срок» Списка/Доски — next_at
+  function allDatesText(t) {                                                     // подсказка: все даты выполнения
+    return allWhens(t).map(function (w) { return (w.main ? '' : '↻ ') + fmtPeriod(w); }).join('\n');
+  }
+  function occBadge(t) {
+    var n = occsOf(t).length;
+    if (!n) return '';
+    return ' <span class="tk-occ-n" data-tk-occ-n="' + n + '" title="' + esc('Повторов: ' + n + '. Даты выполнения:\n' + allDatesText(t)) + '">↻ ' + n + '</span>';
+  }
+  // порядок по сроку: по next_at (стабильно — при равенстве остаётся порядок сервера)
+  function sortByDue(rows) {
+    return rows.map(function (t, i) { return { t: t, i: i, k: whenKey(t.next_at || t.start_at) }; })
+      .sort(function (a, b) { return a.k < b.k ? -1 : a.k > b.k ? 1 : a.i - b.i; })
+      .map(function (x) { return x.t; });
+  }
+  function taskDays(t) { return Array.isArray(t.days) && t.days.length ? t.days : [t.first_day, t.last_day].filter(Boolean); }
 
   function isAdmin() { return !!(S.user && (S.user.isAdmin === true || S.user.role === 'admin')); }
   function canWrite() { return isAdmin(); }
@@ -217,6 +256,8 @@
     if (r && r.status === 401) code = 'unauthorized';
     if (r && r.status === 403) code = 'forbidden';
     if (code === 'invalid_label' && r.data && r.data.message) return String(r.data.message);     // V6.2 (W-4): понятный текст сервера
+    // V6.3-2: ошибки повторов несут понятный текст сервера («Повтор 2 (…) совпадает с …»)
+    if (/^(invalid_occurrence|occurrence_duplicate|occurrences_too_many|invalid_occurrences)$/.test(code || '') && r.data && r.data.message) return String(r.data.message);
     return ERR_TEXT[code] || ('Ошибка сервера' + (code ? ' (' + code + ')' : '') + '.');
   }
 
@@ -307,12 +348,12 @@
   }
   function matchDue(t, due) {
     if (!due) return true;
-    var today = todayYmd();
-    if (due === 'overdue') return t.status === 'open' && t.last_day < today;
-    if (due === 'today') return t.first_day <= today && today <= t.last_day;
+    var today = todayYmd(), days = taskDays(t);          // V6.3-2: дни ВСЕХ выполнений (основная дата + повторы)
+    if (due === 'overdue') return t.status === 'open' && days[days.length - 1] < today;
+    if (due === 'today') return days.indexOf(today) >= 0 || (t.first_day <= today && today <= t.last_day);
     if (due === 'week') {
-      var ws = weekStart(today);
-      return t.first_day <= addDays(ws, 6) && t.last_day >= ws;
+      var ws = weekStart(today), we = addDays(ws, 6);
+      return days.some(function (d) { return d >= ws && d <= we; }) || (t.first_day <= we && t.last_day >= ws);
     }
     return true;
   }
@@ -493,7 +534,7 @@
 
   function renderList() {
     var f = S.filters;
-    var rows = sortRows(applyFilters(S.tasks, f, true));
+    var rows = sortRows(sortByDue(applyFilters(S.tasks, f, true)));      // V6.3-2: по умолчанию — по сроку (next_at)
     var h = '<div class="tk-filters">' +
       '<label>Сотрудник <select data-tk-filter="emp">' + empOptions(f.emp, 'Все', true) + '</select></label>' +
       '<label>Срок <select data-tk-filter="due">' + optionsHtml([
@@ -519,7 +560,7 @@
       h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board">' +
         '<td class="tk-c-task"><b>' + esc(t.title) + '</b><div class="tk-badges">' + badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></td>' +
         descCell(t) + '<td class="tk-c-exec">' + nameLinks(t, true) + '</td>' +
-        '<td class="tk-nowrap">' + esc(fmtPeriod(t)) + '</td>' +
+        '<td class="tk-nowrap" data-tk-due="1"' + (occsOf(t).length ? ' title="' + esc(allDatesText(t)) + '"' : '') + '>' + esc(dueText(t)) + occBadge(t) + '</td>' +
         '<td class="' + (+t.priority === 1 ? 'tk-hi' : '') + '">' + esc(PRIORITY_TEXT[t.priority] || t.priority) + '</td>' +
         '<td>' + (t.status === 'closed' ? 'Закрыта' : 'Открыта') + '</td>' +
         (admin ? '<td class="tk-c-edit"><button type="button" class="tk-editbtn" data-tk-act="editTask" data-id="' + esc(t.id) + '" title="Править" aria-label="Править задачу «' + esc(t.title) + '»">✎</button></td>' : '') +
@@ -533,13 +574,13 @@
     return '<div class="tk-card' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '"' +
       ' data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board"' + (admin ? ' draggable="true" data-tk-drag="' + esc(t.id) + '"' : '') + '>' +
       '<b>' + esc(t.title) + '</b>' +
-      '<div class="tk-sub"' + (!isOrphan(t) && namesTitle(t) ? ' title="' + esc(namesTitle(t)) + '"' : '') + '>' + (isOrphan(t) ? plateHtml(t) : nameStrike(t)) + ' · ' + esc(fmtPeriod(t)) + '</div>' +
+      '<div class="tk-sub"' + (!isOrphan(t) && namesTitle(t) ? ' title="' + esc(namesTitle(t)) + '"' : '') + '>' + (isOrphan(t) ? plateHtml(t) : nameStrike(t)) + ' · ' + esc(dueText(t)) + occBadge(t) + '</div>' +
       '<div class="tk-badges">' + statusTag(t, true) + priorityTag(t, true) +
       badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></div>';
   }
 
   function renderBoard() {
-    var rows = applyFilters(S.tasks, { emp: S.filters.emp }, false);
+    var rows = sortByDue(applyFilters(S.tasks, { emp: S.filters.emp }, false));
     var orph = rows.filter(isOrphan);
     var open = rows.filter(function (t) { return t.status === 'open' && !isOrphan(t); });
     var closed = rows.filter(function (t) { return t.status === 'closed'; }).sort(function (a, b) {
@@ -679,15 +720,39 @@
       style = ' style="top:' + pos.top + 'px;height:' + pos.h + 'px;left:' + round4(pos.col * 100 / pos.cols) + '%;width:calc(' + round4(100 / pos.cols) + '% - 6px)"';
       data = ' data-col="' + pos.col + '" data-cols="' + pos.cols + '" data-s="' + pos.s + '" data-e="' + pos.e + '"';
     }
-    return '<div class="tk-ev' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.conflict ? ' tk-conf' : '') +
-      (orph ? ' tk-orph' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + (t.id === S.cal.flashId ? ' tk-flash' : '') +
+    // V6.3-2: плитка повтора — значок ↻, data-occ; клик открывает карточку той же задачи (data-id = id задачи)
+    var isOcc = t._occ != null;
+    if (isOcc) { tip.splice(1, 0, 'Повтор (↻) — задача выполняется и на другие даты'); data += ' data-occ="' + esc(t._occ) + '"'; }
+    return '<div class="tk-ev' + (t.id === S.selectedId ? ' tk-sel' : '') + (t.conflict ? ' tk-conf' : '') + (isOcc ? ' tk-occ' : '') +
+      (orph ? ' tk-orph' : '') + (t.status === 'closed' ? ' tk-dim' : '') + (hl ? ' tk-hl' : '') + (isOcc && t._occ === S.cal.flashOcc ? ' tk-flash' : '') +
       (canWrite() ? ' tk-dnd' : '') + cls + '" data-tk-act="openTask" data-id="' + esc(t.id) + '"' + (canWrite() ? ' data-tk-dnd="1"' : '') + data + style +
       ' title="' + esc(tip.filter(Boolean).join('\n')) + '">' +
+      (isOcc ? '<span class="tk-ev-rep" aria-label="Повтор">↻</span>' : '') +
       (when ? '<span class="tk-ev-when">' + esc(when) + '</span> ' : '') +
       '<b class="tk-ev-title">' + esc(t.title) + '</b>' +
       (orph ? '<span class="tk-ev-ic tk-ic-orph" title="Без исполнителя">0</span>' : '') +
       (t.conflict ? '<span class="tk-ev-ic tk-ic-conf" title="Конфликт">!</span>' : '') +
       (t.check_state === 'pending' ? '<span class="tk-ev-ic tk-ic-pend" title="Не проверено">?</span>' : '') + '</div>';
+  }
+  // V6.3-2 (Д-1): календарь рисует «выполнения»: основная дата — сама задача, каждый повтор — копия-«экземпляр»
+  // с датами повтора (_occ = id повтора). Остальные поля (тема, исполнители, статус…) общие с задачей.
+  function calInstOf(t, occ) {
+    var s = dateOf(occ.start_at), e = occ.end_at ? dateOf(occ.end_at) : s;
+    return Object.assign({}, t, { start_at: occ.start_at, end_at: occ.end_at == null ? null : occ.end_at, first_day: s, last_day: e < s ? s : e, _occ: occ.id });
+  }
+  function calInstById(taskId, occId) {
+    var t = findTask(taskId);
+    if (!t) return null;
+    for (var i = 0, os = occsOf(t); i < os.length; i++) if (String(os[i].id) === String(occId)) return calInstOf(t, os[i]);
+    return null;
+  }
+  function calInstances(tasks) {
+    var out = [];
+    tasks.forEach(function (t) {
+      out.push(t);
+      occsOf(t).forEach(function (o) { out.push(calInstOf(t, o)); });
+    });
+    return out;
   }
   function calDayTasks(tasks, d) {
     return tasks.filter(function (t) { return t.first_day <= d && d <= t.last_day; });
@@ -697,9 +762,9 @@
     var timed = [], allDay = [];
     calDayTasks(tasks, d).forEach(function (t) {
       var sl = calSlotOf(t);
-      if (sl) timed.push({ t: t, s: sl.s, e: sl.e, k: String(t.id) }); else allDay.push(t);
+      if (sl) timed.push({ t: t, s: sl.s, e: sl.e, k: String(t.id) + (t._occ != null ? '#' + t._occ : '') }); else allDay.push(t);
     });
-    allDay.sort(function (a, b) { return String(a.title).localeCompare(String(b.title)); });
+    allDay.sort(function (a, b) { return String(a.title).localeCompare(String(b.title)) || (a._occ != null ? 1 : 0) - (b._occ != null ? 1 : 0); });
     calLayout(timed);
     return { d: d, timed: timed, allDay: allDay };
   }
@@ -707,7 +772,7 @@
     var days = calDays();
     var today = todayYmd();
     var canClick = canWrite();
-    var tasks = S.tasks.filter(function (t) { return !(S.cal.only && S.cal.emp) || hasAssignee(t, S.cal.emp); });
+    var tasks = calInstances(S.tasks.filter(function (t) { return !(S.cal.only && S.cal.emp) || hasAssignee(t, S.cal.emp); }));   // V6.3-2: + плитки повторов
     var h = '<div class="tk-filters">' +
       '<button type="button" class="tk-btn" data-tk-act="calPrev">◀</button>' +
       '<button type="button" class="tk-btn" data-tk-act="calToday">Сегодня</button>' +
@@ -828,14 +893,12 @@
     return { start_at: whenAt(tgt.date, min), end_at: end, first_day: tgt.date, last_day: tgt.date };
   }
 
-  // W-6: снимок задачи для буфера (только то, что копируется). Удалённые исполнители/наблюдатели не копируются.
-  function calClipOf(t) {
-    var act = function (a) { return !a.removed; }, id = function (a) { return a.employee_id; };
+  // W-6 → V6.3-2 (Д-1): снимок для буфера. «Вставить» теперь ДОБАВЛЯЕТ ПОВТОР этой же задачи (новая задача не создаётся),
+  // поэтому копируется только ссылка на задачу (id, версия — запасная, актуальная берётся при вставке) и её срок для расчёта ячейки.
+  // occId — id повтора, если скопирована плитка повтора.
+  function calClipOf(t, occId) {
     return {
-      title: String(t.title), description: t.description == null ? '' : String(t.description),
-      priority: +t.priority || 2, label: t.label == null ? '' : String(t.label),
-      assignees: assigneesOf(t).filter(act).map(id), watchers: ((t && t.watchers) || []).filter(act).map(id),
-      checklist: (t.checklist || []).map(function (c) { return String(c.text).trim(); }).filter(Boolean),
+      id: t.id, version: t.version, title: String(t.title), occ: occId == null ? null : occId,
       start_at: t.start_at, end_at: t.end_at == null ? null : t.end_at, first_day: t.first_day, last_day: t.last_day
     };
   }
@@ -870,20 +933,13 @@
     }
     return { start_at: whenAt(tgt.date, min), end_at: end, first_day: tgt.date, last_day: last };
   }
-  // тело POST для «Вставить»: статус «Открыта» ставит сервер; чек-лист без отметок
-  function calCopyPayload(clip, calc) {
-    return {
-      title: clip.title, description: clip.description, assignees: clip.assignees.slice(), watchers: clip.watchers.slice(),
-      priority: clip.priority, label: clip.label,
-      checklist: clip.checklist.map(function (x) { return { text: x, done: false }; }),
-      start_at: calc.start_at, end_at: calc.end_at
-    };
-  }
   function fmtWhen(startAt) { var tm = timeOf(startAt); return fmtDm(dateOf(startAt)) + (tm ? ' ' + tm : ''); }
 
-  // --- сохранение переноса (существующий update с version); плитка переносится сразу, при ошибке — откат
+  // --- сохранение переноса. Основная дата — существующий update с version (W-5); плитка переносится сразу, при ошибке — откат.
+  // Плитка повтора (t._occ) → calMoveOcc: переносится только этот повтор (occ_move).
   function calMove(t, calc) {
     if (!canWrite() || !t || !calc || calc.unchanged || calc.error) return Promise.resolve();
+    if (t._occ != null) return calMoveOcc(t, calc);
     if (S.busy) { toast('Дождитесь завершения предыдущего действия.', 'info'); return Promise.resolve(); }
     var old = t, id = t.id;
     S.msg = null;
@@ -909,7 +965,7 @@
         render();
         return load(true);
       }
-      if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') text = 'Перенос невозможен: исполнитель в эти дни на больничном или в командировке.';
+      if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') text = r.data.message ? 'Перенос невозможен: ' + r.data.message : 'Перенос невозможен: исполнитель в эти дни на больничном или в командировке.';
       else text = 'Перенос не выполнен: ' + errText(r);
       S.msg = { type: 'error', text: text };
       toast(text, 'error');
@@ -917,46 +973,121 @@
     });
   }
 
-  // --- «Вставить»: сразу создаёт копию (существующий create)
+  // V6.3-2: перенос ОДНОГО повтора (POST action=occ_move с version задачи); основная дата и другие повторы не меняются
+  function calMoveOcc(inst, calc) {
+    var main = findTask(inst.id), occId = inst._occ;
+    if (!main) return Promise.resolve();
+    if (S.busy) { toast('Дождитесь завершения предыдущего действия.', 'info'); return Promise.resolve(); }
+    var old = main;
+    S.msg = null;
+    mergeTask(Object.assign({}, main, { occurrences: occsOf(main).map(function (o) {
+      return String(o.id) === String(occId) ? { id: o.id, start_at: calc.start_at, end_at: calc.end_at == null ? null : calc.end_at } : o;
+    }) }));
+    render();
+    S.busy = true;
+    return api('POST', API + '?id=' + encodeURIComponent(main.id) + '&action=occ_move', { version: main.version, occurrence_id: occId, start_at: calc.start_at }).then(function (r) {
+      S.busy = false;
+      if (r.ok && r.data && r.data.success) {
+        notifyChanged();
+        if (r.data.task) mergeTask(r.data.task);
+        toast('Повтор перенесён: ' + fmtWhen(r.data.occurrence ? r.data.occurrence.start_at : calc.start_at), 'success');
+        return load(true);
+      }
+      return occFail(r, old, 'Перенос повтора не выполнен');
+    });
+  }
+  // общий разбор неудачи действия с повтором: откат плитки, 409 → свежая задача, понятное сообщение сервера
+  function occFail(r, old, prefix) {
+    var code = r.data && r.data.error, text;
+    if (old) mergeTask(old);                               // откат плитки
+    if (r.status === 409 && code === 'VERSION_CONFLICT') {
+      notifyChanged();
+      if (r.data.task) mergeTask(r.data.task);
+      text = 'Задача уже изменена другим пользователем — календарь обновлён, действие не выполнено. Повторите его при необходимости.';
+      S.msg = { type: 'error', text: text };
+      toast('Конфликт версий: календарь обновлён', 'error');
+      render();
+      return load(true);
+    }
+    if (r.status === 404 && code === 'occurrence_not_found') {
+      text = ERR_TEXT.occurrence_not_found;
+      notifyChanged();
+      S.msg = { type: 'error', text: text };
+      toast(text, 'error');
+      render();
+      return load(true);
+    }
+    if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') text = prefix + ': ' + (r.data.message || 'исполнитель в эти дни на больничном или в командировке.');
+    else text = prefix + ': ' + errText(r);
+    S.msg = { type: 'error', text: text };
+    toast(text, 'error');
+    render();
+    return Promise.resolve();
+  }
+
+  // --- «Вставить повтор»: добавляет повтор скопированной задачи (occ_add с version); новая задача НЕ создаётся
   function calPaste(tgt) {
     if (!canWrite() || !_clip) return Promise.resolve();
     if (S.busy) { toast('Дождитесь завершения предыдущего действия.', 'info'); return Promise.resolve(); }
     var calc = calPasteCalc(_clip, tgt);
     if (!calc || calc.error) return Promise.resolve();
+    var clip = _clip, cur = findTask(clip.id);
+    // повтор наследует «вид» срока задачи: у задачи без времени — только дата; у задачи со временем время обязательно
+    // (вставка в «Весь день» → время начала самой задачи)
+    var base = cur || clip, hasT = !!timeOf(base.start_at), startAt = calc.start_at;
+    if (!hasT) startAt = dateOf(startAt);
+    else if (!timeOf(startAt)) startAt = dateOf(startAt) + 'T' + timeOf(base.start_at);
+    calc = Object.assign({}, calc, { start_at: startAt });
     S.busy = true;
     S.msg = null;
-    return api('POST', API, calCopyPayload(_clip, calc)).then(function (r) {
+    return api('POST', API + '?id=' + encodeURIComponent(clip.id) + '&action=occ_add', { version: cur ? cur.version : clip.version, start_at: calc.start_at }).then(function (r) {
       S.busy = false;
       if (r.ok && r.data && r.data.success && r.data.task) {
-        var task = r.data.task;
+        var task = r.data.task, occ = r.data.occurrence || {};
         notifyChanged();
         mergeTask(task);
-        S.cal.flashId = task.id;
+        S.cal.flashOcc = occ.id == null ? null : occ.id;
         render();
-        calToast('Скопировано на ' + fmtWhen(task.start_at), 'Открыть', function () { S.selectedId = task.id; S.msg = null; render(); });
+        calToast('Повтор добавлен на ' + fmtWhen(occ.start_at || calc.start_at), 'Открыть', function () { S.selectedId = task.id; S.msg = null; render(); });
+        var flash = S.cal.flashOcc;
         setTimeout(function () {
-          if (S.cal.flashId !== task.id) return;
-          S.cal.flashId = null;
+          if (flash == null || S.cal.flashOcc !== flash) return;
+          S.cal.flashOcc = null;
           var el = DOM.root && DOM.root.querySelector ? DOM.root.querySelector('.tk-flash') : null;
           if (el && el.classList) el.classList.remove('tk-flash');
         }, 4500);
         return load(true);
       }
-      var code = r.data && r.data.error, text;
-      if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') text = 'Копия не создана: исполнитель в эти дни на больничном или в командировке.';
-      else text = 'Копия не создана: ' + errText(r);
-      S.msg = { type: 'error', text: text };
-      toast(text, 'error');
-      render();
+      return occFail(r, null, 'Повтор не добавлен');
     });
   }
-  function calCopy(id) {
+  function calCopy(id, occId) {
     var t = findTask(id);
     if (!canWrite() || !t) return;
-    var clip = calClipOf(t);
-    if (!clip.assignees.length) { toast('Копировать нельзя: у задачи нет действующих исполнителей.', 'error'); return; }
-    _clip = clip;
-    toast('Скопировано: «' + truncate(t.title, 40) + '». ПКМ по свободному месту календаря → «Вставить».', 'info');
+    _clip = calClipOf(t, occId);
+    toast('Скопировано: «' + truncate(t.title, 40) + '». ПКМ по свободному месту календаря → «Вставить повтор».', 'info');
+  }
+  // V6.3-2: «Удалить повтор» (ПКМ по плитке повтора), с подтверждением; удаляется только этот повтор — задача и остальные даты остаются
+  function calDeleteOcc(id, occId) {
+    var t = findTask(id), occ = null;
+    if (!canWrite() || !t) return Promise.resolve();
+    occsOf(t).forEach(function (o) { if (String(o.id) === String(occId)) occ = o; });
+    if (!occ) return Promise.resolve();
+    if (S.busy) { toast('Дождитесь завершения предыдущего действия.', 'info'); return Promise.resolve(); }
+    if (typeof window.confirm === 'function' && !window.confirm('Удалить повтор ' + fmtWhen(occ.start_at) + ' задачи «' + t.title + '»? Сама задача и её остальные даты останутся.')) return Promise.resolve();
+    S.busy = true;
+    S.msg = null;
+    return api('POST', API + '?id=' + encodeURIComponent(t.id) + '&action=occ_delete', { version: t.version, occurrence_id: occ.id }).then(function (r) {
+      S.busy = false;
+      if (r.ok && r.data && r.data.success) {
+        notifyChanged();
+        if (r.data.task) mergeTask(r.data.task);
+        render();
+        toast('Повтор удалён: ' + fmtWhen(occ.start_at), 'success');
+        return load(true);
+      }
+      return occFail(r, null, 'Повтор не удалён');
+    });
   }
 
   // --- всплывающее сообщение с действием (общий showToast действий не поддерживает)
@@ -1048,16 +1179,18 @@
     if (DRAG) { if (ev.preventDefault) ev.preventDefault(); dragAbort(); return; }
     var tile = t.closest('.tk-ev'), items = null, tgt = null;
     if (tile && tile.dataset && tile.dataset.id) {
-      var id = tile.dataset.id;
-      items = [{ label: 'Копировать', run: function () { calCopy(id); } }];
+      var id = tile.dataset.id, occ = tile.dataset.occ;
+      items = [{ label: 'Копировать', run: function () { calCopy(id, occ === undefined ? null : occ); } }];
+      // V6.3-2: плитка повтора — ещё и «Удалить повтор» (с подтверждением)
+      if (occ !== undefined) items.push({ label: 'Удалить повтор', run: function () { calDeleteOcc(id, occ); } });
     } else {
       var slot = t.closest('[data-tk-act="calCell"]'), ad = slot ? null : t.closest('.tk-ad-c');
       if (slot && slot.dataset && parseYmd(slot.dataset.date)) tgt = { kind: 'slot', date: slot.dataset.date, min: +slot.dataset.min };
       else if (ad && ad.dataset && parseYmd(ad.dataset.date)) tgt = { kind: 'allday', date: ad.dataset.date };
       if (!tgt) return;                                          // шапка, колонка часов и т. п. — родное меню
       items = [{
-        label: 'Вставить', disabled: !_clip,
-        title: _clip ? '' : 'Сначала скопируйте задачу: ПКМ по плитке → «Копировать»',
+        label: 'Вставить повтор', disabled: !_clip,
+        title: _clip ? 'Добавить скопированной задаче повтор на это время' : 'Сначала скопируйте задачу: ПКМ по плитке → «Копировать»',
         run: function () { calPaste(tgt); }
       }];
     }
@@ -1184,7 +1317,7 @@
     if (ev.buttons === 0) { dragAbort(); return; }                      // кнопку отпустили вне окна
     if (!D.started) {
       if (Math.abs(ev.clientX - D.x0) < CAL_DRAG_PX && Math.abs(ev.clientY - D.y0) < CAL_DRAG_PX) return;
-      var t = findTask(D.id);
+      var t = D.occ != null ? calInstById(D.id, D.occ) : findTask(D.id);       // V6.3-2: плитка повтора → «экземпляр» с датами повтора
       if (!t) { dragUnbind(); DRAG = null; return; }
       D.t = t;
       D.started = true;
@@ -1206,10 +1339,10 @@
     if (!el || !el.dataset || !el.dataset.id) return;
     var timed = el.dataset.s !== undefined, col = !timed && el.closest ? el.closest('[data-date]') : null;
     var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { top: ev.clientY };
-    var t = findTask(el.dataset.id);
+    var t = el.dataset.occ !== undefined ? calInstById(el.dataset.id, el.dataset.occ) : findTask(el.dataset.id);
     if (!t) return;
     DRAG = {
-      id: t.id, el: el, kind: timed ? 'timed' : 'allday', x0: ev.clientX, y0: ev.clientY, px: ev.clientX, py: ev.clientY,
+      id: t.id, occ: el.dataset.occ !== undefined ? el.dataset.occ : null, el: el, kind: timed ? 'timed' : 'allday', x0: ev.clientX, y0: ev.clientY, px: ev.clientX, py: ev.clientY,
       gy: ev.clientY - rect.top, gDate: timed ? t.first_day : (col && col.dataset.date) || t.first_day,
       started: false, cancelled: false, shadow: null, hit: null, calc: null, timer: null, wk: null, t: t
     };
@@ -1233,7 +1366,17 @@
     var h = '<aside class="tk-detail"><div class="tk-dhead"><b class="tk-dtitle">' + esc(t.title) + '</b>' +
       statusTag(t, true) + '</div>';
     h += '<div class="tk-badges">' + priorityTag(t, true) + badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div>';
-    h += '<div class="tk-kv"><span>Срок</span><b>' + esc(fmtPeriod(t)) + '</b></div>';
+    if (occsOf(t).length) {
+      // V6.3-2: перечень всех дат выполнения (основная + повторы); ближайшая (next_at) отмечена
+      var nk = whenKey(nextWhen(t).start_at);
+      h += '<div class="tk-kv" data-tk-dates="1"><span>Даты выполнения · ' + (occsOf(t).length + 1) + '</span><ul class="tk-dates">' + allWhens(t).map(function (w) {
+        var isNext = whenKey(w.start_at) === nk;
+        return '<li class="' + (isNext ? 'tk-next' : '') + '">' + (w.main ? '' : '<span class="tk-rep" title="Повтор">↻</span> ') + '<b>' + esc(fmtPeriod(w)) + '</b>' +
+          (w.main ? ' <span class="tk-muted">основная</span>' : '') + (isNext ? ' <span class="tk-tag">ближайшая</span>' : '') + '</li>';
+      }).join('') + '</ul></div>';
+    } else {
+      h += '<div class="tk-kv"><span>Срок</span><b>' + esc(fmtPeriod(t)) + '</b></div>';
+    }
     h += '<div class="tk-kv"><span>Исполнители</span><div>' + nameLinks(t) + '</div></div>';
     if (isOrphan(t)) {
       var rd = removedDate(t);
@@ -1293,7 +1436,7 @@
     var dr = {
       title: '', description: '', assignees: S.filters.emp ? [S.filters.emp] : [],
       watchers: [], kind: 'single', startDate: d, startTime: '', endDate: d, endTime: '',
-      priority: 2, labels: [], labelInput: '', checklist: []
+      priority: 2, labels: [], labelInput: '', checklist: [], occ: []
     };
     // V6-2 (R-10): дата/время из клика по ячейке календаря
     if (pre) ['kind', 'startDate', 'startTime', 'endDate', 'endTime'].forEach(function (k) { if (pre[k] !== undefined) dr[k] = pre[k]; });
@@ -1310,8 +1453,65 @@
       startDate: dateOf(t.start_at), startTime: timeOf(t.start_at),
       endDate: t.end_at ? dateOf(t.end_at) : dateOf(t.start_at), endTime: timeOf(t.end_at),
       priority: +t.priority || 2, labels: tagsOf(t), labelInput: '',
-      checklist: (t.checklist || []).map(function (c) { return { id: c.id, text: c.text, done: !!c.done }; })
+      checklist: (t.checklist || []).map(function (c) { return { id: c.id, text: c.text, done: !!c.done }; }),
+      occ: occsOf(t).map(function (o) { return { date: dateOf(o.start_at), time: timeOf(o.start_at) }; })     // V6.3-2: повторы (дата + время)
     };
+  }
+  // ---- V6.3-2 (Д-1): раздел «Повторения» формы. Строка = { date: 'YYYY-MM-DD', time: 'HH:MM' | '' }.
+  // У задачи без времени (startTime пуст) повтор — только дата (время строки игнорируется и не отправляется).
+  function occHasTime(d) { return !!d.startTime; }
+  function occKey(d, r) { return (r.date || '') + (occHasTime(d) ? 'T' + (r.time || d.startTime) : ''); }
+  function occSort(d) {
+    if (!d.occ) d.occ = [];
+    d.occ.sort(function (a, b) {
+      var x = occKey(d, a), y = occKey(d, b);
+      if (!a.date !== !b.date) return a.date ? -1 : 1;          // строки без даты — в конец
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+  }
+  // клиентская проверка повторов → { index, text } | { index: null, text } | null (сервер проверяет то же и сам)
+  function occDraftError(d) {
+    var rows = d.occ || [], seen = {}, mainKey = occKey(d, { date: d.startDate, time: d.startTime });
+    if (rows.length > OCC_MAX) return { index: null, text: 'Повторов не больше ' + OCC_MAX + '.' };
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!parseYmd(r.date)) return { index: i, text: 'Укажите дату повтора.' };
+      var k = occKey(d, r);
+      if (k === mainKey) return { index: i, text: 'Повтор совпадает с основной датой задачи — выберите другое время или дату.' };
+      if (seen[k] !== undefined) return { index: i, text: 'Повтор совпадает с повтором ' + (seen[k] + 1) + ' — удалите дубль.' };
+      seen[k] = i;
+    }
+    return null;
+  }
+  function occPayload(d) {
+    return (d.occ || []).map(function (r) { return { start_at: r.date + (occHasTime(d) ? 'T' + (r.time || d.startTime) : '') }; });
+  }
+  function occTimeOptions(value) {
+    var v = String(value || ''), items = [], m, i;
+    for (m = 0; m < 1440; m += CAL_SLOT_MIN) items.push({ value: hhmm(m), label: hhmm(m) });
+    if (v && !items.some(function (it) { return it.value === v; })) {
+      for (i = 0; i < items.length && items[i].value < v; i++) { /* позиция по порядку */ }
+      items.splice(i, 0, { value: v, label: v });
+    }
+    return optionsHtml(items, v);
+  }
+  function renderOccSection(d, F) {
+    var rows = d.occ || [], err = F && F.occErr, timed = occHasTime(d);
+    var h = '<div class="tk-occs" data-tk-occs="1">';
+    rows.forEach(function (r, i) {
+      var bad = err && err.index === i;
+      h += '<div class="tk-occrow' + (bad ? ' tk-occ-bad' : '') + '" data-tk-occrow="' + i + '"><span class="tk-occ-ic" aria-hidden="true">↻</span>' +
+        '<input type="date" aria-label="Дата повтора ' + (i + 1) + '" data-tk-occ-date="' + i + '" value="' + esc(r.date) + '">' +
+        (timed ? ' <select class="tk-time" aria-label="Время повтора ' + (i + 1) + '" data-tk-occ-time="' + i + '">' + occTimeOptions(r.time || d.startTime) + '</select>' : '') +
+        ' <button type="button" class="tk-x" data-tk-act="removeOcc" data-idx="' + i + '" title="Удалить повтор" aria-label="Удалить повтор ' + (i + 1) + '">×</button>' +
+        (bad ? '<div class="tk-occ-err" role="alert" data-tk-occ-err="' + i + '">' + esc(err.text) + '</div>' : '') + '</div>';
+    });
+    if (err && err.index === null) h += '<div class="tk-occ-err" role="alert" data-tk-occ-err="all">' + esc(err.text) + '</div>';
+    if (!rows.length) h += '<span class="tk-muted tk-occ-none">повторов нет</span>';
+    h += '<div><button type="button" class="tk-btn" data-tk-act="addOcc"' + (rows.length >= OCC_MAX ? ' disabled' : '') + '>+ Добавить повтор</button></div>' +
+      '<div class="tk-muted tk-hint">Задача выполняется и в эти даты. Длительность повтора — как у задачи' + (timed ? '' : ' (у задачи без времени — дата)') +
+      '; тема, исполнители, чек-лист и статус общие.</div></div>';
+    return h;
   }
   function tagChipsHtml(d) {
     return d.labels.map(function (tag, i) {
@@ -1357,6 +1557,7 @@
       '<div class="tk-dt"><span>' + (d.kind === 'period' ? 'Начало' : 'Дата') + '</span>' +
       '<input type="date" data-tk-field="startDate" value="' + esc(d.startDate) + '"> ' + timeSelectHtml('startTime', d.startTime) + '</div>' +
       (d.kind === 'period' ? '<div class="tk-dt"><span>Конец</span><input type="date" data-tk-field="endDate" value="' + esc(d.endDate) + '"> ' + timeSelectHtml('endTime', d.endTime) + '</div>' : ''));
+    h += fieldRow('Повторения', renderOccSection(d, F), 'tk-f-occ');
     h += fieldRow('Приоритет', '<select data-tk-field="priority">' + optionsHtml([
       { value: 1, label: '1 — высокий' }, { value: 2, label: '2 — обычный' }, { value: 3, label: '3 — низкий' }], d.priority) + '</select>');
     // V6.2 (W-4): метка — теги-чипы: Enter/запятая → чип, × и Backspace в пустом вводе удаляют, подсказки — существующие теги
@@ -1394,6 +1595,11 @@
     if (!S.form && typeof DOM.root.querySelector === 'function') {
       var sel = DOM.root.querySelector('.tk-sel');
       if (sel && sel.scrollIntoView) { try { sel.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ } }
+    }
+    // V6.3-2: ошибка повтора — показать нужную строку формы
+    if (showForm && S.form.occErr && typeof DOM.root.querySelector === 'function') {
+      var oe = DOM.root.querySelector('.tk-occ-bad') || DOM.root.querySelector('[data-tk-occ-err]');
+      if (oe && oe.scrollIntoView) { try { oe.scrollIntoView({ block: 'center' }); } catch (e2) { /* ignore */ } }
     }
   }
 
@@ -1444,6 +1650,8 @@
     // assignees не отправляем: сервер оставляет всё как есть (snapshot удалённых сохраняется).
     if (!isNew && d.hasRemoved && d.origActive && sameSet(d.assignees, d.origActive)) delete p.assignees;
     // watchers намеренно не отправляются: поле хранится на сервере, UI его не меняет.
+    // V6.3-2 (Д-1): повторы — полная замена набора (при правке тоже: пустой список = все повторы удалены)
+    p.occurrences = occPayload(d);
     return p;
   }
 
@@ -1514,7 +1722,8 @@
       toast(okText, 'success');
       if (task && S.view === 'calendar') {
         var rg = calRange();
-        if (task.first_day > rg.to || task.last_day < rg.from) S.cal.anchor = task.first_day;
+        var inRange = taskDays(task).some(function (d) { return d >= rg.from && d <= rg.to; });   // V6.3-2: видна и по повтору
+        if (!inRange && (task.first_day > rg.to || task.last_day < rg.from)) S.cal.anchor = task.first_day;
       }
       return load();
     }
@@ -1532,14 +1741,28 @@
     }
     if (r.status === 422 && code === 'TASK_BLOCKED_BY_SICK_OR_TRIP') {
       if (S.form) {
-        S.form.blocked = {
-          blocked_days: r.data.blocked_days || [], suggested_start: r.data.suggested_start || null,
-          suggested_end: r.data.suggested_end || null
-        };
-        S.form.error = '';
+        if (r.data.occurrence_index != null) {
+          // V6.3-2: блок на повторе — ошибка у нужной строки (больничный/командировка исполнителя в день повтора)
+          S.form.blocked = null;
+          S.form.error = '';
+          S.form.occErr = { index: +r.data.occurrence_index, text: r.data.message || 'Повтор попадает на больничный или командировку исполнителя.' };
+        } else {
+          S.form.blocked = {
+            blocked_days: r.data.blocked_days || [], suggested_start: r.data.suggested_start || null,
+            suggested_end: r.data.suggested_end || null
+          };
+          S.form.error = '';
+        }
       } else {
         S.msg = { type: 'error', text: 'Действие заблокировано: дни на больничном/в командировке.' };
       }
+      render();
+      return Promise.resolve();
+    }
+    // V6.3-2: ошибки повторов (формат/дубль) — у нужной строки формы (index — позиция в отправленном списке)
+    if (S.form && /^(invalid_occurrence|occurrence_duplicate)$/.test(code || '') && r.data.index != null) {
+      S.form.occErr = { index: +r.data.index, text: errText(r) };
+      S.form.error = '';
       render();
       return Promise.resolve();
     }
@@ -1553,7 +1776,11 @@
     if (!canWrite() || !S.form || S.busy) return Promise.resolve();
     var F = S.form, err = draftError(F.draft);
     F.blocked = null;
+    F.occErr = null;
     if (err) { F.error = err; render(); return Promise.resolve(); }
+    occSort(F.draft);                                    // порядок строк = порядок в запросе (index ошибки сервера → строка)
+    var oe = occDraftError(F.draft);
+    if (oe) { F.error = ''; F.occErr = oe; render(); return Promise.resolve(); }
     F.error = '';
     S.busy = true;
     var isNew = !F.id, payload = buildPayload(F.draft, isNew), p;
@@ -1710,6 +1937,29 @@
       S.form.draft.checklist.splice(+el.dataset.idx, 1);
       render();
     },
+    // V6.3-2 (Д-1): «+ Добавить повтор» — строка с датой на день позже самой поздней даты (основная/повторы) и временем задачи
+    addOcc: function () {
+      if (!S.form) return;
+      if (!S.form.draft.occ) S.form.draft.occ = [];
+      if (S.form.draft.occ.length >= OCC_MAX) return;
+      var d = S.form.draft, last = parseYmd(d.startDate) ? d.startDate : todayYmd();
+      d.occ.forEach(function (r) { if (parseYmd(r.date) && r.date > last) last = r.date; });
+      if (d.kind === 'period' && parseYmd(d.endDate) && d.endDate > last) last = d.endDate;
+      d.occ.push({ date: addDays(last, 1), time: d.startTime || '' });
+      S.form.occErr = null;
+      occSort(d);
+      render();
+      var inp = DOM.root.querySelectorAll ? DOM.root.querySelectorAll('[data-tk-occ-date]') : null;
+      if (inp && inp.length) {
+        for (var i = 0; i < d.occ.length; i++) if (d.occ[i].date === addDays(last, 1) && inp[i] && inp[i].focus) { inp[i].focus(); break; }
+      }
+    },
+    removeOcc: function (el) {
+      if (!S.form || !S.form.draft.occ) return;
+      S.form.draft.occ.splice(+el.dataset.idx, 1);
+      S.form.occErr = null;
+      render();
+    },
     acceptSuggested: function () {
       if (!S.form || !S.form.blocked || !S.form.blocked.suggested_start) return;
       var b = S.form.blocked, d = S.form.draft;
@@ -1848,6 +2098,16 @@
     }
     if (!S.form) return;
     var d = S.form.draft;
+    // V6.3-2: строки «Повторения» — дата/время; после правки список сортируется (по возрастанию), ошибка у строки сбрасывается
+    if (t.dataset.tkOccDate !== undefined || t.dataset.tkOccTime !== undefined) {
+      var oi = +(t.dataset.tkOccDate !== undefined ? t.dataset.tkOccDate : t.dataset.tkOccTime), row = d.occ[oi];
+      if (!row) return;
+      if (t.dataset.tkOccDate !== undefined) row.date = t.value; else row.time = t.value;
+      S.form.occErr = null;
+      occSort(d);
+      render();
+      return;
+    }
     if (t.dataset.tkCkText !== undefined) { d.checklist[+t.dataset.tkCkText].text = t.value; return; }
     if (t.dataset.tkCkDone !== undefined) { d.checklist[+t.dataset.tkCkDone].done = !!t.checked; return; }
     var f = t.dataset.tkField;
@@ -2467,12 +2727,32 @@
       '.tk-ctoast-x{border:0;background:transparent;color:#cfd8e8;font-size:16px;line-height:1;cursor:pointer;padding:0 2px}';
   }
 
+  // V6.3-2 (Д-1): повторы — «↻ N» в Списке/Доске, плитка повтора в календаре, даты в карточке, раздел «Повторения» формы (только новые правила)
+  function cssV632() {
+    return '' +
+      '.tk-occ-n{display:inline-block;margin-left:4px;padding:0 6px;border-radius:9px;border:1px solid var(--rt-blue);background:#e8f4fb;color:#0b4f8a;font:600 11px/16px sans-serif;white-space:nowrap;cursor:help;vertical-align:baseline}' +
+      '.tk-ev.tk-occ{border-left-style:dashed;background:#e3f1fa}' +
+      '.tk-ev.tk-ev-t.tk-occ{background:#e3f1fa}' +
+      '.tk-ev-rep{display:inline-block;margin-right:3px;font-weight:700;color:var(--rt-blue)}' +
+      '.tk-dates{list-style:none;margin:4px 0 0;padding:0}' +
+      '.tk-dates li{margin:2px 0;padding:2px 6px;border-radius:6px}' +
+      '.tk-dates li.tk-next{background:rgba(0,136,204,.12)}' +
+      '.tk-rep{color:var(--rt-blue);font-weight:700}' +
+      '.tk-occs{border:1px solid var(--divider);border-radius:8px;padding:6px 8px;background:#fff}' +
+      '.tk-occrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;padding:2px 4px;border-radius:6px}' +
+      '.tk-occ-ic{color:var(--rt-blue);font-weight:700}' +
+      '.tk-occrow.tk-occ-bad{background:rgba(244,67,54,.08);outline:1px solid var(--sick-red)}' +
+      '.tk-occ-err{flex:1 1 100%;color:#a3261b;font-size:12px}' +
+      '.tk-occ-none{display:inline-block;margin-right:8px}' +
+      '@media (max-width:760px){.tk-occrow input[type=date]{flex:1 1 140px;min-width:0}}';
+  }
+
   // ---------------------------------------------------------------- init
   function injectStyles() {
     if (document.getElementById('tasksModuleStyles')) return;
     var st = document.createElement('style');
     st.id = 'tasksModuleStyles';
-    st.textContent = css() + cssV61() + cssV621() + cssV62();
+    st.textContent = css() + cssV61() + cssV621() + cssV62() + cssV632();
     document.head.appendChild(st);
   }
   function init() {
@@ -2544,7 +2824,9 @@
       isOrphan: isOrphan, removedDate: removedDate, plural: plural, modalEl: function () { return DOM.modal; },
       calLayout: calLayout, calSlotOf: calSlotOf, calSlotDraft: calSlotDraft, calDayLayout: calDayLayout, timeOptionsHtml: timeOptionsHtml,
       calScrollApply: calScrollApply, calScrollSave: calScrollSave, CAL_HOUR_PX: CAL_HOUR_PX,
-      calDropCalc: calDropCalc, calPasteCalc: calPasteCalc, calClipOf: calClipOf, calCopyPayload: calCopyPayload, calMove: calMove, calPaste: calPaste, calCopy: calCopy,
+      calDropCalc: calDropCalc, calPasteCalc: calPasteCalc, calClipOf: calClipOf, calMove: calMove, calPaste: calPaste, calCopy: calCopy,
+      calDeleteOcc: calDeleteOcc, calInstances: calInstances, calInstById: calInstById, dueText: dueText, allDatesText: allDatesText, nextWhen: nextWhen,   // V6.3-2 (Д-1)
+      occDraftError: occDraftError, occPayload: occPayload, occSort: occSort,
       onCalPointerDown: onCalPointerDown, onContextMenu: onContextMenu, onClickCapture: onClickCapture, HOOK: HOOK,
       drag: function () { return DRAG; }, clip: function () { return _clip; }, clearClip: function () { _clip = null; }, ctxOpen: function () { return !!_ctx; }, ctxClose: ctxClose, calToastClose: calToastClose
     }
