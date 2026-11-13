@@ -387,15 +387,21 @@
   }
   // подстрока карточки Доски: ФИО — ссылка «Список по сотруднику» (V6-5, P2-1; span[role=button], не <a>: <a> внутри draggable-карточки
   // перехватывает перетаскивание, как и <button>, см. tagBtn); удалённый исполнитель открытой задачи зачёркнут (как в Списке/карточке)
-  var BOARD_NAMES_MAX = 2;      // V6.2 (W-3): в плитке Доски не больше 2 исполнителей, дальше «…»
+  var BOARD_NAMES_MAX = 2;      // V6.2 (W-3) / V6.3-1 (И-1): в плитке Доски и в колонке «Исполнитель» Списка не больше 2 исполнителей, дальше «…»
+  // V6.3-1 (И-1): общий помощник Доски и Списка — первые BOARD_NAMES_MAX исполнителей (one(p) → html) через «, »; при большем числе — «…» отдельным чипом
+  // (не часть фамилии: пробел + свой фон). Полный список — title контейнера (namesTitle).
+  var NAMES_MORE_HTML = ' <span class="tk-more">…</span>';
+  function limitNames(t, one) {
+    var all = assigneesOf(t);
+    return all.slice(0, BOARD_NAMES_MAX).map(one).join(', ') + (all.length > BOARD_NAMES_MAX ? NAMES_MORE_HTML : '');
+  }
   function nameStrike(t) {
     var open = t.status === 'open' && !t.archived;
-    var all = assigneesOf(t), more = all.length > BOARD_NAMES_MAX;
-    return all.slice(0, BOARD_NAMES_MAX).map(function (p) {
+    return limitNames(t, function (p) {
       if (p.removed) return open ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
       return '<span role="button" tabindex="0" class="tk-name tk-namebtn" data-tk-act="filterEmp" data-emp="' + esc(p.employee_id) + '"' +
         ' title="Показать в Списке все задачи сотрудника">' + esc(personName(p)) + '</span>';
-    }).join(', ') + (more ? '…' : '');
+    });
   }
   // полный список ФИО для title подстроки плитки Доски (W-3); только когда список обрезан («…»)
   function namesTitle(t) {
@@ -456,19 +462,21 @@
     if (!full) return '<td class="tk-desc"><span class="tk-muted">—</span></td>';
     return '<td class="tk-desc" title="' + esc(full) + '">' + esc(truncate(full, 80)) + '</td>';
   }
-  function nameLinks(t, warn) {
+  // limit=true — Список (V6.3-1, И-1): не больше BOARD_NAMES_MAX + «…»; без limit — карточка задачи (все исполнители)
+  function nameLinks(t, warn, limit) {
     var a = assigneesOf(t);
     if (!a.length) return '<span class="tk-muted">—</span>';
     if (isOrphan(t)) return plateHtml(t);
     var open = t.status === 'open' && !t.archived;
-    return a.map(function (p) {
+    var one = function (p) {
       if (p.removed) {
         // удалённый: у открытой задачи с другими исполнителями — зачёркнут; у закрытой — без пометок
         return open ? '<s class="tk-gone" title="Сотрудник удалён">' + esc(personName(p)) + '</s>' : esc(personName(p));
       }
       return '<a href="#" class="tk-name" data-tk-act="filterEmp" data-emp="' + esc(p.employee_id) + '">' +
         esc(personName(p)) + '</a>' + (warn ? warnIcon(t, p.employee_id) : '');
-    }).join(', ');
+    };
+    return limit ? limitNames(t, one) : a.map(one).join(', ');
   }
 
   // ---------------------------------------------------------------- views
@@ -518,7 +526,7 @@
     rows.forEach(function (t) {
       h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board">' +
         '<td class="tk-c-task"><b>' + esc(t.title) + '</b><div class="tk-badges">' + badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></td>' +
-        descCell(t) + '<td class="tk-c-exec">' + nameLinks(t, true) + '</td>' +
+        descCell(t) + '<td class="tk-c-exec"' + (!isOrphan(t) && namesTitle(t) ? ' title="' + esc(namesTitle(t)) + '"' : '') + '>' + nameLinks(t, true, true) + '</td>' +
         '<td class="tk-nowrap">' + esc(fmtPeriod(t)) + '</td>' +
         '<td class="' + (+t.priority === 1 ? 'tk-hi' : '') + '">' + esc(PRIORITY_TEXT[t.priority] || t.priority) + '</td>' +
         '<td>' + (t.status === 'closed' ? 'Закрыта' : 'Открыта') + '</td>' +
@@ -2427,7 +2435,7 @@
     return '' +
       // W-1: «Исполнитель» — половина прежней ширины (замер на 1280: 255.8 px → 128 px), «Описание» забирает остаток, ФИО переносятся
       '.tk-table-v62{width:100%}' +
-      '.tk-table-v62 th.tk-c-exec,.tk-table-v62 td.tk-c-exec{width:128px;min-width:128px;max-width:128px;overflow-wrap:anywhere}' +
+      '.tk-table-v62 th.tk-c-exec,.tk-table-v62 td.tk-c-exec{width:192px;min-width:192px;max-width:192px;overflow-wrap:anywhere}' +
       '.tk-table-v62 td.tk-desc{min-width:220px;max-width:none}' +
       '.tk-table-v62 th.tk-c-task,.tk-table-v62 td.tk-c-task{min-width:160px}' +
       // W-2: «Править» в строке
@@ -2443,6 +2451,16 @@
       '.tk-f .tk-tagsbox input[type=text]{flex:1 1 120px;width:auto;min-width:120px;border:0;outline:0;padding:4px 2px;background:transparent}' +
       '.tk-hint{font-size:11px;margin-top:3px}' +
       '.tk-ltag{overflow-wrap:anywhere}';
+  }
+
+  // V6.3-1 (И-1, И-2): только новые правила (ширина «Исполнителя» 192 px — в cssV621, строка W-1)
+  function cssV631() {
+    return '' +
+      // И-1: «…» — отдельный чип, не часть фамилии (Список и Доска)
+      '.tk-more{display:inline-block;margin-left:2px;padding:0 6px;border-radius:9px;background:#dfe7f3;border:1px solid #b9c6da;color:#33415c;font-weight:700;line-height:1.3;cursor:help}' +
+      // И-2: «Задача» закреплена на 193 px (значение замера V6.2-1): иначе автораскладка таблицы делит прибавку «Исполнителя» (+64 px) между «Задачей» и «Описанием»
+      // в зависимости от длины заголовков; так «Описание» отдаёт ровно +64 px (297 → 233 на 1280), «Срок»/«Приор.»/«Статус»/«Править» не меняются
+      '@media (min-width:1200px){.tk-table-v62 th.tk-c-task,.tk-table-v62 td.tk-c-task{width:193px}}';
   }
 
   // V6.2-2: стили перетаскивания, контекстного меню и всплывающего сообщения календаря (только новые правила)
@@ -2472,7 +2490,7 @@
     if (document.getElementById('tasksModuleStyles')) return;
     var st = document.createElement('style');
     st.id = 'tasksModuleStyles';
-    st.textContent = css() + cssV61() + cssV621() + cssV62();
+    st.textContent = css() + cssV61() + cssV621() + cssV62() + cssV631();
     document.head.appendChild(st);
   }
   function init() {
