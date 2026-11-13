@@ -1270,6 +1270,8 @@ async function main() {
     // =====================================================================================================
     // V6.2-1: W-1 колонки Списка, W-2 «Править» в строке, W-3 Доска ≤ 2 исполнителей, W-4 метки-теги
     // =====================================================================================================
+    const MORE_HTML = ' <span class="tk-more">…</span>', MORE_RE = /<span class="tk-more">…<\/span>/;
+    let V63ID = null;
     console.log('-- V6.2-1 W-1…W-4');
     await A.T.open({ view: 'list' });
     await A.settle();
@@ -1297,12 +1299,12 @@ async function main() {
       const thTexts = (hdrW.match(/<th[^>]*>[\s\S]*?<\/th>/g) || []).map((x) => x.replace(/<span class="tk-arr[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim());
       check('V6.2 W-1 порядок колонок: Задача · Описание · Исполнитель · Срок · Приор. · Статус · (Править)', thTexts.join('|') === 'Задача|Описание|Исполнитель|Срок|Приор.|Статус|Править', thTexts.join('|'));
       const r3 = rowOf(w3.id), c3 = cellsOf(r3);
-      check('V6.2 W-1 строка: 7 ячеек — задача, описание, исполнитель (все 3 ФИО, «!» и фильтр-ссылки сохранены), срок, приоритет, статус, ✎',
-        c3.length === 7 && /class="tk-c-task"/.test(c3[0]) && /class="tk-desc"/.test(c3[1]) && /class="tk-c-exec"/.test(c3[2]) && (c3[2].match(/data-tk-act="filterEmp"/g) || []).length === 3 &&
+      check('V6.2 W-1 строка: 7 ячеек — задача, описание, исполнитель (V6.3-1: 2 ФИО из 3 + «…», фильтр-ссылки сохранены), срок, приоритет, статус, ✎',
+        c3.length === 7 && /class="tk-c-task"/.test(c3[0]) && /class="tk-desc"/.test(c3[1]) && /class="tk-c-exec"/.test(c3[2]) && (c3[2].match(/data-tk-act="filterEmp"/g) || []).length === 2 &&
         /class="tk-c-edit"/.test(c3[6]) && /Открыта/.test(c3[5]), c3.map((x) => x.slice(0, 50)).join(' | '));
       const wRule = /\.tk-table-v62 th\.tk-c-exec,\.tk-table-v62 td\.tk-c-exec\{width:(\d+)px;min-width:(\d+)px;max-width:(\d+)px;overflow-wrap:anywhere\}/.exec(SRC);
-      check('V6.2 W-1 ширина «Исполнителя» — ~50 % замеренной до правки (1280 px: 255.8 px → 128 px, фиксировано), ФИО переносятся (overflow-wrap:anywhere)',
-        wRule && +wRule[1] === 128 && wRule[1] === wRule[2] && wRule[2] === wRule[3] && +wRule[1] / 255.8 > 0.48 && +wRule[1] / 255.8 < 0.52, wRule && wRule[0]);
+      check('V6.2 W-1 → V6.3-1 И-2: ширина «Исполнителя» зафиксирована (width = min = max), ФИО переносятся (overflow-wrap:anywhere); значение 192 px = 128 × 1,5',
+        wRule && wRule[1] === wRule[2] && wRule[2] === wRule[3] && +wRule[1] === 192 && +wRule[1] / 128 === 1.5, wRule && wRule[0]);
       check('V6.2 W-1 «Описание» забирает освободившееся: у .tk-desc в таблице нет max-width, min-width ≥ 220px', /\.tk-table-v62 td\.tk-desc\{min-width:2\d\dpx;max-width:none\}/.test(SRC));
       check('V6.2 W-1 «Приор.» и «Статус» по-прежнему сортируются, шапка sticky (th position:sticky), таблица в .tk-tablewrap (горизонтальная прокрутка на 375)',
         A.has('data-tk-act="sortBy" data-key="priority"') && A.has('data-tk-act="sortBy" data-key="status"') && /\.tk-table th\{position:sticky;top:0/.test(SRC) && /\.tk-tablewrap\{overflow:auto/.test(SRC) && A.has('class="tk-tablewrap"'));
@@ -1345,11 +1347,11 @@ async function main() {
       const s3 = sub(w3.id);
       const names3 = (s3.match(/class="tk-name tk-namebtn" data-tk-act="filterEmp" data-emp="([^"]+)"/g) || []);
       check('V6.2 W-3 Доска, 3 исполнителя: в подстроке ровно 2 ФИО-кнопки и «…» после второго; третьего ФИО в тексте нет',
-        names3.length === 2 && />\s*…<\/|<\/span>…/.test(s3) && s3.indexOf('</span>…') > s3.lastIndexOf('data-tk-act="filterEmp"') && s3.indexOf(n3[2] + '</span>') < 0, s3);
+        names3.length === 2 && MORE_RE.test(s3) && s3.indexOf(MORE_HTML) > s3.lastIndexOf('data-tk-act="filterEmp"') && s3.indexOf(n3[2] + '</span>') < 0, s3);
       const ttl = unescTitle((/title="(Исполнители: [^"]*)"/.exec(s3) || [])[1] || '');
       check('V6.2 W-3 полный список ФИО — в title подстроки («Исполнители: A, B, C»)', ttl === 'Исполнители: ' + n3.join(', '), ttl);
       const s4 = sub(w4.id);
-      check('V6.2 W-3 4 исполнителя: 2 ФИО + «…», в title — все 4', (s4.match(/data-tk-act="filterEmp"/g) || []).length === 2 && s4.indexOf('</span>…') > 0 && (unescTitle((/title="(Исполнители: [^"]*)"/.exec(s4) || [])[1] || '').split(', ').length === 4), s4);
+      check('V6.2 W-3 4 исполнителя: 2 ФИО + «…», в title — все 4', (s4.match(/data-tk-act="filterEmp"/g) || []).length === 2 && s4.indexOf(MORE_HTML) > 0 && (unescTitle((/title="(Исполнители: [^"]*)"/.exec(s4) || [])[1] || '').split(', ').length === 4), s4);
       const s2 = sub(w2.id);
       check('V6.2 W-3 2 исполнителя: оба ФИО, без «…» и без общего title', (s2.match(/data-tk-act="filterEmp"/g) || []).length === 2 && s2.indexOf('…') < 0 && !/<div class="tk-sub" title=/.test(s2), s2);
       const s1 = sub(w1.id);
@@ -1360,15 +1362,78 @@ async function main() {
       A.S.tasks = A.S.tasks.map((t) => t.id !== w3.id ? t : Object.assign({}, t, { assignees: [{ employee_id: 'v61_a', full_name: 'Удалённый Икс', removed: true, removed_at: null }].concat(t.assignees.filter((a) => a.employee_id !== 'v61_a')) }));
       A.T.__t.render();
       const s3r = sub(w3.id);
-      check('V6.2 W-3 удалённый исполнитель среди первых двух — зачёркнут (<s class="tk-gone">), «…» и title на месте, живой — кнопка', /<s class="tk-gone" title="Сотрудник удалён">Удалённый Икс<\/s>/.test(s3r) && (s3r.match(/data-tk-act="filterEmp"/g) || []).length === 1 && s3r.indexOf('</span>…') > 0 && /title="Исполнители: Удалённый Икс, /.test(s3r), s3r);
+      check('V6.2 W-3 удалённый исполнитель среди первых двух — зачёркнут (<s class="tk-gone">), «…» и title на месте, живой — кнопка', /<s class="tk-gone" title="Сотрудник удалён">Удалённый Икс<\/s>/.test(s3r) && (s3r.match(/data-tk-act="filterEmp"/g) || []).length === 1 && s3r.indexOf(MORE_HTML) > 0 && /title="Исполнители: Удалённый Икс, /.test(s3r), s3r);
       A.S.tasks = keepW; A.T.__t.render();
       await A.click('filterEmp', (d) => d.emp === 'v61_a');
       check('V6.2 W-3 первое ФИО из плитки по-прежнему кликабельно (V6-5): → «Список» по сотруднику', A.S.view === 'list' && A.S.filters.emp === 'v61_a' && !A.S.filters.label && A.has('W62 три исполнителя'));
       const lr = rowOf(w3.id);
-      check('V6.2 W-3 Список — без изменений: в строке все 3 исполнителя', n3.every((n) => lr.indexOf(esc2(n)) >= 0) && lr.indexOf('…') < 0, lr.slice(0, 300));
+      check('V6.2 W-3 → V6.3-1 И-1: Список — 2 из 3 исполнителей + «…» (третьего в строке нет; полный перечень — в карточке)', n3.slice(0, 2).every((n) => lr.indexOf(esc2(n)) >= 0) && lr.replace(/ title="[^"]*"/g, '').indexOf(esc2(n3[2])) < 0 && lr.indexOf(MORE_HTML) > 0, lr.slice(0, 300));
+      V63ID = w3.id;
       await A.T.open({ view: 'board', taskId: w3.id }); await A.settle();
       const detW = A.root.innerHTML.slice(A.root.innerHTML.indexOf('<aside class="tk-detail">'));
       check('V6.2 W-3 карточка задачи — без изменений: «Исполнители» — все 3, без «…»', /<span>Исполнители<\/span><div>[\s\S]*?<\/div>/.test(detW) && n3.every((n) => /<span>Исполнители<\/span><div>[\s\S]*?<\/div>/.exec(detW)[0].indexOf(esc2(n)) >= 0) && !/<span>Исполнители<\/span><div>[^]*?…/.test(/<span>Исполнители<\/span><div>[\s\S]*?<\/div>/.exec(detW)[0]));
+
+      // ---- V6.3-1 (И-1, И-2): Список — не больше 2 исполнителей + «…», пропорция колонок ----
+      console.log('-- V6.3-1 И-1/И-2');
+      {
+        const extraEmp = A.S.employees.map((e) => e.id).find((id) => ['v61_a', 'v61_b', 'v61_s', 'v61_x'].indexOf(id) < 0);
+        const q5 = await mkW('V63 пять исполнителей', { assignees: ['v61_s', 'v61_b', 'v61_a', 'v61_x', extraEmp] });
+        const q3v = await mkV('V63 три исполнителя, первый в отпуске', { assignees: ['v61_a', 'v61_b', 'v61_s'], start_at: '2099-12-01', end_at: '2099-12-05' });   // v61_a — отпуск 02–04.12 (R-8)
+        await A.T.open({ view: 'list' }); await A.settle(); await A.click('resetFilters');
+        const execCell = (id) => { const c = cellsOf(rowOf(id)); return c.length > 2 ? c[2] : ''; };
+        const namesFull = (id) => A.S.tasks.find((t) => t.id === id).assignees.map((x) => x.full_name || nameOf(x.employee_id));
+        const fio = (cell) => (cell.match(/data-tk-act="filterEmp"/g) || []).length;
+        const noTitle = (cell) => cell.replace(/ title="[^"]*"/g, '');
+        const ttlOf = (cell) => unescTitle((/<td class="tk-c-exec" title="([^"]*)"/.exec(cell) || [])[1] || '');
+        const c1 = execCell(w1.id), c2 = execCell(w2.id), c3n = execCell(w3.id), c5 = execCell(q5.id);
+        check('V6.3-1 И-1 Список, 1 исполнитель: 1 ФИО, без «…», без общего title', fio(c1) === 1 && !MORE_RE.test(c1) && !/<td class="tk-c-exec" title=/.test(c1), c1);
+        check('V6.3-1 И-1 Список, 2 исполнителя: оба ФИО, без «…», без общего title', fio(c2) === 2 && !MORE_RE.test(c2) && !/<td class="tk-c-exec" title=/.test(c2) && namesFull(w2.id).every((n) => c2.indexOf(esc2(n)) >= 0), c2);
+        const n5 = namesFull(q5.id);
+        check('V6.3-1 И-1 Список, 3 исполнителя: 2 ФИО-ссылки + «…» после второго, третьего ФИО в ячейке нет', fio(c3n) === 2 && MORE_RE.test(c3n) && c3n.indexOf(MORE_HTML) > c3n.lastIndexOf('data-tk-act="filterEmp"') && noTitle(c3n).indexOf(esc2(n3[2])) < 0, c3n);
+        check('V6.3-1 И-1 Список, 5 исполнителей: 2 ФИО-ссылки + «…»; ФИО с 3-го по 5-й в тексте ячейки нет', n5.length === 5 && fio(c5) === 2 && (c5.match(MORE_RE) || []).length === 1 && n5.slice(2).every((n) => noTitle(c5).indexOf(esc2(n)) < 0), c5);
+        check('V6.3-1 И-1 title ячейки при 3 и 5 исполнителях — полный список «Исполнители: A, B, …» (в порядке API)', ttlOf(c3n) === 'Исполнители: ' + n3.join(', ') && ttlOf(c5) === 'Исполнители: ' + n5.join(', '), ttlOf(c3n) + ' | ' + ttlOf(c5));
+        check('V6.3-1 И-1 title с ФИО <b> экранирован (нет сырых тегов)', (() => { const x = execCell((A.S.tasks.find((t) => t.assignees.some((a) => a.employee_id === 'v61_x')) || {}).id); return x.indexOf('<b>Тегович') < 0; })() && c5.indexOf('<b>Тегович') < 0 && c5.indexOf('&lt;b&gt;Тегович') >= 0);
+        check('V6.3-1 И-1 «…» — отдельный элемент .tk-more после пробела (не часть ссылки-ФИО), в ссылках «…» нет', c5.indexOf(', ') > 0 && /<\/a>(<span class="tk-warnico"[^>]*>!<\/span>)? <span class="tk-more">…<\/span>/.test(c5) && !/<a [^>]*>[^<]*…[^<]*<\/a>/.test(c5) && /\.tk-more\{[^}]*padding:0 6px/.test(SRC) && /\.tk-more\{[^}]*background:#[0-9a-f]+/.test(SRC));
+        // первые два ФИО кликабельны (R-14), «!» (R-8) и зачёркивание удалённых (T1-8) сохраняются
+        const cv = execCell(q3v.id);
+        check('V6.3-1 И-1 «!» (R-8) у ФИО в отпуске (среди первых двух) сохранён при 3 исполнителях', fio(cv) === 2 && (cv.match(/class="tk-warnico"/g) || []).length === 1 && /data-emp="v61_a">[^<]*<\/a><span class="tk-warnico"/.test(cv) && cv.indexOf('class="tk-warnico"') < cv.indexOf(MORE_HTML) && MORE_RE.test(cv), cv);
+        const keepL = A.S.tasks;
+        A.S.tasks = A.S.tasks.map((t) => t.id !== w3.id ? t : Object.assign({}, t, { assignees: [{ employee_id: 'v61_a', full_name: 'Удалённый Икс', removed: true, removed_at: null }].concat(t.assignees.filter((a) => a.employee_id !== 'v61_a')) }));
+        A.T.__t.render();
+        const cr = execCell(w3.id);
+        check('V6.3-1 И-1 удалённый среди первых двух — зачёркнут (<s class="tk-gone">), считается в лимите: 1 ссылка + «…», title — все 3', /<s class="tk-gone" title="Сотрудник удалён">Удалённый Икс<\/s>/.test(cr) && fio(cr) === 1 && MORE_RE.test(cr) && /title="Исполнители: Удалённый Икс, /.test(cr), cr);
+        A.S.tasks = keepL; A.T.__t.render();
+        await A.click('filterEmp', (d) => d.emp === 'v61_b');
+        check('V6.3-1 И-1 клик по ФИО в ячейке Списка → «Список» с фильтром по этому сотруднику (R-14)', A.S.view === 'list' && A.S.filters.emp === 'v61_b' && A.has('W62 три исполнителя'));
+        await A.click('resetFilters');
+        // карточка — все исполнители, без «…»
+        await A.T.open({ view: 'board', taskId: q5.id }); await A.settle();
+        const det5 = A.root.innerHTML.slice(A.root.innerHTML.indexOf('<aside class="tk-detail">'));
+        const kv5 = /<span>Исполнители<\/span><div>[\s\S]*?<\/div>/.exec(det5)[0];
+        check('V6.3-1 И-1 карточка задачи — все 5 исполнителей, без «…» и без title-списка', n5.every((n) => kv5.indexOf(esc2(n)) >= 0) && kv5.indexOf('…') < 0 && kv5.indexOf('tk-more') < 0, kv5.slice(0, 200));
+        // Доска и Список — общий код
+        check('V6.3-1 И-1 общий код: одна функция limitNames (slice по BOARD_NAMES_MAX) используется и Доской (nameStrike), и Списком (nameLinks); отдельной копии нет',
+          (SRC.match(/\.slice\(0, BOARD_NAMES_MAX\)/g) || []).length === 1 && /function nameStrike\(t\) \{[^]*?return limitNames\(t,/.test(SRC) && /return limit \? limitNames\(t, one\)/.test(SRC) && (SRC.match(/NAMES_MORE_HTML/g) || []).length === 2);
+        await A.T.open({ view: 'board' }); await A.settle();
+        const b5 = sub(q5.id);
+        check('V6.3-1 И-1 Доска: «…» — тот же отдельный чип .tk-more после пробела, title — все 5', fio(b5) === 2 && b5.indexOf('</span>' + MORE_HTML) > 0 && unescTitle((/title="(Исполнители: [^"]*)"/.exec(b5) || [])[1] || '') === 'Исполнители: ' + n5.join(', '), b5);
+
+        // ---- И-2: ширины колонок Списка (CSS-правила; замеры в Chromium — scripts/v63_1_accept.js) ----
+        const execRule = /\.tk-table-v62 th\.tk-c-exec,\.tk-table-v62 td\.tk-c-exec\{width:(\d+)px;min-width:(\d+)px;max-width:(\d+)px;/.exec(SRC);
+        const taskRule = /@media \(min-width:1200px\)\{\.tk-table-v62 th\.tk-c-task,\.tk-table-v62 td\.tk-c-task\{width:(\d+)px\}\}/.exec(SRC);
+        const descRule = /\.tk-table-v62 td\.tk-desc\{min-width:(\d+)px;max-width:none\}/.exec(SRC);
+        const editRule = /\.tk-table-v62 th\.tk-c-edit,\.tk-table-v62 td\.tk-c-edit\{width:(\d+)px/.exec(SRC);
+        check('V6.3-1 И-2 «Исполнитель» = прежняя ширина × 1,5: 128 → 192 px (width = min = max)', execRule && +execRule[1] === 192 && execRule[1] === execRule[2] && execRule[2] === execRule[3] && 192 === 128 * 1.5, execRule && execRule[0]);
+        // 1280: таблица 1075 px, фикс. колонки Срок 244 / Приор. 87 / Статус 83 / Править 44 не менялись (автоширина по содержимому), «Задача» закреплена
+        const TABLE = 1075.4, FIXED_OTHER = 243.9 + 86.8 + 82.6 + 44;
+        const descBefore = TABLE - 193 - 128 - FIXED_OTHER, descAfter = TABLE - (taskRule ? +taskRule[1] : 0) - (execRule ? +execRule[1] : 0) - FIXED_OTHER;
+        check('V6.3-1 И-2 доли на 1280: «Описание» отдаёт ровно прибавку «Исполнителя» (' + descBefore.toFixed(1) + ' → ' + descAfter.toFixed(1) + ' px ≈ 297 → 233), общая ширина таблицы не меняется (Задача + Описание + Исполнитель = const)',
+          taskRule && +taskRule[1] === 193 && Math.abs((descBefore - descAfter) - 64) < 0.01 && Math.abs(descBefore - 297.1) < 1 && Math.abs(descAfter - 233.1) < 1, taskRule && taskRule[0]);
+        check('V6.3-1 И-2 «Описание» по-прежнему без max-width, min-width ≥ 220 (233 ≥ 220); у «Описания» нет своей фиксированной ширины (остаток таблицы)', descRule && +descRule[1] >= 220 && +descRule[1] <= 233 && !/tk-c-desc\{[^}]*width:\d+px/.test(SRC) && !/\.tk-table-v62 td\.tk-desc\{[^}]*[^-]width:\d+px/.test(SRC));
+        check('V6.3-1 И-2 прочие колонки не тронуты: «Править» 44 px, правило «Задача» только ≥ 1200 px (на 375 — как раньше), шапка sticky и таблица в прокручиваемом .tk-tablewrap', editRule && +editRule[1] === 44 && /@media \(min-width:1200px\)/.test(SRC) && /\.tk-table th\{position:sticky;top:0/.test(SRC) && /\.tk-tablewrap\{overflow:auto/.test(SRC));
+        // V6.3-2 (Д-1) осознанно меняет ячейку «Срок»: next_at + «↻ N» (обычная задача без повторов выглядит как раньше — dueText = fmtPeriod основной даты)
+        check('V6.3-1/V6.3-2 ячейка «Срок» Списка: tk-nowrap + dueText(next_at) + «↻ N» (бейдж только у задач с повторами); без повторов текст = fmtPeriod', /<td class="tk-nowrap" data-tk-due="1"[^>]*>' \+ esc\(dueText\(t\)\) \+ occBadge\(t\) \+ '<\/td>'/.test(SRC) && /function dueText\(t\) \{ return fmtPeriod\(nextWhen\(t\)\); \}/.test(SRC));
+      }
 
       // ---- W-4: отображение ----
       await A.T.open({ view: 'list' }); await A.settle();
@@ -1493,6 +1558,11 @@ async function main() {
         check('R-' + label + '-8 V6.2 W-2: в Списке нет колонки «Править» и кнопок ✎ (6 колонок), editTask принудительно — формы нет, запросов нет',
           R.S.view === 'list' && thN.length === 6 && lst.indexOf('tk-c-edit') < 0 && lst.indexOf('tk-editbtn') < 0 && lst.indexOf('Править') < 0 && R.S.form === null && R.calls.length === pre, thN.length + ' ' + R.S.view);
         const kt = R.T.__t.ACTIONS.removeTag; kt({ dataset: { idx: '0' } });
+        // V6.3-1 И-1: у supervisor/viewer в Списке тоже не больше 2 ФИО + «…», title — все; ФИО кликабельны
+        const rowV = (new RegExp('<tr class="tk-row[^>]*data-id="' + V63ID + '"[\\s\\S]*?</tr>').exec(lst) || [''])[0];
+        const cellV = (rowV.split('</td>')[2] || '');
+        check('R-' + label + '-10 V6.3-1 И-1: в Списке 3 исполнителя → 2 ФИО-ссылки + «…» + title с полным списком',
+          !!V63ID && (cellV.match(/data-tk-act="filterEmp"/g) || []).length === 2 && MORE_RE.test(cellV) && /<td class="tk-c-exec" title="Исполнители: /.test(cellV), cellV.slice(0, 200));
         check('R-' + label + '-9 V6.2 W-4: у наблюдателя нет поля-тегов; чипы тегов в Списке — кликабельные фильтры', lst.indexOf('data-tk-tagsbox') < 0 && lst.indexOf('data-tk-field="labelInput"') < 0 && /data-tk-act="filterBy" data-f="label"/.test(lst) && R.S.form === null);
       }
       const writeMarks = ['data-tk-act="newTask"', 'data-tk-act="editTask"', 'data-tk-act="closeTask"', 'data-tk-act="reopenTask"',
