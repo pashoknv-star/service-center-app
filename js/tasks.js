@@ -540,6 +540,61 @@
     return h;
   }
 
+  // V6.3-4 (И-2, P2-1/P3-1): «Исполнитель» 128 → 192 px (+64) строго за счёт «Описания», всё остальное и ширина таблицы — как при 128 px.
+  // Способ: таблицу сначала раскладываем автоматически в «замерочном» состоянии (.tk-measure: «Исполнитель» 128 px, прежние минимумы) —
+  // браузер сам решает, сколько получает каждая колонка при данных и окне, — затем фиксируем эти ширины (table-layout:fixed),
+  // меняя только две: «Исполнитель» 128 → 192 и «Описание» − 64. Всё синхронно, до отрисовки кадра, поэтому без мерцания.
+  var LIST_EXEC_NEW = 192, LIST_DESC_MIN = 156, LIST_FIT = { w: -1, ro: null, fonts: false, key: '', ws: null, total: 0 };
+  // ws — замеренные ширины колонок при «Исполнителе» 128 px; ei/di — индексы «Исполнителя»/«Описания». Меняются только эти две.
+  function listFitCalc(ws, ei, di) {
+    var r = ws.slice(), delta = LIST_EXEC_NEW - ws[ei];     // delta = 64 при «Исполнителе» 128
+    r[ei] = LIST_EXEC_NEW;
+    r[di] = Math.max(ws[di] - delta, LIST_DESC_MIN);        // «Описание» отдаёт прибавку (минимум 220 → 156 px, чтобы таблица не росла)
+    return r;
+  }
+  function fitListWidths(force) {
+    var root = DOM.root, tbl = root && root.querySelector && root.querySelector('table.tk-table-v62');
+    if (!tbl || !tbl.tHead || !tbl.tHead.rows[0] || typeof tbl.getBoundingClientRect !== 'function') return;
+    try {
+      var ths = Array.prototype.slice.call(tbl.tHead.rows[0].cells), i, ei = -1, di = -1;
+      for (i = 0; i < ths.length; i++) {
+        if (ths[i].classList.contains('tk-c-exec')) ei = i;
+        if (ths[i].classList.contains('tk-c-desc')) di = i;
+      }
+      tbl.classList.remove('tk-fit'); tbl.style.width = '';
+      ths.forEach(function (th) { th.style.width = ''; });
+      if (ei < 0 || di < 0) return;
+      // та же таблица (HTML) при той же ширине панели — ширины те же: повторную перерисовку (sync, фильтр без изменений) не замеряем заново
+      var key = root.clientWidth + '|' + tbl.innerHTML, ws, total;
+      if (!force && LIST_FIT.ws && LIST_FIT.key === key && LIST_FIT.ws.length === ths.length) {
+        ws = LIST_FIT.ws; total = LIST_FIT.total;
+      } else {
+        tbl.classList.add('tk-measure');
+        total = tbl.getBoundingClientRect().width;
+        ws = ths.map(function (th) { return th.getBoundingClientRect().width; });
+        tbl.classList.remove('tk-measure');
+        LIST_FIT.w = root.clientWidth;
+        LIST_FIT.ws = null;
+        if (!total) return;                                 // панель скрыта (display:none) — подгонит ResizeObserver, когда покажут
+        ws = listFitCalc(ws, ei, di);
+        LIST_FIT.key = key; LIST_FIT.ws = ws; LIST_FIT.total = total;
+      }
+      tbl.style.width = total + 'px';
+      ths.forEach(function (th, k) { th.style.width = ws[k] + 'px'; });
+      tbl.classList.add('tk-fit');
+      if (!LIST_FIT.ro && typeof ResizeObserver === 'function') {
+        LIST_FIT.ro = new ResizeObserver(function () {
+          if (S.view === 'list' && DOM.root && DOM.root.clientWidth !== LIST_FIT.w) fitListWidths();
+        });
+        LIST_FIT.ro.observe(root);
+      }
+      if (!LIST_FIT.fonts && typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+        LIST_FIT.fonts = true;
+        document.fonts.ready.then(function () { if (S.view === 'list') fitListWidths(true); });
+      }
+    } catch (e) { /* без подгонки остаётся автораскладка с «Исполнителем» 192 px */ }
+  }
+
   function renderList() {
     var f = S.filters;
     var rows = sortRows(sortByDue(applyFilters(S.tasks, f, true)));      // V6.3-2: по умолчанию — по сроку (next_at)
@@ -1599,6 +1654,7 @@
     else h += renderList();
     h += '</div>';
     DOM.root.innerHTML = h;
+    if (!showForm && !showCal && S.view !== 'board') fitListWidths();   // V6.3-4: ширины колонок Списка (синхронно, до отрисовки — без мерцания)
     if (showCal) calScrollApply();
     if (!S.form && typeof DOM.root.querySelector === 'function') {
       var sel = DOM.root.querySelector('.tk-sel');
@@ -2718,9 +2774,12 @@
     return '' +
       // И-1: «…» — отдельный чип, не часть фамилии (Список и Доска)
       '.tk-more{display:inline-block;margin-left:2px;padding:0 6px;border-radius:9px;background:#dfe7f3;border:1px solid #b9c6da;color:#33415c;font-weight:700;line-height:1.3;cursor:help}' +
-      // И-2: «Задача» закреплена на 193 px (значение замера V6.2-1): иначе автораскладка таблицы делит прибавку «Исполнителя» (+64 px) между «Задачей» и «Описанием»
-      // в зависимости от длины заголовков; так «Описание» отдаёт ровно +64 px (297 → 233 на 1280), «Срок»/«Приор.»/«Статус»/«Править» не меняются
-      '@media (min-width:1200px){.tk-table-v62 th.tk-c-task,.tk-table-v62 td.tk-c-task{width:193px}}';
+      // V6.3-4 (И-2, P2-1/P3-1): «Задача» больше не закреплена. Ширины колонок считает fitListWidths():
+      // замер при «Исполнителе» 128 px (.tk-measure) → фиксация (.tk-fit): «Исполнитель» 192, «Описание» − 64, остальное и таблица — как при 128
+      '.tk-table-v62.tk-measure th.tk-c-exec,.tk-table-v62.tk-measure td.tk-c-exec{width:128px;min-width:128px;max-width:128px}' +
+      '.tk-table-v62.tk-fit{table-layout:fixed;width:auto}' +
+      '.tk-table-v62.tk-fit th,.tk-table-v62.tk-fit td{box-sizing:border-box}' +
+      '.tk-table-v62.tk-fit th.tk-c-task,.tk-table-v62.tk-fit td.tk-c-task,.tk-table-v62.tk-fit td.tk-desc{min-width:0;overflow-wrap:anywhere}';
   }
 
   // V6.2-2: стили перетаскивания, контекстного меню и всплывающего сообщения календаря (только новые правила)
@@ -2835,7 +2894,7 @@
     isActive: function () { return S.active; },
     // для тестов (scripts/test_tasks_frontend.js); в UI не используется
     __t: {
-      S: S, ACTIONS: ACTIONS, render: render, onClick: onClick, onChange: onChange, onDrop: onDrop, onDragStart: onDragStart,
+      S: S, ACTIONS: ACTIONS, render: render, listFitCalc: listFitCalc, onClick: onClick, onChange: onChange, onDrop: onDrop, onDragStart: onDragStart,
       splitTags: splitTags, tagsOf: tagsOf, labelsOf: labelsOf, errText: errText,       // V6.2-1 (W-4)
       truncate: truncate, weekStart: weekStart, addDays: addDays, fmtPeriod: fmtPeriod, normEmpId: normEmpId,
       applyFilters: applyFilters, buildPayload: buildPayload, draftError: draftError, esc: esc,

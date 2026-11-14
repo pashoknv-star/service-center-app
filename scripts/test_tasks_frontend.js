@@ -1420,17 +1420,34 @@ async function main() {
 
         // ---- И-2: ширины колонок Списка (CSS-правила; замеры в Chromium — scripts/v63_1_accept.js) ----
         const execRule = /\.tk-table-v62 th\.tk-c-exec,\.tk-table-v62 td\.tk-c-exec\{width:(\d+)px;min-width:(\d+)px;max-width:(\d+)px;/.exec(SRC);
-        const taskRule = /@media \(min-width:1200px\)\{\.tk-table-v62 th\.tk-c-task,\.tk-table-v62 td\.tk-c-task\{width:(\d+)px\}\}/.exec(SRC);
         const descRule = /\.tk-table-v62 td\.tk-desc\{min-width:(\d+)px;max-width:none\}/.exec(SRC);
         const editRule = /\.tk-table-v62 th\.tk-c-edit,\.tk-table-v62 td\.tk-c-edit\{width:(\d+)px/.exec(SRC);
         check('V6.3-1 И-2 «Исполнитель» = прежняя ширина × 1,5: 128 → 192 px (width = min = max)', execRule && +execRule[1] === 192 && execRule[1] === execRule[2] && execRule[2] === execRule[3] && 192 === 128 * 1.5, execRule && execRule[0]);
-        // 1280: таблица 1075 px, фикс. колонки Срок 244 / Приор. 87 / Статус 83 / Править 44 не менялись (автоширина по содержимому), «Задача» закреплена
-        const TABLE = 1075.4, FIXED_OTHER = 243.9 + 86.8 + 82.6 + 44;
-        const descBefore = TABLE - 193 - 128 - FIXED_OTHER, descAfter = TABLE - (taskRule ? +taskRule[1] : 0) - (execRule ? +execRule[1] : 0) - FIXED_OTHER;
-        check('V6.3-1 И-2 доли на 1280: «Описание» отдаёт ровно прибавку «Исполнителя» (' + descBefore.toFixed(1) + ' → ' + descAfter.toFixed(1) + ' px ≈ 297 → 233), общая ширина таблицы не меняется (Задача + Описание + Исполнитель = const)',
-          taskRule && +taskRule[1] === 193 && Math.abs((descBefore - descAfter) - 64) < 0.01 && Math.abs(descBefore - 297.1) < 1 && Math.abs(descAfter - 233.1) < 1, taskRule && taskRule[0]);
-        check('V6.3-1 И-2 «Описание» по-прежнему без max-width, min-width ≥ 220 (233 ≥ 220); у «Описания» нет своей фиксированной ширины (остаток таблицы)', descRule && +descRule[1] >= 220 && +descRule[1] <= 233 && !/tk-c-desc\{[^}]*width:\d+px/.test(SRC) && !/\.tk-table-v62 td\.tk-desc\{[^}]*[^-]width:\d+px/.test(SRC));
-        check('V6.3-1 И-2 прочие колонки не тронуты: «Править» 44 px, правило «Задача» только ≥ 1200 px (на 375 — как раньше), шапка sticky и таблица в прокручиваемом .tk-tablewrap', editRule && +editRule[1] === 44 && /@media \(min-width:1200px\)/.test(SRC) && /\.tk-table th\{position:sticky;top:0/.test(SRC) && /\.tk-tablewrap\{overflow:auto/.test(SRC));
+        // ---- V6.3-4 (P2-1, P3-1): +64 «Исполнителю» строго за счёт «Описания»; «Задача» не закреплена; ширину таблицы и прочие колонки раскладывает замер (fitListWidths) ----
+        const fit = A.T.__t.listFitCalc;
+        check('V6.3-4 P2-1: «Задача» больше не закреплена на константе (нет правила width:193px / @media (min-width:1200px) для .tk-c-task)', !/width:193px/.test(SRC) && !/@media \(min-width:1200px\)\{\.tk-table-v62 th\.tk-c-task/.test(SRC) && !/tk-c-task\{width:\d+px/.test(SRC));
+        // 1280, короткие темы (замер «до», Исполнитель 128): Задача 184,1 · Описание 305,9 · Исполнитель 128 · Срок 243,9 · Приор. 86,8 · Статус 82,6 · ✎ 44 = 1075,4
+        const w128 = [184.1, 305.9, 128, 243.9, 86.8, 82.6, 44], f1 = fit(w128, 2, 1), sum = (a) => a.reduce((x, y) => x + y, 0);
+        check('V6.3-4 правило ширин: Исполнитель 128 → 192, Описание = прежнее − 64 (305,9 → 241,9), Задача/Срок/Приор./Статус/✎ без изменений, сумма (ширина таблицы) та же',
+          f1[2] === 192 && Math.abs(f1[1] - 241.9) < 1e-9 && [0, 3, 4, 5, 6].every((i) => f1[i] === w128[i]) && Math.abs(sum(f1) - sum(w128)) < 1e-9, JSON.stringify(f1));
+        // любые данные/окна: Описание ≥ 220 при замере → после ≥ 156; сумма и остальные колонки неизменны; входной массив не меняется
+        let okAny = true, bad = '';
+        [220, 232.9, 264.2, 297.8, 389.3, 514.5, 754, 1200].forEach((d) => [170.6, 225.9, 538.8, 673.8].forEach((tk) => {
+          const inp = [tk, d, 128, 243.9, 86.8, 82.6, 44], snap = JSON.stringify(inp), r = fit(inp, 2, 1);
+          if (!(r[2] === 192 && Math.abs(r[1] - (d - 64)) < 1e-9 && r[1] >= 156 && r[0] === tk && Math.abs(sum(r) - sum(inp)) < 1e-9 && JSON.stringify(inp) === snap)) { okAny = false; bad = JSON.stringify([inp, r]); }
+        }));
+        check('V6.3-4 правило ширин для любых данных (Описание 220…1200, Задача 170…674): Описание − 64 ровно, Задача не меняется, таблица не растёт, вход не мутируется', okAny, bad);
+        check('V6.3-4 минимум «Описания» 220 → 156 px (упирается в минимум — таблица не растёт: 220 → 156 при Исполнителе +64); 6 колонок (supervisor) тоже: индексы передаются, не позиции',
+          fit([170.6, 220, 128, 243.9, 86.8, 82.6, 44], 2, 1)[1] === 156 && (() => { const r = fit([170.6, 220, 128, 243.9, 86.8, 82.6], 2, 1); return r.length === 6 && r[1] === 156 && r[2] === 192; })());
+        check('V6.3-4 замер: .tk-measure возвращает «Исполнителя» 128 px (width = min = max), .tk-fit — table-layout:fixed; render() вызывает fitListWidths() сразу после записи innerHTML (до отрисовки)',
+          /\.tk-table-v62\.tk-measure th\.tk-c-exec,\.tk-table-v62\.tk-measure td\.tk-c-exec\{width:128px;min-width:128px;max-width:128px\}/.test(SRC) && /\.tk-table-v62\.tk-fit\{table-layout:fixed;width:auto\}/.test(SRC) &&
+          /DOM\.root\.innerHTML = h;\s*\n\s*if \(!showForm && !showCal && S\.view !== 'board'\) fitListWidths\(\);/.test(SRC));
+        check('V6.3-4 перерасчёт без перерисовки: ResizeObserver на панели (смена окна, показ скрытой вкладки), document.fonts.ready; константы LIST_EXEC_NEW = 192 = 128 × 1,5, LIST_DESC_MIN = 156',
+          /new ResizeObserver\(/.test(SRC) && /document\.fonts\.ready\.then\(/.test(SRC) && /LIST_EXEC_NEW = 192, LIST_DESC_MIN = 156/.test(SRC) && 128 * 1.5 === 192);
+        await A.T.open({ view: 'list' }); await A.settle();
+        check('V6.3-4 «Исполнитель» без подгонки (нет getBoundingClientRect, напр. этот сьют) — рендер списка не падает и остаётся автораскладка с 192: таблица .tk-table-v62 без .tk-fit', A.has('class="tk-table tk-table-v62"') && !A.has('tk-fit') && !A.has('tk-measure'));
+        check('V6.3-1 И-2 «Описание» по-прежнему без max-width, min-width 220 (замер при Исполнителе 128 идёт с прежним минимумом); у «Описания» нет своей фиксированной ширины в CSS', descRule && +descRule[1] === 220 && !/tk-c-desc\{[^}]*width:\d+px/.test(SRC) && !/\.tk-table-v62 td\.tk-desc\{[^}]*[^-]width:\d+px/.test(SRC));
+        check('V6.3-1 И-2 прочие колонки не тронуты: «Править» 44 px, шапка sticky и таблица в прокручиваемом .tk-tablewrap', editRule && +editRule[1] === 44 && /\.tk-table th\{position:sticky;top:0/.test(SRC) && /\.tk-tablewrap\{overflow:auto/.test(SRC));
         // V6.3-2 (Д-1) осознанно меняет ячейку «Срок»: next_at + «↻ N» (обычная задача без повторов выглядит как раньше — dueText = fmtPeriod основной даты)
         check('V6.3-1/V6.3-2 ячейка «Срок» Списка: tk-nowrap + dueText(next_at) + «↻ N» (бейдж только у задач с повторами); без повторов текст = fmtPeriod', /<td class="tk-nowrap" data-tk-due="1"[^>]*>' \+ esc\(dueText\(t\)\) \+ occBadge\(t\) \+ '<\/td>'/.test(SRC) && /function dueText\(t\) \{ return fmtPeriod\(nextWhen\(t\)\); \}/.test(SRC));
       }
