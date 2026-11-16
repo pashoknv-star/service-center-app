@@ -131,6 +131,10 @@ getfacl -p $WWW/data $WWW/images | tee ~/acl-before.txt
 mkdir -p /home/host1882970/backups
 sqlite3 $WWW/data/app.db ".backup '/home/host1882970/backups/app-$(date +%F-%H%M).db'"
 ls -l /home/host1882970/backups | tail -3        # убедиться, что копия создана и не пуста
+# 1a. V7: вложения задач — каталог data/task_files (создаёт сам PHP при первой загрузке, владелец — веб-пользователь).
+#     Пакет его не содержит и не трогает; бэкап — копией (если каталог уже есть). Вручную НЕ создавать и НЕ chmod:
+#     каталог, созданный SSH-пользователем, может оказаться без права записи для веб-пользователя.
+[ -d $WWW/data/task_files ] && tar -czf /home/host1882970/backups/task_files-$(date +%F-%H%M).tar.gz -C $WWW/data task_files
 
 # 2. Распаковать пакет во временный каталог и скопировать в $WWW.
 mkdir -p /tmp/scnew && tar -xzf ~/sc-hostland-deploy.tar.gz -C /tmp/scnew
@@ -268,6 +272,10 @@ sqlite3 ~/host1882970.hostland.pro/htdocs/www/data/app.db \
 | `/images/<существующее фото>` | 200 (проверка, что `images/.htaccess` с `php_flag` не даёт 500, R1-02) |
 | `/api/session.php` | 200, без заголовка `X-Powered-By` |
 | `/data/app.db` | 403 |
+| `/api/task_files.php?limits=1` (без сессии) | 401 (V7) |
+| `/api/task_files_lib.php` | 403 или 404 (библиотека, не точка входа) |
+| `/api/task_files_test.php` | 403 или 404 |
+| `/data/task_files/.htaccess` | 403 или 404 (каталог вложений закрыт) |
 
 ```bash
 BASE=http://host1882970.hostland.pro
@@ -291,6 +299,10 @@ chk /api/E8_SYNC.md                '403|404'
 chk /images/<существующее-фото>    200
 chk /api/session.php               200
 chk /data/app.db                   403
+chk '/api/task_files.php?limits=1' 401              # V7: вложения без сессии
+chk /api/task_files_lib.php        '403|404'
+chk /api/task_files_test.php       '403|404'
+chk /data/task_files/.htaccess     '403|404'        # прямой доступ к вложениям закрыт
 # заголовок X-Powered-By на session.php: ожидаем пустой вывод
 curl -sI $BASE/api/session.php | grep -i '^x-powered-by' && echo "FAIL: X-Powered-By присутствует" || echo "OK   X-Powered-By отсутствует"
 # ПДн в отдаваемом анонимно index.html: ожидаем exit 0

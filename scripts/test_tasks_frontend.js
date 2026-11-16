@@ -1833,7 +1833,7 @@ async function main() {
       A.afiles([new File(['MZ'], 'setup.exe'), new File([new Uint8Array(lim.max_file_bytes + 1)], 'большой.pdf'), new File([], 'пусто.txt')], 'pick');
       await A.settle();
       check('V7-10 exe / больше лимита / пустой: ошибка у своего файла, на сервер не отправлялись',
-        A.ahas('Формат не поддерживается') && A.ahas('Файл больше ' + U7.fmtSize(lim.max_file_bytes)) && A.ahas('Файл пустой') &&
+        A.ahas('Формат «.exe» не поддерживается.') && A.ahas('Файл больше ' + U7.fmtSize(lim.max_file_bytes)) && A.ahas('Файл пустой') &&
         A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length === nPost1, A.ahtml().slice(0, 300));
       await A.aclick('attDismiss');
       check('V7-11 × у ошибки убирает её из очереди', (A.ahtml().match(/tk-att-q-error/g) || []).length === 2);
@@ -1849,6 +1849,9 @@ async function main() {
         A.confirms.asked.length === 1 && /Удалить файл «табель\.csv»/.test(A.confirms.asked[0]) && (await serverAtts(ta.id)).length === 2 && !A.ahas('табель.csv</a>'));
 
       // закрытие: × / Esc-путь / клик по затемнению
+      let stopped = 0;
+      A.attEl().fire('click', { target: { closest: () => null }, stopPropagation() { stopped++; } });
+      check('V7-14a клик внутри окна не всплывает до document (иначе index.html закрыл бы панель «вне панели»)', stopped === 1 && !!A.attEl());
       A.attEl().fire('click', { target: A.attEl() });
       check('V7-14 клик по затемнению закрывает окно', !A.attEl() && A.S.att === null);
       await A.click('attOpen', (d) => d.id === ta.id);

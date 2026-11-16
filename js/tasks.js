@@ -1438,6 +1438,8 @@
   var CLIP_SVG = '<svg class="tk-clip" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">' +
     '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" ' +
     'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var DL_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" ' +
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var _attSeq = 0;
 
   function attsOf(t) { return (t && Array.isArray(t.attachments)) ? t.attachments : []; }
@@ -1489,7 +1491,7 @@
     if (status === 401) code = 'unauthorized';
     var T = {
       file_too_large: 'Файл больше ' + mb + '.',
-      unsupported_format: 'Формат не поддерживается. Можно: ' + ATT_FORMATS_TEXT + '.',
+      unsupported_format: 'Формат не поддерживается — допустимые форматы перечислены под зоной загрузки.',
       content_mismatch: 'Содержимое файла не соответствует его расширению.',
       too_many_files: 'У задачи уже ' + ATT_MAX_FILES + ' файлов — больше прикрепить нельзя.',
       total_too_large: 'Суммарный объём вложений задачи больше 50 МБ.',
@@ -1507,7 +1509,7 @@
   // проверка до отправки (сервер проверяет то же самое и ещё содержимое)
   function attPrecheck(file, maxBytes) {
     var ext = attExt(file && file.name);
-    if (ATT_EXT.indexOf(ext) < 0) return attErrText(415, { error: 'unsupported_format' });
+    if (ATT_EXT.indexOf(ext) < 0) return 'Формат ' + (ext ? '«.' + ext + '» ' : 'без расширения ') + 'не поддерживается.';
     if (!(file.size > 0)) return attErrText(400, { error: 'empty_file' });
     if (file.size > maxBytes) return attErrText(413, { error: 'file_too_large', max_file_bytes: maxBytes });
     return '';
@@ -1606,12 +1608,13 @@
       var t = findTask(A.taskId) || { id: A.taskId, archived: 0, created_by: null };
       items.forEach(function (a) {
         var ext = a.ext || attExt(a.name), href = ATT_API + '?id=' + encodeURIComponent(a.id);
+        // картинка/PDF: имя открывает в новой вкладке, отдельный значок справа — скачать; остальное: имя скачивает
         var link = a.inline
-          ? '<a class="tk-att-name" href="' + esc(href + '&inline=1') + '" target="_blank" rel="noopener" title="Открыть в новой вкладке">' + esc(a.name) + '</a>' +
-            ' <a class="tk-att-dl" href="' + esc(href) + '" download title="Скачать" aria-label="Скачать ' + esc(a.name) + '">⭳</a>'
+          ? '<a class="tk-att-name" href="' + esc(href + '&inline=1') + '" target="_blank" rel="noopener" title="Открыть в новой вкладке">' + esc(a.name) + '</a>'
           : '<a class="tk-att-name" href="' + esc(href) + '" download title="Скачать">' + esc(a.name) + '</a>';
+        var dl = a.inline ? '<a class="tk-att-dl" href="' + esc(href) + '" download title="Скачать" aria-label="Скачать ' + esc(a.name) + '">' + DL_SVG + '</a>' : '';
         h += '<li class="tk-att-it" data-tk-att-id="' + esc(a.id) + '"><span class="tk-att-type tk-att-k-' + attKind(ext).toLowerCase() + '">' + attKind(ext) + '</span>' +
-          '<span class="tk-att-main">' + link + '<span class="tk-muted tk-att-meta">' + esc([fmtSize(a.size), a.uploaded_by || '', fmtStamp(a.uploaded_at)].filter(Boolean).join(' · ')) + '</span></span>' +
+          '<span class="tk-att-main">' + link + '<span class="tk-muted tk-att-meta">' + esc([fmtSize(a.size), a.uploaded_by || '', fmtStamp(a.uploaded_at)].filter(Boolean).join(' · ')) + '</span></span>' + dl +
           ((A.canUpload && canDetach(t, a))
             ? '<button type="button" class="tk-x tk-att-del" data-tk-act="attDelete" data-att="' + esc(a.id) + '" title="Удалить файл" aria-label="Удалить файл ' + esc(a.name) + '">×</button>'
             : '') + '</li>';
@@ -1624,7 +1627,7 @@
       h += '<ul class="tk-att-queue" data-tk-att-queue="1">' + A.queue.map(function (q) {
         var st = q.status === 'error' ? '<span class="tk-merr">' + esc(q.error) + '</span>'
           : q.status === 'wait' ? '<span class="tk-muted">в очереди</span>' : '<span class="tk-muted">' + q.pct + '%</span>';
-        return '<li class="tk-att-q tk-att-q-' + q.status + '" data-tk-att-q="' + esc(q.key) + '"><div class="tk-att-qrow"><span class="tk-att-name">' + esc(q.name) + '</span> ' + st +
+        return '<li class="tk-att-q tk-att-q-' + q.status + '" data-tk-att-q="' + esc(q.key) + '"><div class="tk-att-qrow"><span class="tk-att-name">' + esc(q.name) + '</span> <span class="tk-att-qst">' + st + '</span>' +
           (q.status === 'error' ? ' <button type="button" class="tk-x" data-tk-act="attDismiss" data-key="' + esc(q.key) + '" title="Убрать" aria-label="Убрать">×</button>' : '') + '</div>' +
           (q.status !== 'error' ? '<div class="tk-att-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + q.pct + '"><i style="width:' + q.pct + '%"></i></div>' : '') + '</li>';
       }).join('') + '</ul>';
@@ -1782,6 +1785,8 @@
   // --- события окна
   function onAttClick(ev) {
     var t = ev.target;
+    // окно живёт в body, вне панели отпусков: без этого index.html (клик «вне панели») закрыл бы панель «Задач» под окном
+    if (ev && ev.stopPropagation) ev.stopPropagation();
     if (t === DOM.att) { attClose(); return; }                 // клик по затемнению
     var el = t && t.closest ? t.closest('[data-tk-act]') : null;
     if (!el) return;
@@ -3296,12 +3301,14 @@
       '.tk-att-main{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}' +
       '.tk-att-name{overflow-wrap:anywhere;color:var(--rt-blue);text-decoration:none;font-weight:600}a.tk-att-name:hover{text-decoration:underline}' +
       '.tk-att-meta{font-size:11px}' +
-      '.tk-att-dl{color:#6b7a90;text-decoration:none;font-size:13px;margin-left:4px}.tk-att-dl:hover{color:var(--rt-blue)}' +
+      '.tk-att-dl{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;color:#6b7a90;text-decoration:none}' +
+      '.tk-att-dl:hover,.tk-att-dl:focus-visible{color:var(--rt-blue);background:rgba(0,136,204,.08);outline:0}' +
       '.tk-att-del{flex:none;color:#6b7a90;font-size:18px;padding:0 4px}.tk-att-del:hover{color:var(--sick-red)}' +
       '.tk-att-empty{padding:6px 2px}' +
       '.tk-att-q{border:1px dashed var(--divider);border-radius:8px;padding:6px 8px;margin-bottom:6px}' +
       '.tk-att-q-error{border-style:solid;border-color:rgba(211,47,47,.35);background:rgba(211,47,47,.04)}' +
-      '.tk-att-qrow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.tk-att-qrow .tk-att-name{color:var(--text)}' +
+      '.tk-att-qrow{display:flex;align-items:baseline;gap:6px}.tk-att-qrow .tk-att-name{color:var(--text);flex:none;max-width:55%}' +
+      '.tk-att-qst{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}.tk-att-qrow .tk-x{flex:none;margin-left:auto}' +
       '.tk-att-bar{height:6px;border-radius:3px;background:rgba(119,0,255,.10);overflow:hidden;margin-top:5px}' +
       '.tk-att-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--rt-purple),var(--rt-blue));transition:width .15s linear}' +
       '.tk-att-drop{border:2px dashed rgba(119,0,255,.35);border-radius:10px;padding:14px 12px;margin:8px 0 4px;text-align:center;background:rgba(119,0,255,.025);transition:background .12s,border-color .12s}' +
