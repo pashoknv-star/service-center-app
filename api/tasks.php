@@ -31,6 +31,8 @@ declare(strict_types=1);
  * (blocked_days, suggested_start), 403, 401.
  * Ответы не содержат телефонов/фото (из сотрудника отдаются только id и full_name).
  * Все мутации → audit_log: task.create / task.update / task.close / task.reopen / task.archive.
+ * V7: в ответе задачи attachments: [{id,name,ext,size,uploaded_by,uploaded_at,inline}] (запись — api/task_files.php);
+ *     DELETE (архив) удаляет вложения задачи с сервера (audit task.archive.details.attachments_deleted).
  * Время — локальное +05, ISO без смещения. check_state: 'ok' | 'pending'
  * (n8n, T1-4: см. tasks_check_period_checked() — вердикт tasks-validate, при недоступности
  * PHP-fallback + 'pending'; перепроверка pending — tasks_recheck_pending() после ответа на чтение списка,
@@ -41,6 +43,7 @@ require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/tasks_rules.php';
+require_once __DIR__ . '/task_files_lib.php';   // V7: вложения задач
 
 handleOptions();
 
@@ -264,9 +267,10 @@ function tasks_load_occurrences(PDO $pdo, array $ids): array
  *
  * @param array<string, array>|null $occMap task_id => повторы (tasks_load_occurrences); null — загрузить для этой задачи
  */
-function tasks_build(PDO $pdo, array $row, array $people, array $checks, ?array $occMap = null): array
+function tasks_build(PDO $pdo, array $row, array $people, array $checks, ?array $occMap = null, ?array $attMap = null): array
 {
     $id = (string) $row['id'];
+    $attachments = $attMap !== null ? ($attMap[$id] ?? []) : (tf_load($pdo, [$id])[$id] ?? []);   // V7
     $assignees = $people[$id]['assignee'] ?? [];
     $watchers = $people[$id]['watcher'] ?? [];
     $occurrences = $occMap !== null ? ($occMap[$id] ?? []) : (tasks_load_occurrences($pdo, [$id])[$id] ?? []);
@@ -328,6 +332,7 @@ function tasks_build(PDO $pdo, array $row, array $people, array $checks, ?array 
         'notes'         => $notes,
         'occurrences'   => $occurrences,                                                              // V6.3-2 (Д-1)
         'next_at'       => tasks_next_at((string) $row['start_at'], $row['end_at'], $occurrences),    // V6.3-2 (Д-1)
+        'attachments'   => $attachments,                                                              // V7: вложения (метаданные)
     ];
 }
 
@@ -918,9 +923,10 @@ try {
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             [$people, $checks] = tasks_load_related($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
             $occMap = tasks_load_occurrences($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
+            $attMap = tf_load($pdo, array_map(static fn($r) => (string) $r['id'], $rows));   // V7
             $tasks = [];
             foreach ($rows as $r) {
-                $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap);
+                $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap, $attMap);
             }
             sendJson(['success' => true, 'count' => count($tasks), 'tasks' => $tasks]);
         }
@@ -999,9 +1005,10 @@ try {
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         [$people, $checks] = tasks_load_related($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
         $occMap = tasks_load_occurrences($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
+        $attMap = tf_load($pdo, array_map(static fn($r) => (string) $r['id'], $rows));   // V7
         $tasks = [];
         foreach ($rows as $r) {
-            $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap);
+            $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap, $attMap);
         }
         $listPayload = [
             'success' => true,
@@ -1306,12 +1313,15 @@ try {
                 $pdo->rollBack();
                 tasks_version_conflict($pdo, $id);
             }
+            // V7 (решение владельца): при архивации вложения удаляются с сервера — записи здесь, файлы после commit.
+            $gone = tf_delete_rows_for_task($pdo, $id);
             tasks_audit($pdo, 'task.archive', $id, [
                 'title'        => $row['title'],
                 'from_version' => (int) $row['version'],
                 'to_version'   => (int) $row['version'] + 1,
-            ]);
+            ] + ($gone['names'] !== [] ? ['attachments_deleted' => $gone['names']] : []));
             $pdo->commit();
+            tf_unlink_all($gone['stored']);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();

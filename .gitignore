@@ -15,3 +15,6 @@ data/*.db-journal
 *~
 .idea/
 .vscode/
+
+# --- V7: вложения задач (runtime; на проде data/task_files, в git не хранятся) ---
+data/task_files/
