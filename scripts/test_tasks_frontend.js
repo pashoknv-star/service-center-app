@@ -107,6 +107,25 @@ function makeEnv(base, cookie) {
         }, (e) => { inflight--; throw e; });
     },
   };
+  // V7: XMLHttpRequest (загрузка вложений с прогрессом) поверх настоящего fetch → php -S; FormData/File — из Node
+  class XHR {
+    constructor() { this.upload = {}; this.status = 0; this.responseText = ''; this.withCredentials = false; }
+    open(m, u) { this._m = m; this._u = u; }
+    send(fd) {
+      calls.push({ method: this._m, url: this._u, body: null, form: fd && typeof fd.get === 'function' ? fd.get('file') : null });
+      inflight++;
+      fetch(base + '/' + this._u, { method: this._m, headers: cookie ? { Cookie: cookie } : {}, body: fd })
+        .then((r) => r.text().then((t) => {
+          this.status = r.status; this.responseText = t;
+          if (this.upload.onprogress) this.upload.onprogress({ lengthComputable: true, loaded: 1, total: 2 });
+          try { if (this.onload) this.onload(); } finally { inflight--; }
+        }), () => { try { if (this.onerror) this.onerror(); } finally { inflight--; } });
+    }
+  }
+  sandbox.XMLHttpRequest = XHR;
+  sandbox.FormData = FormData;
+  sandbox.File = File;
+  sandbox.Blob = Blob;
   win.window = win;
   win.showToast = (text, type) => toasts.push({ text, type });
   win.confirm = (q) => { confirms.asked.push(q); return confirms.answer; };
@@ -204,8 +223,25 @@ function makeEnv(base, cookie) {
     modalEl().fire('change', { target: Object.assign({ dataset: t.dataset, value, type: t.attrs.type || 'text', checked: !!(extra && extra.checked) }, extra || {}) });
     await settle();
   }
+  // V7: окно вложений (#tasksAttModal в document.body)
+  const attEl = () => body.children.find((c) => c.id === 'tasksAttModal') || null;
+  const ahtml = () => (attEl() ? attEl().innerHTML : '');
+  const ahas = (needle) => ahtml().indexOf(needle) >= 0;
+  async function aclick(act, pred) {
+    const t = findTag('data-tk-act', act, pred, ahtml());
+    if (!t) throw new Error('кнопка окна вложений data-tk-act="' + act + '" не отрендерена');
+    attEl().fire('click', { target: { closest: () => ({ dataset: t.dataset }) }, preventDefault() {} });
+    await settle();
+  }
+  function afiles(files, how) {          // how: 'pick' (input change) | 'drop'
+    const ev = how === 'drop'
+      ? { target: {}, prevented: false, preventDefault() { this.prevented = true; }, dataTransfer: { types: ['Files'], files } }
+      : { target: { dataset: { tkAttInput: '' }, files, value: 'x' } };
+    attEl().fire(how === 'drop' ? 'drop' : 'change', ev);
+    return ev;
+  }
   return { sandbox, els, root, T, S: T.__t.S, calls, toasts, confirms, settle, click, change, field, key, input, filter, has, count, findTag,
-    body, events, modalEl, mhtml, mhas, mcount, mclick, mchange };
+    body, events, modalEl, mhtml, mhas, mcount, mclick, mchange, attEl, ahtml, ahas, aclick, afiles };
 }
 
 // ----------------------------------------------------------------------------
@@ -439,7 +475,8 @@ async function main() {
   // ---- 3. сервер на копии БД --------------------------------------------------
   console.log('-- e2e (php -S на копии БД)');
   const hashBefore = sha1(REAL_DB);
-  const tmpDb = path.join(os.tmpdir(), 'sc_tasks_ui_' + process.pid + '.db');
+  // V7: вложения хранятся рядом с БД (<каталог>/task_files) — у копии свой временный каталог, удаляется в finish()
+  const tmpDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sc_tasks_ui_')), 'app.db');
   fs.copyFileSync(REAL_DB, tmpDb);
   const port = await freePort();
   const base = 'http://127.0.0.1:' + port;
@@ -1738,6 +1775,183 @@ async function main() {
       await A.click('cancelForm');
     }
 
+    // ---------- V7: вложения задач (значок в карточке → окно: выбор/перетаскивание, полоса загрузки; права; форма; архив) ----------
+    {
+      console.log('-- V7 вложения');
+      const mkT = async (title, date) => (await http(base, adminCk, 'POST', 'api/tasks.php', { title, start_at: date || '2099-08-04', assignees: [e1] })).json.task;
+      const upDirect = async (ck, id, name, content) => {
+        const fd = new FormData();
+        fd.append('file', new File([content], name), name);
+        const r = await fetch(base + '/api/task_files.php?task_id=' + encodeURIComponent(id), { method: 'POST', headers: { Cookie: ck }, body: fd });
+        return { status: r.status, json: await r.json().catch(() => ({})) };
+      };
+      const serverAtts = async (id) => (await http(base, adminCk, 'GET', 'api/task_files.php?task_id=' + encodeURIComponent(id))).json.attachments || [];
+      const lim = (await http(base, adminCk, 'GET', 'api/task_files.php?limits=1')).json.limits;
+      const PDF = '%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n';
+      const U7 = A.T.__t;
+      check('V7-01 таблица ACTIONS: att* обработчики на месте (attOpen/attOpenForm/attClose/attPick/attDelete/attDismiss/attUnqueue)',
+        ['attOpen', 'attOpenForm', 'attClose', 'attPick', 'attDelete', 'attDismiss', 'attUnqueue'].every((a) => typeof U7.ACTIONS[a] === 'function' && SRC.indexOf('data-tk-act="' + a + '"') >= 0));
+      check('V7-02 белый список клиента = серверу (23 расширения), подписи типов и размеров',
+        U7.ATT_EXT.length === 23 && lim && lim.extensions.slice().sort().join() === U7.ATT_EXT.slice().sort().join() &&
+        U7.attKind('pdf') === 'PDF' && U7.attKind('docx') === 'DOC' && U7.attKind('csv') === 'XLS' && U7.attKind('heic') === 'IMG' && U7.attKind('7z') === 'ZIP' &&
+        U7.fmtSize(900) === '900 Б' && U7.fmtSize(5 * 1048576) === '5 МБ' && U7.fmtSize(1536 * 1024) === '1,5 МБ', JSON.stringify(lim && lim.extensions));
+
+      const ta = await mkT('V7 файлы');
+      await A.T.reload(); await A.settle();
+      await A.click('openTask', (d) => d.id === ta.id);
+      const btn0 = A.findTag('data-tk-act', 'attOpen', (d) => d.id === ta.id);
+      check('V7-03 карточка (admin, файлов нет): в шапке значок-скрепка «Прикрепить файлы» без счётчика; в бейджах счётчика нет',
+        !!btn0 && btn0.attrs.title === 'Прикрепить файлы' && /tk-dhead-r"><button type="button" class="tk-attbtn"/.test(A.root.innerHTML) && !A.has('tk-att-n'));
+      await A.click('attOpen', (d) => d.id === ta.id);
+      check('V7-04 клик по значку → модальное окно: «Файлов нет», зона «Перетащите файлы сюда или Выбрать файлы», лимит = серверный (' + U7.fmtSize(lim.max_file_bytes) + '), 10 файлов, форматы',
+        !!A.attEl() && A.ahas('role="dialog"') && A.ahas('Файлов нет') && A.ahas('data-tk-att-drop="1"') && A.ahas('Перетащите файлы сюда или') &&
+        A.ahas('data-tk-act="attPick"') && A.ahas('type="file" multiple') && A.ahas('До ' + U7.fmtSize(lim.max_file_bytes) + ' на файл, до 10 файлов') && A.ahas('HEIC, ZIP, 7Z, RAR'), A.ahtml().slice(0, 400));
+
+      // выбор файлов: полоса загрузки появляется сразу, после ответа файл в списке, счётчик в карточке
+      const nPost0 = A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length;
+      A.afiles([new File([PDF], 'Акт приёмки.pdf')], 'pick');
+      check('V7-05 «Выбрать файлы»: файл сразу в очереди с полосой загрузки (role=progressbar)', A.ahas('role="progressbar"') && A.ahas('Акт приёмки.pdf'));
+      await A.settle();
+      const s1 = await serverAtts(ta.id);
+      check('V7-06 загружен: в окне строка «PDF · Акт приёмки.pdf · размер · admin», очередь пуста; на сервере 1 файл',
+        s1.length === 1 && s1[0].name === 'Акт приёмки.pdf' && A.ahas('tk-att-k-pdf') && A.ahas('>Акт приёмки.pdf</a>') && !A.ahas('data-tk-att-queue') && A.ahas('Вложения · 1'), A.ahtml().slice(0, 600));
+      check('V7-07 PDF открывается в новой вкладке (inline=1, noopener) и скачивается отдельной ссылкой (download)',
+        A.ahas('href="api/task_files.php?id=' + s1[0].id + '&amp;inline=1" target="_blank" rel="noopener"') && A.ahas('class="tk-att-dl" href="api/task_files.php?id=' + s1[0].id + '" download'));
+      check('V7-08 карточка: счётчик на значке = 1; в Списке у строки задачи бейдж «скрепка 1»',
+        A.findTag('data-tk-act', 'attOpen', (d) => d.id === ta.id).attrs.title === 'Вложения: 1' && A.has('<span class="tk-attn">1</span>') && A.has('class="tk-tag tk-att-n" title="Вложений: 1"'));
+
+      // перетаскивание
+      const dev = A.afiles([new File(['a;b\n1;2\n'], 'табель.csv'), new File([PDF], 'второй.pdf')], 'drop');
+      await A.settle();
+      const s2 = await serverAtts(ta.id);
+      check('V7-09 перетаскивание двух файлов: браузеру запрещено открыть файл (preventDefault), оба загружены по одному',
+        dev.prevented && s2.length === 3 && s2.map((x) => x.name).includes('табель.csv') && s2.map((x) => x.name).includes('второй.pdf') &&
+        A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length === nPost0 + 3);
+
+      // проверки до отправки: формат и размер — без запроса на сервер
+      const nPost1 = A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length;
+      A.afiles([new File(['MZ'], 'setup.exe'), new File([new Uint8Array(lim.max_file_bytes + 1)], 'большой.pdf'), new File([], 'пусто.txt')], 'pick');
+      await A.settle();
+      check('V7-10 exe / больше лимита / пустой: ошибка у своего файла, на сервер не отправлялись',
+        A.ahas('Формат не поддерживается') && A.ahas('Файл больше ' + U7.fmtSize(lim.max_file_bytes)) && A.ahas('Файл пустой') &&
+        A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length === nPost1, A.ahtml().slice(0, 300));
+      await A.aclick('attDismiss');
+      check('V7-11 × у ошибки убирает её из очереди', (A.ahtml().match(/tk-att-q-error/g) || []).length === 2);
+      A.afiles([new File(['просто текст'], 'подделка.pdf')], 'pick');
+      await A.settle();
+      check('V7-12 подмена (текст под именем .pdf): сервер 415 → «Содержимое файла не соответствует его расширению», файл не добавлен',
+        A.ahas('Содержимое файла не соответствует его расширению') && (await serverAtts(ta.id)).length === 3);
+
+      // удаление
+      A.confirms.asked.length = 0;
+      await A.aclick('attDelete', (d) => d.att === String(s2.find((x) => x.name === 'табель.csv').id));
+      check('V7-13 удаление: подтверждение с именем файла, файл удалён на сервере и из окна',
+        A.confirms.asked.length === 1 && /Удалить файл «табель\.csv»/.test(A.confirms.asked[0]) && (await serverAtts(ta.id)).length === 2 && !A.ahas('табель.csv</a>'));
+
+      // закрытие: × / Esc-путь / клик по затемнению
+      A.attEl().fire('click', { target: A.attEl() });
+      check('V7-14 клик по затемнению закрывает окно', !A.attEl() && A.S.att === null);
+      await A.click('attOpen', (d) => d.id === ta.id);
+      await A.aclick('attClose');
+      check('V7-15 кнопка «Закрыть»/× закрывает окно', !A.attEl());
+
+      // лимит 10 файлов
+      const tl = await mkT('V7 десять файлов');
+      for (let i = 1; i <= 10; i++) await upDirect(adminCk, tl.id, 'f' + i + '.txt', 'файл ' + i);
+      await A.T.reload(); await A.settle();
+      await A.click('openTask', (d) => d.id === tl.id);
+      await A.click('attOpen', (d) => d.id === tl.id);
+      const nPost2 = A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length;
+      A.afiles([new File(['x'], 'f11.txt')], 'drop');
+      await A.settle();
+      check('V7-16 у задачи 10 файлов: «Выбрать файлы» неактивна, 11-й отклонён без запроса («уже 10 файлов»)',
+        /data-tk-act="attPick" disabled/.test(A.ahtml()) && A.ahas('уже 10 файлов') && A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length === nPost2);
+      await A.aclick('attClose');
+
+      // календарь: значок на плитке
+      await A.T.open({ view: 'calendar', date: '2099-08-04' }); await A.settle();
+      check('V7-17 Календарь: на плитке задачи с файлами — значок-скрепка (tk-ev-att, «Вложений: 2»)', A.has('class="tk-ev-att" title="Вложений: 2"'));
+      await A.T.open({ view: 'board' }); await A.settle();
+      check('V7-18 Доска: бейдж «скрепка N» в плитке задачи', A.has('class="tk-tag tk-att-n" title="Вложений: 2"') && A.has('class="tk-tag tk-att-n" title="Вложений: 10"'));
+      await A.T.open({ view: 'list' }); await A.settle();
+
+      // форма: новая задача — файлы ждут сохранения, затем загружаются
+      await A.click('newTask');
+      check('V7-19 форма новой задачи: поле «Вложения» с кнопкой и подсказкой «загрузятся после сохранения»',
+        A.has('data-tk-act="attOpenForm"') && A.has('Файлы загрузятся после сохранения задачи.'));
+      await A.field('title', 'V7 из формы');
+      await A.field('assigneePick', e1);
+      await A.field('startDate', '2099-08-05');
+      await A.click('attOpenForm');
+      const nPost3 = A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length;
+      A.afiles([new File([PDF], 'план.pdf'), new File(['x'], 'лишний.txt')], 'pick');
+      await A.settle();
+      check('V7-20 окно новой задачи: файлы в списке «загрузится после сохранения», запросов на сервер нет',
+        A.S.att.pending && A.S.form.pendingFiles.length === 2 && A.ahas('загрузится после сохранения задачи') &&
+        A.calls.filter((c) => c.method === 'POST' && /task_files/.test(c.url)).length === nPost3);
+      await A.aclick('attUnqueue', (d) => d.key === A.S.form.pendingFiles[1].key);
+      await A.aclick('attClose');
+      check('V7-21 × убирает файл из очереди; после закрытия окна кнопка формы показывает «Вложения · 1»', A.S.form.pendingFiles.length === 1 && A.has('Вложения · 1</button>'));
+      await A.click('saveForm');
+      await A.settle();
+      const created = (await http(base, adminCk, 'GET', 'api/tasks.php')).json.tasks.find((t) => t.title === 'V7 из формы');
+      check('V7-22 «Сохранить»: задача создана, затем файл загружен к ней (1 шт., «план.pdf»), сообщение «файлов прикреплено: 1»',
+        created && created.attachments.length === 1 && created.attachments[0].name === 'план.pdf' && A.S.msg && /файлов прикреплено: 1/.test(A.S.msg.text), JSON.stringify(A.S.msg));
+      await A.click('editTask', (d) => d.id === created.id);
+      check('V7-23 форма правки: «Вложения · 1», подсказка «прикрепляются сразу»', A.has('Вложения · 1</button>') && A.has('Файлы прикрепляются сразу'));
+      await A.click('attOpenForm');
+      check('V7-24 из формы правки открывается то же живое окно задачи (не отложенное)', A.S.att && !A.S.att.pending && A.S.att.taskId === created.id && A.ahas('план.pdf'));
+      await A.aclick('attClose');
+      await A.click('cancelForm');
+
+      // архив: предупреждение и удаление файлов с сервера
+      await A.click('openTask', (d) => d.id === ta.id);
+      A.confirms.asked.length = 0;
+      await A.click('archiveTask', (d) => d.id === ta.id);
+      const arch = (await http(base, adminCk, 'GET', 'api/tasks.php?id=' + encodeURIComponent(ta.id))).json.task;
+      check('V7-25 «В архив»: в подтверждении «Вложения (2 файла) будут удалены с сервера…»; после архивации вложений 0',
+        /Вложения \(2 файла\) будут удалены с сервера без возможности восстановления/.test(A.confirms.asked[0] || '') && arch.archived === 1 && arch.attachments.length === 0, A.confirms.asked[0]);
+
+      // supervisor: чужая задача — только просмотр; своя (created_by) — прикрепляет и удаляет только свои
+      const R = makeEnv(base, supCk);
+      R.els.tabTasks.click(); await R.settle();
+      await R.click('openTask', (d) => d.id === tl.id);
+      await R.click('attOpen', (d) => d.id === tl.id);
+      check('V7-26 supervisor, задача admin: окно открывается (просмотр/скачивание), зоны загрузки и × нет, пояснение «только смотреть и скачивать»',
+        R.ahas('f1.txt') && !R.ahas('data-tk-att-drop') && !R.ahas('data-tk-act="attDelete"') && R.ahas('только смотреть и скачивать'));
+      await R.aclick('attClose');
+      const ts = await mkT('V7 задача руководителя');
+      { const d = sdb(); d.prepare("UPDATE tasks SET created_by = 'supervisor_zone0' WHERE id = ?").run(ts.id); d.close(); }
+      await upDirect(adminCk, ts.id, 'от админа.txt', 'a');
+      await R.T.reload(); await R.settle();
+      await R.click('openTask', (d) => d.id === ts.id);
+      await R.click('attOpen', (d) => d.id === ts.id);
+      R.afiles([new File(['s'], 'от руководителя.txt')], 'drop');
+      await R.settle();
+      const ss = await serverAtts(ts.id);
+      const mine = ss.find((x) => x.uploaded_by === 'supervisor_zone0'), adm = ss.find((x) => x.uploaded_by === 'admin');
+      check('V7-27 supervisor, своя задача: зона загрузки есть, файл прикреплён; × только у своего файла',
+        R.ahas('data-tk-att-drop') && !!mine && R.ahas('data-tk-act="attDelete" data-att="' + mine.id + '"') && !R.ahas('data-att="' + adm.id + '"'),
+        JSON.stringify({ ss, user: R.S.user, t: (R.S.tasks.find((x) => x.id === ts.id) || {}).created_by }) + R.ahtml().slice(0, 1500));
+      await R.aclick('attDelete', (d) => d.att === String(mine.id));
+      check('V7-28 supervisor удаляет свой файл', (await serverAtts(ts.id)).length === 1);
+      await R.aclick('attClose');
+
+      // viewer: только просмотр и скачивание
+      const Vw = makeEnv(base, viewCk);
+      Vw.els.tabTasks.click(); await Vw.settle();
+      await Vw.click('openTask', (d) => d.id === tl.id);
+      check('V7-29 viewer: значок со счётчиком есть (файлы видны)', !!Vw.findTag('data-tk-act', 'attOpen', (d) => d.id === tl.id) && Vw.has('<span class="tk-attn">10</span>'));
+      await Vw.click('attOpen', (d) => d.id === tl.id);
+      check('V7-30 viewer: ссылки на скачивание есть, зоны загрузки/«Выбрать файлы»/× нет',
+        Vw.ahas('download title="Скачать">f1.txt</a>') && !Vw.ahas('data-tk-att-drop') && !Vw.ahas('attPick') && !Vw.ahas('attDelete'));
+      await Vw.aclick('attClose');
+      const tv0 = await mkT('V7 пустая для viewer');
+      await Vw.T.reload(); await Vw.settle();
+      await Vw.click('openTask', (d) => d.id === tv0.id);
+      check('V7-31 viewer, у задачи файлов нет: значка нет (прикреплять нечем и нечего смотреть)', !Vw.findTag('data-tk-act', 'attOpen', (d) => d.id === tv0.id));
+    }
+
     // вкладка не залипает: уход на «Матрицу»
     A.els.matrixWrapper.style.display = 'block';
     A.els.tabMatrix.click();
@@ -1753,6 +1967,7 @@ function finish(srv, tmpDb, hashBefore) {
   try { fs.unlinkSync(tmpDb); } catch (e) { /* ignore */ }
   try { fs.unlinkSync(tmpDb + '-wal'); } catch (e) { /* ignore */ }
   try { fs.unlinkSync(tmpDb + '-shm'); } catch (e) { /* ignore */ }
+  try { if (path.basename(path.dirname(tmpDb)).indexOf('sc_tasks_ui_') === 0) fs.rmSync(path.dirname(tmpDb), { recursive: true, force: true }); } catch (e) { /* ignore */ }
   const intact = sha1(REAL_DB) === hashBefore;
   check('Z1 data/app.db не изменена тестом (sha1)', intact);
   console.log('RESULT: ' + passed + ' passed, ' + failed + ' failed');

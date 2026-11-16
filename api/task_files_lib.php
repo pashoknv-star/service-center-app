@@ -175,6 +175,13 @@ function tf_check_type(string $name, string $tmpPath): array
     [$serve, $allowed] = $types[$ext];
     $finfo = new finfo(FILEINFO_MIME_TYPE);
     $mime = (string) $finfo->file($tmpPath);
+    // очень короткий текст (1–2 символа) libmagic не распознаёт как text/plain — принимаем, если в нём нет NUL-байтов
+    if (($ext === 'txt' || $ext === 'csv') && $mime === 'application/octet-stream') {
+        $probe = (string) file_get_contents($tmpPath, false, null, 0, 8192);
+        if ($probe !== '' && strpos($probe, "\0") === false) {
+            return [null, $serve];
+        }
+    }
     if (!in_array($mime, $allowed, true)) {
         return ['content_mismatch', ''];
     }

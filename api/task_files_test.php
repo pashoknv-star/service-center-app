@@ -196,6 +196,16 @@ $run('L4 отказ: не из списка (exe/svg/html/php/js/bat) и под�
     return '10 + ' . count($cases);
 });
 
+$run('L5 короткий текст (1 символ, libmagic: octet-stream) в .txt/.csv принимается; бинарный с NUL под .txt — нет', function () use ($fx) {
+    file_put_contents("$fx/one.txt", 'a');
+    eq(tf_check_type('one.txt', "$fx/one.txt")[0], null, '1 символ .txt');
+    eq(tf_check_type('one.csv', "$fx/one.txt")[0], null, '1 символ .csv');
+    file_put_contents("$fx/bin.txt", "\x00\x01\x02\x03\xff\xfe");
+    eq(tf_check_type('bin.txt', "$fx/bin.txt")[0], 'content_mismatch', 'бинарный под .txt');
+    eq(tf_check_type('one.pdf', "$fx/one.txt")[0], 'content_mismatch', 'не txt — без поблажки');
+    return 'ok';
+});
+
 // ---------------------------------------------------------------- HTTP
 foreach ([['tf_a', 'Файлов Альфа']] as [$i, $n]) {
     $pdo->prepare("INSERT OR IGNORE INTO employees (id, full_name, location, sort_order) VALUES (:i, :n, 'QA', 0)")->execute([':i' => $i, ':n' => $n]);
