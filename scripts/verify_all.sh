@@ -15,8 +15,8 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 )
-ALL_SUITES=(smoke tasks tasksn8n tasksatt tasksui tasksmx taskscal director e51 e52 hygiene trips syntax phplint pii refs)
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 )
+ALL_SUITES=(smoke tasks tasksn8n tasksatt tasksui tasksmx taskscal director e51 e52 hygiene trips syntax phplint pii refs tasklink)
 SUITE_TIMEOUT=600
 
 if [ $# -gt 0 ]; then SUITES=("$@"); else SUITES=("${ALL_SUITES[@]}"); fi
@@ -95,6 +95,29 @@ run_suite() {
              fi
              if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && [ $rc2 -eq 0 ]; then RES=PASS
              else NOTE="${NOTE:+$NOTE; }самотесты rc=$rc failed=${f:-?}, проверка диффа rc=$rc2"; fi ;;
+    tasklink) # IE-2: коммит с кодом — только с id существующей Kanban-задачи (хук commit-msg + проверка диапазона).
+             : >"$log"; local why='' hp rc2 mode
+             hp=$(git config --get core.hooksPath)
+             [ "$hp" = scripts/hooks ] || why="$why core.hooksPath='${hp:-<не задан>}' (нужно: git config core.hooksPath scripts/hooks);"
+             if [ ! -f scripts/hooks/commit-msg ]; then why="$why нет scripts/hooks/commit-msg;"
+             else
+               [ -x scripts/hooks/commit-msg ] || why="$why хук не исполняемый в рабочем дереве;"
+               mode=$(git ls-files -s scripts/hooks/commit-msg | awk '{print $1}')
+               [ "$mode" = 100755 ] || why="$why хук не закоммичен с правом исполнения (индекс: ${mode:-нет});"
+             fi
+             echo "--- самотесты (scripts/test_commit_msg_hook.sh) ---" >>"$log"
+             timeout $SUITE_TIMEOUT bash scripts/test_commit_msg_hook.sh >>"$log" 2>&1; rc=$?
+             out=$(grep -Eo 'RESULT: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
+             p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
+             CNT=${p:-'-'}
+             { [ $rc -eq 0 ] && [ "${f:-x}" = 0 ]; } || why="$why самотесты rc=$rc failed=${f:-?};"
+             echo "--- проверка диапазона origin/main..HEAD (scripts/check_commit_tasks.sh; KANBAN_DB из окружения не используется) ---" >>"$log"
+             env -u KANBAN_DB -u KANBAN_SQLITE3 timeout $SUITE_TIMEOUT bash scripts/check_commit_tasks.sh >>"$log" 2>&1; rc2=$?
+             [ $rc2 -eq 0 ] || why="$why check_commit_tasks rc=$rc2 (коммиты с кодом без id Kanban — список в логе);"
+             if [ -z "$why" ]; then
+               RES=PASS; NOTE=$(grep -E '^TASKLINK_SUMMARY ' "$log" | tail -1 | sed -E 's/.*checked=([0-9]+) withcode=([0-9]+) violations=([0-9]+) dbok=([01]).*/коммитов \1, с кодом \2, нарушений \3/')
+               grep -q '^TASKLINK_SUMMARY .*dbok=0' "$log" && NOTE="$NOTE; БД Kanban недоступна — только формат id"
+             else NOTE="${why# }"; fi ;;
   esac
   # проверка эталона
   if [ -n "${BASELINE[$s]:-}" ] && [ "$RES" = PASS ]; then
@@ -134,7 +157,7 @@ if [ $FAILED -eq 0 ]; then
 else
   echo "GATE: FAIL ($FAILED). Логи: $LOGDIR"
   for s in "${SUITES[@]}"; do
-    if grep -q "^$s *FAIL" <(printf '%s\n' "${ROWS[@]}"); then echo "--- $s (хвост)"; tail -$([ "$s" = refs ] && echo 80 || echo 15) "$LOGDIR/$s.log"; fi
+    if grep -q "^$s *FAIL" <(printf '%s\n' "${ROWS[@]}"); then echo "--- $s (хвост)"; tail -$([ "$s" = refs ] || [ "$s" = tasklink ] && echo 80 || echo 15) "$LOGDIR/$s.log"; fi
   done
   exit 1
 fi

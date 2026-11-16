@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# commit-msg (IE-2): коммит, меняющий код, обязан нести id существующей Kanban-задачи (t_xxxxxxxx).
+# Включение на свежем клоне:  git config core.hooksPath scripts/hooks
+# Логика — scripts/lib_commit_tasks.sh; та же проверка задним числом — scripts/check_commit_tasks.sh.
+set -u
+HOOK_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+LIB="$HOOK_DIR/../lib_commit_tasks.sh"
+MSG=${1:-}
+if [ ! -r "$LIB" ]; then echo "commit-msg: нет $LIB — хук не может проверить коммит (отказ)." >&2; exit 1; fi
+# shellcheck source=../lib_commit_tasks.sh
+. "$LIB"
+[ -n "$MSG" ] && [ -f "$MSG" ] || { echo "commit-msg: не передан файл сообщения (отказ)." >&2; exit 1; }
+
+# Merge-коммит: id несут вливаемые коммиты.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then exit 0; fi
+
+# База сравнения: HEAD; при `git commit --amend` — родитель HEAD (в новый коммит входит и прежнее содержимое);
+# в репозитории без коммитов — пустое дерево.
+if git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  BASE=HEAD
+  if tr '\0' ' ' <"/proc/$PPID/cmdline" 2>/dev/null | grep -qE '(^| )commit( .*)? --amend( |$)'; then
+    BASE=$(git rev-parse -q --verify HEAD^ 2>/dev/null || git hash-object -t tree /dev/null)
+  fi
+else
+  BASE=$(git hash-object -t tree /dev/null)
+fi
+
+# Пути, затронутые коммитом (индекс на момент хука: для `commit -a`/`commit <path>` git подставляет нужный индекс).
+# --no-renames: переименование js/x.js -> reports/x.md считается изменением и старого пути (кода).
+CODE=$(git diff-index --cached --name-only --no-renames -z "$BASE" -- | ct_code_files)
+[ -n "$CODE" ] || exit 0   # только документы (или пустой коммит) — id не нужен
+
+ct_init_db
+ct_check_message "$MSG"
+
+case $CT_VERDICT in
+  ok) exit 0 ;;
+  unverified)
+    echo "commit-msg: ПРЕДУПРЕЖДЕНИЕ: БД Kanban недоступна (${CT_DB_REASON}); проверен только формат id (${CT_IDS//$'\n'/, }). Коммит не блокируется." >&2
+    exit 0 ;;
+  noid)    REASON="в сообщении нет id Kanban-задачи (формат t_ и 8 символов 0-9a-f, например t_941ab009). Строки, начинающиеся с «#», не учитываются." ;;
+  missing) REASON="id из сообщения (${CT_IDS//$'\n'/, }) не найден в Kanban (${CT_DB}). Проверьте id: hermes kanban list / kanban_show." ;;
+esac
+
+{
+  echo "ОТКЛОНЕНО (commit-msg, IE-2): коммит меняет код, но $REASON"
+  echo
+  echo "Файлы кода в коммите:"
+  printf '%s\n' "$CODE" | head -20 | sed 's/^/  - /'
+  n=$(printf '%s\n' "$CODE" | wc -l); [ "$n" -gt 20 ] && echo "  … и ещё $((n-20))"
+  echo
+  echo "Пример правильного сообщения:"
+  echo "  git commit -m \"IE-2 (t_941ab009): краткое описание изменения\""
+  echo
+  echo "Код меняется только через Kanban-задачу. Задачи нет — сначала попросите координатора её создать,"
+  echo "потом коммитьте с её id. Коммит только с документами (reports/**, staff_project/**, *.md) id не требует."
+  echo "Обход через «git commit --no-verify» агентам ЗАПРЕЩЁН; он обнаруживается gate (bash scripts/verify_all.sh, сьют tasklink)."
+} >&2
+exit 1
