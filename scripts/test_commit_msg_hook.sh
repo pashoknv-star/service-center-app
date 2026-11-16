@@ -163,7 +163,7 @@ check "15: scripts/, n8n/, router.php, .htaccess — это код -> отказ
 fresh; mkdir -p staff_project/a x/y; echo 's' > "staff_project/а б.xlsx"; echo 'd' > x/y/README.md; echo 'r' > reports/z.py; git add -A; try commit -m "документы: staff_project, любой *.md, reports/** без id"
 check "16: staff_project/**, любой *.md, reports/** — документы -> создан" '[ $RC -eq 0 ] && [ $MADE = 1 ]'
 # root-коммит (в репозитории ещё нет HEAD)
-N=$((N+1)); R="$T/r$N"; mkdir -p "$R/scripts/hooks" && cd "$R" && git init -q -b main . && cp "$SRC/scripts/hooks/commit-msg" scripts/hooks/ && cp "$SRC/scripts/lib_commit_tasks.sh" scripts/ && git config core.hooksPath scripts/hooks
+N=$((N+1)); R="$T/r$N"; mkdir -p "$R/scripts/hooks" && cd "$R" && git init -q -b main . && cp "$SRC/scripts/hooks/commit-msg" scripts/hooks/ && chmod +x scripts/hooks/commit-msg && cp "$SRC/scripts/lib_commit_tasks.sh" scripts/ && git config core.hooksPath scripts/hooks
 echo a > a.js; git add a.js; try commit -m "root без id"
 check "17a: первый коммит репозитория с кодом без id -> отказ" '[ $RC -ne 0 ] && [ $MADE = 0 ]'
 try commit -m "root ($GOOD)"
