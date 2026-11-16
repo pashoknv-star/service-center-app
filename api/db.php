@@ -32,7 +32,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 12;
+    private const SCHEMA_VERSION = 13;
 
     private static ?Database $instance = null;
 
@@ -351,6 +351,26 @@ final class Database
             );
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_occurrences_task ON task_occurrences (task_id)');
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_occurrences_start ON task_occurrences (start_at)');
+        }
+
+        // --- v12 → v13 (V7, Ш1): вложения задач ---
+        // Только добавление: таблица task_attachments (метаданные; сами файлы — <каталог БД>/task_files/,
+        // см. api/task_files_lib.php) + индекс. Существующие данные не затрагиваются; IF NOT EXISTS — повтор — no-op.
+        if ($current < 13) {
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS task_attachments (' .
+                "    id          INTEGER PRIMARY KEY AUTOINCREMENT," .
+                "    task_id     TEXT NOT NULL," .
+                "    orig_name   TEXT NOT NULL," .
+                "    stored_name TEXT NOT NULL UNIQUE," .
+                "    mime        TEXT NOT NULL," .
+                "    size        INTEGER NOT NULL," .
+                "    uploaded_by TEXT," .
+                "    uploaded_at TEXT," .
+                "    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE" .
+                ')'
+            );
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments (task_id)');
         }
 
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---

@@ -15,8 +15,8 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=302 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 )
-ALL_SUITES=(smoke tasks tasksn8n tasksui tasksmx taskscal director e51 e52 hygiene trips syntax phplint pii)
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 )
+ALL_SUITES=(smoke tasks tasksn8n tasksatt tasksui tasksmx taskscal director e51 e52 hygiene trips syntax phplint pii)
 SUITE_TIMEOUT=600
 
 if [ $# -gt 0 ]; then SUITES=("$@"); else SUITES=("${ALL_SUITES[@]}"); fi
@@ -49,8 +49,8 @@ run_suite() {
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
              CNT=${p:-'-'}
              if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; fi ;;
-    tasks|tasksn8n)   # T1-1 / T1-4: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети) — на временной копии БД (SC_APP_DB), data/app.db не трогает.
-             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php
+    tasks|tasksn8n|tasksatt)   # T1-1 / T1-4 / V7: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети; tasksatt — вложения) — на временной копии БД (SC_APP_DB), data/app.db не трогает.
+             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php; [ "$s" = tasksatt ] && php_t=api/task_files_test.php
              timeout $SUITE_TIMEOUT php "$php_t" >"$log" 2>&1; rc=$?
              out=$(grep -Eo 'RESULTS: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')

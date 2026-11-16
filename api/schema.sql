@@ -280,3 +280,19 @@ CREATE TABLE IF NOT EXISTS task_occurrences (
 );
 CREATE INDEX IF NOT EXISTS idx_task_occurrences_task ON task_occurrences (task_id);
 CREATE INDEX IF NOT EXISTS idx_task_occurrences_start ON task_occurrences (start_at);
+
+-- task_attachments (v13, V7): вложения задач — метаданные; файлы лежат в <каталог БД>/task_files/<stored_name>
+--   (32 hex, без расширения; прямой веб-доступ закрыт). Отдача и права — api/task_files.php.
+--   При архивации задачи вложения удаляются (записи и файлы).
+CREATE TABLE IF NOT EXISTS task_attachments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id     TEXT NOT NULL,
+    orig_name   TEXT NOT NULL,
+    stored_name TEXT NOT NULL UNIQUE,
+    mime        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    uploaded_by TEXT,
+    uploaded_at TEXT,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments (task_id);

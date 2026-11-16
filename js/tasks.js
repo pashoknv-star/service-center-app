@@ -88,6 +88,7 @@
     loadSeq: 0,
     orphanCount: 0,                // T1-8: открытые задачи без исполнителя (?orphans=1)
     modal: null,                   // T1-8: окно замены { empId, fullName, items, target, error, busy }
+    att: null,                     // V7: окно вложений { taskId, title, list, canUpload, limits, loading, error, queue, pending }
     dirty: false,                  // T1-11: sync принёс изменения, пока панель/форма закрыта — перечитать при возврате
     sort: { key: '', dir: '' }     // V6-1 (R-17): сортировка Списка: key = priority|status, dir = asc|desc; '' = без сортировки
   };
@@ -407,7 +408,7 @@
     });
     return out;
   }
-  function badgesHtml(t, link) {
+  function badgesHtml(t, link, noAtt) {
     var h = '';
     // V6.2 (W-4): каждый тег — отдельный чип (link → кликабельный: в «Список» с фильтром по этому тегу)
     tagsOf(t).forEach(function (tag) {
@@ -417,6 +418,7 @@
       var done = t.checklist.filter(function (c) { return c.done; }).length;
       h += '<span class="tk-tag">☑ ' + done + '/' + t.checklist.length + '</span>';
     }
+    if (!noAtt) h += attCountTag(t);                    // V7: «скрепка N» (в карточке вместо него — кнопка-значок)
     if (t.conflict) {
       h += '<span class="tk-tag tk-warn" title="Задача легла на дни, когда у исполнителя больничный или командировка">конфликт: ' + esc(conflictReasons(t).join(', ') || 'больничный/командировка') + '</span>';
     }
@@ -793,6 +795,7 @@
       (isOcc ? '<span class="tk-ev-rep" aria-label="Повтор">↻</span>' : '') +
       (when ? '<span class="tk-ev-when">' + esc(when) + '</span> ' : '') +
       '<b class="tk-ev-title">' + esc(t.title) + '</b>' +
+      (attsOf(t).length ? '<span class="tk-ev-att" title="' + esc('Вложений: ' + attsOf(t).length) + '">' + CLIP_SVG + '</span>' : '') +   // V7
       (orph ? '<span class="tk-ev-ic tk-ic-orph" title="Без исполнителя">0</span>' : '') +
       (t.conflict ? '<span class="tk-ev-ic tk-ic-conf" title="Конфликт">!</span>' : '') +
       (t.check_state === 'pending' ? '<span class="tk-ev-ic tk-ic-pend" title="Не проверено">?</span>' : '') + '</div>';
@@ -1422,13 +1425,422 @@
     if (fresh) { if (ev.stopPropagation) ev.stopPropagation(); if (ev.preventDefault) ev.preventDefault(); }
   }
 
+  // ---------------------------------------------------------------- V7: вложения задач
+  // Карточка — только значок-скрепка (счётчик); клик → модальное окно: список файлов, «Выбрать файлы», перетаскивание,
+  // полоса загрузки у каждого файла. Права (как на сервере, api/task_files.php): admin — любая неархивная задача;
+  // supervisor — только задача, которую создал сам (created_by), удаляет только свои файлы; viewer — смотрит и скачивает.
+  var ATT_API = 'api/task_files.php';
+  var ATT_EXT = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'txt', 'csv', 'rtf',
+    'jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'zip', '7z', 'rar'];
+  var ATT_MAX_FILES = 10;
+  var ATT_DEF_MAX = 5 * 1024 * 1024;
+  var ATT_FORMATS_TEXT = 'PDF, Word, Excel, PowerPoint, ODF, TXT, CSV, RTF, JPG, PNG, WEBP, GIF, HEIC, ZIP, 7Z, RAR';
+  var CLIP_SVG = '<svg class="tk-clip" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">' +
+    '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" ' +
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var DL_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" ' +
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var _attSeq = 0;
+
+  function attsOf(t) { return (t && Array.isArray(t.attachments)) ? t.attachments : []; }
+  function myLogin() { return S.user && S.user.username ? String(S.user.username) : ''; }
+  function isSupervisor() { return !!(S.user && S.user.role === 'supervisor'); }
+  function canAttach(t) {
+    if (!t || t.archived || !S.user) return false;
+    return isAdmin() || (isSupervisor() && !!t.created_by && String(t.created_by) === myLogin());
+  }
+  function canDetach(t, a) { return canAttach(t) && (isAdmin() || (!!a && a.uploaded_by === myLogin())); }
+  function attExt(name) { var m = /\.([^.\\/]+)$/.exec(String(name || '')); return m ? m[1].toLowerCase() : ''; }
+  function attKind(ext) {
+    if (ext === 'pdf') return 'PDF';
+    if (/^(doc|docx|odt|rtf)$/.test(ext)) return 'DOC';
+    if (/^(xls|xlsx|ods|csv)$/.test(ext)) return 'XLS';
+    if (/^(ppt|pptx|odp)$/.test(ext)) return 'PPT';
+    if (/^(jpg|jpeg|png|webp|gif|heic|heif)$/.test(ext)) return 'IMG';
+    if (/^(zip|7z|rar)$/.test(ext)) return 'ZIP';
+    return 'TXT';
+  }
+  function fmtSize(n) {
+    n = +n || 0;
+    if (n < 1024) return n + ' Б';
+    if (n < 1048576) return String(Math.max(1, Math.round(n / 1024))) + ' КБ';
+    return String(Math.round(n / 104857.6) / 10).replace('.', ',') + ' МБ';
+  }
+  function fmtStamp(s) {
+    var d = s ? new Date(s) : null;
+    if (!d || isNaN(d.getTime())) return '';
+    return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function attCountTag(t) {
+    var n = attsOf(t).length;
+    return n ? '<span class="tk-tag tk-att-n" title="' + esc('Вложений: ' + n) + '">' + CLIP_SVG + ' ' + n + '</span>' : '';
+  }
+  // значок в шапке карточки: есть файлы или можно прикрепить; иначе ничего
+  function attBtnHtml(t) {
+    var n = attsOf(t).length;
+    if (!n && !canAttach(t)) return '';
+    var tip = n ? 'Вложения: ' + n : 'Прикрепить файлы';
+    return '<button type="button" class="tk-attbtn' + (n ? ' tk-attbtn-has' : '') + '" data-tk-act="attOpen" data-id="' + esc(t.id) + '" title="' + esc(tip) +
+      '" aria-label="' + esc(tip) + '">' + CLIP_SVG + (n ? '<span class="tk-attn">' + n + '</span>' : '') + '</button>';
+  }
+  function attErrText(status, data) {
+    var code = data && data.error, A = S.att;
+    var mb = fmtSize((data && data.max_file_bytes) || (A && A.limits && A.limits.max_file_bytes) || ATT_DEF_MAX);
+    if (status === 413 && !code) code = 'file_too_large';            // nginx/Apache отрезали тело раньше PHP
+    if (status === 0) code = 'network';
+    if (status === 401) code = 'unauthorized';
+    var T = {
+      file_too_large: 'Файл больше ' + mb + '.',
+      unsupported_format: 'Формат не поддерживается — допустимые форматы перечислены под зоной загрузки.',
+      content_mismatch: 'Содержимое файла не соответствует его расширению.',
+      too_many_files: 'У задачи уже ' + ATT_MAX_FILES + ' файлов — больше прикрепить нельзя.',
+      total_too_large: 'Суммарный объём вложений задачи больше 50 МБ.',
+      empty_file: 'Файл пустой.',
+      no_file: 'Файл не получен сервером.',
+      upload_failed: 'Файл не загрузился — повторите.',
+      task_archived: 'Задача в архиве — вложения недоступны.',
+      forbidden: 'Недостаточно прав: прикреплять и удалять файлы может администратор, а руководитель — только в задаче, которую создал сам.',
+      not_found: 'Файл или задача не найдены (возможно, уже удалены).',
+      network: 'Нет связи с сервером. Повторите позже.',
+      unauthorized: 'Сессия истекла — войдите заново.'
+    };
+    return T[code] || ('Ошибка сервера' + (code ? ' (' + code + ')' : status ? ' (' + status + ')' : '') + '.');
+  }
+  // проверка до отправки (сервер проверяет то же самое и ещё содержимое)
+  function attPrecheck(file, maxBytes) {
+    var ext = attExt(file && file.name);
+    if (ATT_EXT.indexOf(ext) < 0) return 'Формат ' + (ext ? '«.' + ext + '» ' : 'без расширения ') + 'не поддерживается.';
+    if (!(file.size > 0)) return attErrText(400, { error: 'empty_file' });
+    if (file.size > maxBytes) return attErrText(413, { error: 'file_too_large', max_file_bytes: maxBytes });
+    return '';
+  }
+  function attSync(taskId, list) {
+    var t = findTask(taskId);
+    if (t) { t.attachments = list; render(); }
+  }
+
+  // --- модальное окно
+  function attOpen(taskId) {
+    var t = findTask(taskId);
+    if (!t) return Promise.resolve();
+    attClose(true);
+    var A = S.att = { taskId: t.id, title: t.title, list: attsOf(t).slice(), canUpload: canAttach(t), limits: null,
+      loading: true, error: '', queue: [], pending: false };
+    attMount();
+    return api('GET', ATT_API + '?task_id=' + encodeURIComponent(t.id)).then(function (r) {
+      if (S.att !== A) return;
+      A.loading = false;
+      if (r.ok && r.data && r.data.success) {
+        A.list = r.data.attachments || [];
+        A.canUpload = !!r.data.can_upload;
+        A.limits = r.data.limits || null;
+        attSync(A.taskId, A.list);
+      } else {
+        A.error = attErrText(r.status, r.data);
+      }
+      attRender();
+    });
+  }
+  // новая задача (форма admin): файлы копятся в S.form.pendingFiles и загружаются после первого сохранения
+  function attOpenPending() {
+    if (!S.form || !canWrite()) return Promise.resolve();
+    attClose(true);
+    var A = S.att = { taskId: null, title: String(S.form.draft.title || '').trim() || 'Новая задача', list: [], canUpload: true, limits: null,
+      loading: true, error: '', queue: [], pending: true };
+    attMount();
+    return api('GET', ATT_API + '?limits=1').then(function (r) {
+      if (S.att !== A) return;
+      A.loading = false;
+      if (r.ok && r.data && r.data.limits) A.limits = r.data.limits;
+      attRender();
+    });
+  }
+  function attMount() {
+    var el = document.createElement('div');
+    el.id = 'tasksAttModal';
+    el.className = 'tk-modal-back tk-att-back';
+    el.addEventListener('click', onAttClick);
+    el.addEventListener('change', onAttChange);
+    el.addEventListener('dragenter', onAttDrag);
+    el.addEventListener('dragover', onAttDrag);
+    el.addEventListener('dragleave', onAttDragLeave);
+    el.addEventListener('drop', onAttDrop);
+    DOM.att = el;
+    attRender();
+    (document.body || document.documentElement).appendChild(el);
+    if (typeof document.addEventListener === 'function') document.addEventListener('keydown', onAttKey);
+  }
+  function attClose(silent) {
+    var el = DOM.att;
+    S.att = null;
+    DOM.att = null;
+    if (el) {
+      if (el.parentNode && el.parentNode.removeChild) el.parentNode.removeChild(el);
+      else if (el.remove) el.remove();
+    }
+    if (typeof document.removeEventListener === 'function') document.removeEventListener('keydown', onAttKey);
+    if (!silent && S.form) render();                    // форма: обновить счётчик «Вложения · N»
+  }
+  function attMaxBytes(A) { return (A && A.limits && A.limits.max_file_bytes) || ATT_DEF_MAX; }
+  function attPendingList() { return (S.form && S.form.pendingFiles) || []; }
+
+  function attRender() {
+    var A = S.att;
+    if (!A || !DOM.att) return;
+    var items = A.pending ? attPendingList() : A.list;
+    var n = items.length, max = attMaxBytes(A);
+    var h = '<div class="tk-modal tk-att-modal" role="dialog" aria-modal="true" aria-label="Вложения задачи">';
+    h += '<div class="tk-att-head"><h4 class="tk-mtitle">' + CLIP_SVG + ' Вложения' + (n ? ' · ' + n : '') + '</h4>' +
+      '<button type="button" class="tk-x tk-att-x" data-tk-act="attClose" title="Закрыть" aria-label="Закрыть">×</button></div>';
+    h += '<div class="tk-att-task tk-muted">' + esc(A.title) + '</div>';
+    if (A.error) h += '<div class="tk-msg tk-msg-error" role="alert">' + esc(A.error) + '</div>';
+    if (A.loading) h += '<p class="tk-muted">Загрузка…</p>';
+    h += '<ul class="tk-att-list" data-tk-att-list="1">';
+    if (A.pending) {
+      items.forEach(function (p) {
+        var ext = attExt(p.name);
+        h += '<li class="tk-att-it" data-tk-att-pend="' + esc(p.key) + '"><span class="tk-att-type tk-att-k-' + attKind(ext).toLowerCase() + '">' + attKind(ext) + '</span>' +
+          '<span class="tk-att-main"><span class="tk-att-name">' + esc(p.name) + '</span><span class="tk-muted tk-att-meta">' + esc(fmtSize(p.size)) +
+          ' · загрузится после сохранения задачи</span></span>' +
+          '<button type="button" class="tk-x tk-att-del" data-tk-act="attUnqueue" data-key="' + esc(p.key) + '" title="Убрать" aria-label="Убрать файл ' + esc(p.name) + '">×</button></li>';
+      });
+    } else {
+      var t = findTask(A.taskId) || { id: A.taskId, archived: 0, created_by: null };
+      items.forEach(function (a) {
+        var ext = a.ext || attExt(a.name), href = ATT_API + '?id=' + encodeURIComponent(a.id);
+        // картинка/PDF: имя открывает в новой вкладке, отдельный значок справа — скачать; остальное: имя скачивает
+        var link = a.inline
+          ? '<a class="tk-att-name" href="' + esc(href + '&inline=1') + '" target="_blank" rel="noopener" title="Открыть в новой вкладке">' + esc(a.name) + '</a>'
+          : '<a class="tk-att-name" href="' + esc(href) + '" download title="Скачать">' + esc(a.name) + '</a>';
+        var dl = a.inline ? '<a class="tk-att-dl" href="' + esc(href) + '" download title="Скачать" aria-label="Скачать ' + esc(a.name) + '">' + DL_SVG + '</a>' : '';
+        h += '<li class="tk-att-it" data-tk-att-id="' + esc(a.id) + '"><span class="tk-att-type tk-att-k-' + attKind(ext).toLowerCase() + '">' + attKind(ext) + '</span>' +
+          '<span class="tk-att-main">' + link + '<span class="tk-muted tk-att-meta">' + esc([fmtSize(a.size), a.uploaded_by || '', fmtStamp(a.uploaded_at)].filter(Boolean).join(' · ')) + '</span></span>' + dl +
+          ((A.canUpload && canDetach(t, a))
+            ? '<button type="button" class="tk-x tk-att-del" data-tk-act="attDelete" data-att="' + esc(a.id) + '" title="Удалить файл" aria-label="Удалить файл ' + esc(a.name) + '">×</button>'
+            : '') + '</li>';
+      });
+    }
+    if (!n && !A.loading) h += '<li class="tk-att-empty tk-muted">Файлов нет.</li>';
+    h += '</ul>';
+    // очередь загрузки: полоса у каждого файла, ошибка — у своего файла
+    if (A.queue.length) {
+      h += '<ul class="tk-att-queue" data-tk-att-queue="1">' + A.queue.map(function (q) {
+        var st = q.status === 'error' ? '<span class="tk-merr">' + esc(q.error) + '</span>'
+          : q.status === 'wait' ? '<span class="tk-muted">в очереди</span>' : '<span class="tk-muted">' + q.pct + '%</span>';
+        return '<li class="tk-att-q tk-att-q-' + q.status + '" data-tk-att-q="' + esc(q.key) + '"><div class="tk-att-qrow"><span class="tk-att-name">' + esc(q.name) + '</span> <span class="tk-att-qst">' + st + '</span>' +
+          (q.status === 'error' ? ' <button type="button" class="tk-x" data-tk-act="attDismiss" data-key="' + esc(q.key) + '" title="Убрать" aria-label="Убрать">×</button>' : '') + '</div>' +
+          (q.status !== 'error' ? '<div class="tk-att-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + q.pct + '"><i style="width:' + q.pct + '%"></i></div>' : '') + '</li>';
+      }).join('') + '</ul>';
+    }
+    if (A.canUpload && !A.loading) {
+      var left = ATT_MAX_FILES - n - A.queue.filter(function (q) { return q.status === 'wait' || q.status === 'up'; }).length;
+      h += '<div class="tk-att-drop" data-tk-att-drop="1">' +
+        '<div class="tk-att-droptext">' + CLIP_SVG + ' <span class="tk-att-dnd">Перетащите файлы сюда или </span>' +
+        '<button type="button" class="tk-btn tk-primary" data-tk-act="attPick"' + (left > 0 ? '' : ' disabled') + '>Выбрать файлы</button></div>' +
+        '<input type="file" multiple class="tk-att-input" data-tk-att-input="1" tabindex="-1" aria-hidden="true" accept="' + esc(ATT_EXT.map(function (e) { return '.' + e; }).join(',')) + '">' +
+        '<div class="tk-muted tk-hint">До ' + esc(fmtSize(max)) + ' на файл, до ' + ATT_MAX_FILES + ' файлов на задачу' + (left > 0 && left < ATT_MAX_FILES ? ' (ещё ' + left + ')' : '') +
+        '. Форматы: ' + ATT_FORMATS_TEXT + '.' + (A.pending ? ' Файлы загрузятся после сохранения задачи.' : '') + '</div></div>';
+    } else if (!A.loading && !A.canUpload && !A.pending) {
+      var tt = findTask(A.taskId);
+      h += '<p class="tk-muted tk-hint">' + (tt && tt.archived ? 'Задача в архиве.' : 'Прикреплять файлы к этой задаче вы не можете — только смотреть и скачивать.') + '</p>';
+    }
+    h += '<div class="tk-actions"><button type="button" class="tk-btn" data-tk-act="attClose">Закрыть</button></div></div>';
+    DOM.att.innerHTML = h;
+  }
+
+  function attEnqueue(files) {
+    var A = S.att;
+    if (!A || !A.canUpload || !files) return;
+    var max = attMaxBytes(A), arr = [];
+    for (var i = 0; i < files.length; i++) arr.push(files[i]);
+    if (!arr.length) return;
+    var have = (A.pending ? attPendingList().length : A.list.length) +
+      A.queue.filter(function (q) { return q.status === 'wait' || q.status === 'up'; }).length;
+    arr.forEach(function (f) {
+      var err = attPrecheck(f, max), key = 'q' + (++_attSeq);
+      if (!err && have >= ATT_MAX_FILES) err = attErrText(422, { error: 'too_many_files' });
+      if (err) { A.queue.push({ key: key, name: f.name, size: f.size, status: 'error', pct: 0, error: err }); return; }
+      have++;
+      if (A.pending) {
+        if (!S.form.pendingFiles) S.form.pendingFiles = [];
+        S.form.pendingFiles.push({ key: key, name: f.name, size: f.size, file: f });
+      } else {
+        A.queue.push({ key: key, name: f.name, size: f.size, file: f, status: 'wait', pct: 0, error: '' });
+      }
+    });
+    attRender();
+    if (!A.pending) attPump(A);
+  }
+  // по одному файлу за раз (полоса — у текущего), окно можно закрыть — загрузка продолжится
+  function attPump(A) {
+    if (A.running) return;
+    var q = null;
+    for (var i = 0; i < A.queue.length; i++) if (A.queue[i].status === 'wait') { q = A.queue[i]; break; }
+    if (!q) return;
+    A.running = true;
+    q.status = 'up';
+    if (S.att === A) attRender();
+    attSend(A.taskId, q.file, function (pct) {
+      q.pct = pct;
+      if (S.att === A) attBar(q);
+    }).then(function (res) {
+      A.running = false;
+      if (res.ok) {
+        A.queue = A.queue.filter(function (x) { return x !== q; });
+        A.list = res.data.attachments || A.list;
+        attSync(A.taskId, A.list);
+        if (S.att !== A) toast('Файл «' + truncate(q.name, 40) + '» прикреплён', 'success');
+      } else {
+        q.status = 'error';
+        q.error = attErrText(res.status, res.data);
+        if (S.att !== A) toast('Файл «' + truncate(q.name, 40) + '» не прикреплён: ' + q.error, 'error');
+      }
+      if (S.att === A) attRender();
+      attPump(A);
+    });
+  }
+  // точечно обновить полосу (без перерисовки окна на каждом событии progress)
+  function attBar(q) {
+    var li = DOM.att && DOM.att.querySelector ? DOM.att.querySelector('[data-tk-att-q="' + q.key + '"]') : null;
+    if (!li) { attRender(); return; }
+    var bar = li.querySelector('.tk-att-bar i'), st = li.querySelector('.tk-att-qrow .tk-muted'), pb = li.querySelector('.tk-att-bar');
+    if (bar) bar.style.width = q.pct + '%';
+    if (st) st.textContent = q.pct + '%';
+    if (pb && pb.setAttribute) pb.setAttribute('aria-valuenow', String(q.pct));
+  }
+  // XHR — ради upload.onprogress (fetch прогресс отправки не отдаёт)
+  function attSend(taskId, file, onPct) {
+    return new Promise(function (resolve) {
+      var xhr;
+      try {
+        xhr = new XMLHttpRequest();
+        xhr.open('POST', ATT_API + '?task_id=' + encodeURIComponent(taskId), true);
+        xhr.withCredentials = true;
+      } catch (e) { resolve({ ok: false, status: 0, data: { error: 'network' } }); return; }
+      if (xhr.upload) {
+        xhr.upload.onprogress = function (ev) {
+          if (ev && ev.lengthComputable && ev.total > 0) onPct(Math.min(99, Math.floor(ev.loaded * 100 / ev.total)));
+        };
+      }
+      xhr.onload = function () {
+        var data = null;
+        try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch (e) { data = null; }
+        onPct(100);
+        resolve({ ok: xhr.status === 201 && !!(data && data.success), status: xhr.status, data: data || {} });
+      };
+      xhr.onerror = function () { resolve({ ok: false, status: 0, data: { error: 'network' } }); };
+      var fd = new FormData();
+      fd.append('file', file, file.name);
+      xhr.send(fd);
+    });
+  }
+  // после создания задачи из формы: отложенные файлы по одному; итог — сообщением
+  function attUploadPending(taskId, pend) {
+    var fails = [], okN = 0;
+    var chain = Promise.resolve();
+    pend.forEach(function (p) {
+      chain = chain.then(function () {
+        return attSend(taskId, p.file, function () {}).then(function (res) {
+          if (res.ok) { okN++; attSync(taskId, res.data.attachments || []); }
+          else fails.push(p.name + ' — ' + attErrText(res.status, res.data));
+        });
+      });
+    });
+    return chain.then(function () {
+      if (fails.length) {
+        S.msg = { type: 'error', text: 'Задача создана. Прикреплено файлов: ' + okN + ' из ' + pend.length + '. Не прикреплены: ' + fails.join('; ') };
+        toast('Не все файлы прикреплены', 'error');
+      } else {
+        S.msg = { type: 'ok', text: 'Задача создана, файлов прикреплено: ' + okN };
+      }
+      render();
+    });
+  }
+  function attDelete(attId) {
+    var A = S.att;
+    if (!A || A.pending) return Promise.resolve();
+    var a = null;
+    A.list.forEach(function (x) { if (String(x.id) === String(attId)) a = x; });
+    if (!a) return Promise.resolve();
+    if (typeof window.confirm === 'function' && !window.confirm('Удалить файл «' + a.name + '»? Он будет удалён с сервера.')) return Promise.resolve();
+    return api('DELETE', ATT_API + '?id=' + encodeURIComponent(a.id)).then(function (r) {
+      if (S.att !== A) return;
+      if (r.ok && r.data && r.data.success) {
+        A.list = r.data.attachments || [];
+        A.error = '';
+        attSync(A.taskId, A.list);
+        toast('Файл удалён', 'success');
+      } else {
+        A.error = attErrText(r.status, r.data);
+        if (r.status === 404) {                                  // уже удалён — перечитать список
+          return api('GET', ATT_API + '?task_id=' + encodeURIComponent(A.taskId)).then(function (r2) {
+            if (S.att === A && r2.ok && r2.data) { A.list = r2.data.attachments || []; attSync(A.taskId, A.list); attRender(); }
+          });
+        }
+      }
+      attRender();
+    });
+  }
+
+  // --- события окна
+  function onAttClick(ev) {
+    var t = ev.target;
+    // окно живёт в body, вне панели отпусков: без этого index.html (клик «вне панели») закрыл бы панель «Задач» под окном
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    if (t === DOM.att) { attClose(); return; }                 // клик по затемнению
+    var el = t && t.closest ? t.closest('[data-tk-act]') : null;
+    if (!el) return;
+    var fn = ACTIONS[el.dataset.tkAct];                         // обработчики att* — в общей таблице ACTIONS
+    if (typeof fn === 'function') fn(el, ev);
+  }
+  function onAttChange(ev) {
+    var t = ev.target;
+    if (!t || !t.dataset || t.dataset.tkAttInput === undefined) return;
+    var files = t.files;
+    attEnqueue(files);
+    try { t.value = ''; } catch (e) { /* ignore */ }
+  }
+  var _attOverT = null;
+  function attOver(on) {
+    var z = DOM.att && DOM.att.querySelector ? DOM.att.querySelector('[data-tk-att-drop]') : null;
+    if (z && z.classList) z.classList.toggle('tk-att-over', !!on);
+  }
+  function hasFiles(ev) {
+    var dt = ev && ev.dataTransfer;
+    if (!dt || !dt.types) return false;
+    for (var i = 0; i < dt.types.length; i++) if (dt.types[i] === 'Files') return true;
+    return false;
+  }
+  // перетаскивание: файлы можно бросить в любое место окна; браузер не должен открыть файл вместо загрузки
+  function onAttDrag(ev) {
+    if (!hasFiles(ev)) return;
+    if (ev.preventDefault) ev.preventDefault();
+    var ok = !!(S.att && S.att.canUpload && !S.att.loading);
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = ok ? 'copy' : 'none';
+    if (!ok) return;
+    attOver(true);
+    if (_attOverT) clearTimeout(_attOverT);
+    _attOverT = setTimeout(function () { attOver(false); }, 180);
+  }
+  function onAttDragLeave() { /* подсветку гасит таймер onAttDrag — без мигания на дочерних элементах */ }
+  function onAttDrop(ev) {
+    if (!hasFiles(ev)) return;
+    if (ev.preventDefault) ev.preventDefault();
+    if (_attOverT) { clearTimeout(_attOverT); _attOverT = null; }
+    attOver(false);
+    if (S.att && S.att.canUpload && !S.att.loading) attEnqueue(ev.dataTransfer.files);
+  }
+  function onAttKey(ev) {
+    if (ev && ev.key === 'Escape' && S.att) attClose();
+  }
+
   // --- карточка (справа)
   function renderDetail() {
     var t = S.selectedId ? findTask(S.selectedId) : null;
     if (!t) return '<aside class="tk-detail"><p class="tk-empty">Выберите задачу, чтобы увидеть карточку.</p></aside>';
     var h = '<aside class="tk-detail"><div class="tk-dhead"><b class="tk-dtitle">' + esc(t.title) + '</b>' +
-      statusTag(t, true) + '</div>';
-    h += '<div class="tk-badges">' + priorityTag(t, true) + badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div>';
+      '<span class="tk-dhead-r">' + attBtnHtml(t) + statusTag(t, true) + '</span></div>';      // V7: значок вложений
+    h += '<div class="tk-badges">' + priorityTag(t, true) + badgesHtml(t, true, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div>';
     if (occsOf(t).length) {
       // V6.3-2: перечень всех дат выполнения (основная + повторы); ближайшая (next_at) отмечена
       var nk = whenKey(nextWhen(t).start_at);
@@ -1633,6 +2045,10 @@
         '<input type="text" maxlength="300" data-tk-ck-text="' + i + '" value="' + esc(c.text) + '"> ' +
         '<button type="button" class="tk-x" data-tk-act="removeCheck" data-idx="' + i + '" title="Удалить пункт">×</button></div>';
     }).join('') + '</div><button type="button" class="tk-btn" data-tk-act="addCheck">+ пункт</button>');
+    // V7: вложения — та же кнопка-окно; у новой задачи файлы ждут первого сохранения
+    var attN = F.id ? attsOf(findTask(F.id)).length : (F.pendingFiles || []).length;
+    h += fieldRow('Вложения', '<button type="button" class="tk-btn tk-attformbtn" data-tk-act="attOpenForm">' + CLIP_SVG + ' Вложения' + (attN ? ' · ' + attN : '') + '</button>' +
+      '<div class="tk-muted tk-hint">' + (F.id ? 'Файлы прикрепляются сразу, без кнопки «Сохранить».' : 'Файлы загрузятся после сохранения задачи.') + '</div>');
     var wnames = d.watchers.map(empName).join(', ');
     h += fieldRow('Наблюдатель', '<select disabled title="Поле хранится, но в MVP неактивно"><option>' + esc(wnames || 'не используется в MVP') + '</option></select>', 'tk-f-off');
     h += '<div class="tk-actions"><button type="button" class="tk-btn tk-primary" data-tk-act="saveForm"' + (S.busy ? ' disabled' : '') + '>Сохранить</button>' +
@@ -1854,7 +2270,17 @@
       payload.version = F.version;
       p = api('PUT', API + '?id=' + encodeURIComponent(F.id), payload);
     }
-    return p.then(function (r) { return handleWriteResult(r, F.id, isNew ? 'Задача создана' : 'Задача сохранена'); });
+    var pend = isNew ? (F.pendingFiles || []).slice() : [];
+    return p.then(function (r) {
+      if (isNew && pend.length && S.att && S.att.pending) attClose(true);
+      var done = handleWriteResult(r, F.id, isNew ? 'Задача создана' : 'Задача сохранена');
+      // V7: отложенные файлы новой задачи — после создания (задача уже сохранена, сбой файлов её не отменяет)
+      if (isNew && pend.length && r.ok && r.data && r.data.task && r.data.task.id) {
+        var tid = r.data.task.id;
+        return Promise.resolve(done).then(function () { return attUploadPending(tid, pend); });
+      }
+      return done;
+    });
   }
 
   function statusAction(id, action) {
@@ -1893,6 +2319,28 @@
 
   var ACTIONS = {
     dismissMsg: function () { S.msg = null; render(); },
+    // V7: вложения — значок в карточке, кнопка в форме, кнопки окна
+    attOpen: function (el, ev) { if (ev && ev.stopPropagation) ev.stopPropagation(); attOpen(el.dataset.id); },
+    attOpenForm: function () {
+      if (!S.form) return;
+      if (S.form.id) attOpen(S.form.id); else attOpenPending();
+    },
+    attClose: function () { attClose(); },
+    attPick: function () {
+      var inp = DOM.att && DOM.att.querySelector ? DOM.att.querySelector('[data-tk-att-input]') : null;
+      if (inp && inp.click) inp.click();
+    },
+    attDelete: function (el) { attDelete(el.dataset.att); },
+    attDismiss: function (el) {
+      if (!S.att) return;
+      S.att.queue = S.att.queue.filter(function (q) { return q.key !== el.dataset.key; });
+      attRender();
+    },
+    attUnqueue: function (el) {
+      if (!S.form || !S.form.pendingFiles) return;
+      S.form.pendingFiles = S.form.pendingFiles.filter(function (p) { return p.key !== el.dataset.key; });
+      attRender();
+    },
     setView: function (el) {
       S.view = el.dataset.view || 'list';
       S.form = null; S.msg = null;
@@ -1965,7 +2413,10 @@
       if (!canWrite() || S.busy) return;
       var t = findTask(el.dataset.id);
       if (!t) return;
-      if (typeof window.confirm === 'function' && !window.confirm('Отправить задачу «' + t.title + '» в архив?')) return;
+      // V7 (решение владельца): при архивации вложения удаляются с сервера — предупреждаем
+      var an = attsOf(t).length;
+      if (typeof window.confirm === 'function' && !window.confirm('Отправить задачу «' + t.title + '» в архив?' +
+        (an ? '\nВложения (' + an + ' ' + plural(an, 'файл', 'файла', 'файлов') + ') будут удалены с сервера без возможности восстановления.' : ''))) return;
       S.busy = true;
       api('DELETE', API + '?id=' + encodeURIComponent(t.id), { version: t.version }).then(function (r) {
         return handleWriteResult(r, t.id, 'Задача отправлена в архив');
@@ -1979,7 +2430,7 @@
       refreshTags(true);
     },
     saveForm: function () { submitForm(); },
-    cancelForm: function () { S.form = null; render(); flushDirty(); },
+    cancelForm: function () { if (S.att && S.att.pending) attClose(true); S.form = null; render(); flushDirty(); },
     removeAssignee: function (el) {
       if (!S.form) return;
       S.form.draft.assignees = S.form.draft.assignees.filter(function (x) { return x !== el.dataset.emp; });
@@ -2825,11 +3276,54 @@
   }
 
   // ---------------------------------------------------------------- init
+  // V7: вложения — только новые правила (стиль окна — общий .tk-modal окна замены)
+  function cssV7() {
+    return '' +
+      '.tk-clip{vertical-align:-3px;flex:none}' +
+      '.tk-dhead-r{display:inline-flex;align-items:center;gap:6px;flex:none}' +
+      '.tk-attbtn{display:inline-flex;align-items:center;gap:3px;height:24px;padding:0 7px;border:1px solid var(--divider);border-radius:12px;background:#fff;color:#6b7a90;cursor:pointer;font:600 11px/1 sans-serif}' +
+      '.tk-attbtn:hover,.tk-attbtn:focus-visible{border-color:var(--rt-purple);color:var(--rt-purple);background:rgba(119,0,255,.06);outline:0}' +
+      '.tk-attbtn-has{color:var(--rt-purple);border-color:rgba(119,0,255,.45)}' +
+      '.tk-attn{min-width:8px;text-align:center}' +
+      '.tk-tag.tk-att-n{color:#5b2bb5;white-space:nowrap}.tk-tag.tk-att-n .tk-clip{width:12px;height:12px;vertical-align:-2px}' +
+      '.tk-ev-att{display:inline-flex;margin-left:3px;color:var(--rt-purple);vertical-align:middle}.tk-ev-att .tk-clip{width:11px;height:11px}' +
+      '.tk-att-modal{width:600px}' +
+      '.tk-att-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}' +
+      '.tk-att-head .tk-mtitle .tk-clip{color:var(--rt-purple);vertical-align:-2px}' +
+      '.tk-att-x{font-size:22px;padding:0 4px;color:#6b7a90}.tk-att-x:hover{color:var(--rt-purple)}' +
+      '.tk-att-task{margin:-2px 0 8px;overflow-wrap:anywhere}' +
+      '.tk-att-list,.tk-att-queue{list-style:none;margin:6px 0;padding:0}' +
+      '.tk-att-it{display:flex;align-items:center;gap:8px;border:1px solid var(--divider);border-radius:8px;padding:6px 8px;margin-bottom:6px}' +
+      '.tk-att-it:hover{background:rgba(119,0,255,.03)}' +
+      '.tk-att-type{flex:none;width:34px;height:22px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font:700 9px/1 sans-serif;letter-spacing:.03em;color:#fff;background:#8a94a6}' +
+      '.tk-att-k-pdf{background:#d93a2b}.tk-att-k-doc{background:#2b5fb4}.tk-att-k-xls{background:#1f8a4c}.tk-att-k-ppt{background:#d0611a}' +
+      '.tk-att-k-img{background:var(--rt-purple)}.tk-att-k-zip{background:#7a6a2b}' +
+      '.tk-att-main{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}' +
+      '.tk-att-name{overflow-wrap:anywhere;color:var(--rt-blue);text-decoration:none;font-weight:600}a.tk-att-name:hover{text-decoration:underline}' +
+      '.tk-att-meta{font-size:11px}' +
+      '.tk-att-dl{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;color:#6b7a90;text-decoration:none}' +
+      '.tk-att-dl:hover,.tk-att-dl:focus-visible{color:var(--rt-blue);background:rgba(0,136,204,.08);outline:0}' +
+      '.tk-att-del{flex:none;color:#6b7a90;font-size:18px;padding:0 4px}.tk-att-del:hover{color:var(--sick-red)}' +
+      '.tk-att-empty{padding:6px 2px}' +
+      '.tk-att-q{border:1px dashed var(--divider);border-radius:8px;padding:6px 8px;margin-bottom:6px}' +
+      '.tk-att-q-error{border-style:solid;border-color:rgba(211,47,47,.35);background:rgba(211,47,47,.04)}' +
+      '.tk-att-qrow{display:flex;align-items:baseline;gap:6px}.tk-att-qrow .tk-att-name{color:var(--text);flex:none;max-width:55%}' +
+      '.tk-att-qst{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}.tk-att-qrow .tk-x{flex:none;margin-left:auto}' +
+      '.tk-att-bar{height:6px;border-radius:3px;background:rgba(119,0,255,.10);overflow:hidden;margin-top:5px}' +
+      '.tk-att-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--rt-purple),var(--rt-blue));transition:width .15s linear}' +
+      '.tk-att-drop{border:2px dashed rgba(119,0,255,.35);border-radius:10px;padding:14px 12px;margin:8px 0 4px;text-align:center;background:rgba(119,0,255,.025);transition:background .12s,border-color .12s}' +
+      '.tk-att-drop.tk-att-over{border-color:var(--rt-purple);background:rgba(119,0,255,.09)}' +
+      '.tk-att-droptext{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;color:#4a5568}.tk-att-droptext .tk-clip{color:var(--rt-purple)}' +
+      '.tk-att-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}' +
+      '.tk-attformbtn{display:inline-flex;align-items:center;gap:5px}.tk-attformbtn .tk-clip{color:var(--rt-purple)}' +
+      '@media (max-width:760px){.tk-att-dnd{display:none}.tk-att-modal{padding:12px}.tk-att-drop{padding:10px}}';
+  }
+
   function injectStyles() {
     if (document.getElementById('tasksModuleStyles')) return;
     var st = document.createElement('style');
     st.id = 'tasksModuleStyles';
-    st.textContent = css() + cssV61() + cssV621() + cssV62() + cssV631() + cssV632();
+    st.textContent = css() + cssV61() + cssV621() + cssV62() + cssV631() + cssV632() + cssV7();
     document.head.appendChild(st);
   }
   function init() {
@@ -2899,6 +3393,8 @@
       truncate: truncate, weekStart: weekStart, addDays: addDays, fmtPeriod: fmtPeriod, normEmpId: normEmpId,
       applyFilters: applyFilters, buildPayload: buildPayload, draftError: draftError, esc: esc,
       isOrphan: isOrphan, removedDate: removedDate, plural: plural, modalEl: function () { return DOM.modal; },
+      attEl: function () { return DOM.att; }, attOpen: attOpen, attEnqueue: attEnqueue, attPrecheck: attPrecheck, canAttach: canAttach, canDetach: canDetach,   // V7
+      attKind: attKind, fmtSize: fmtSize, attErrText: attErrText, attUploadPending: attUploadPending, ATT_EXT: ATT_EXT,
       calLayout: calLayout, calSlotOf: calSlotOf, calSlotDraft: calSlotDraft, calDayLayout: calDayLayout, timeOptionsHtml: timeOptionsHtml,
       calScrollApply: calScrollApply, calScrollSave: calScrollSave, CAL_HOUR_PX: CAL_HOUR_PX,
       calDropCalc: calDropCalc, calPasteCalc: calPasteCalc, calClipOf: calClipOf, calMove: calMove, calPaste: calPaste, calCopy: calCopy,
