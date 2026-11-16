@@ -23,14 +23,14 @@ These instructions apply to this project. Keep them operational and concise; dur
   1. `bash scripts/verify_all.sh` → `GATE: PASS` (скрипт сам откатывает `data/app.db`, удаляет `test_cookies.jar` и падает, если после прогона в дереве появились новые изменения);
   2. `git status --porcelain` — только файлы задачи;
   3. обновить раздел Current State в `PROGRESS.md` (коммит и фактические результаты тестов);
-  4. закоммитить.
+  4. закоммитить (если коммит меняет код — в сообщении id Kanban-задачи, см. «Repository rules»).
 
 ## Verification (Definition of Done)
 
 - **Одна команда:** `bash scripts/verify_all.sh` (все сьюты) или `bash scripts/verify_all.sh e51 e52` (выборочно). Exit 0 и строка `GATE: PASS` — gate пройден; exit 1 — провал; exit 2 — прогон не начат (например, незакоммиченная `data/app.db`). В квитанцию и ревью прикладывать итоговую таблицу скрипта целиком.
 - Задача или фаза считается выполненной **только** при зелёном прогоне: код выхода 0 и итоговая строка без падений (`RESULTS: N passed, 0 failed`, `RESULT: N passed, 0 failed`, `ALL TESTS PASSED`, `OK`). Без вывода прогона статус done / «готово» не ставится, Kanban-задача не закрывается.
 - Во время итераций — только релевантный сьют (см. ниже). Перед закрытием фазы и перед деплоем — **все** сьюты из таблицы.
-- Эталон числа тестов — массив `BASELINE` в `scripts/verify_all.sh` (единственный источник; на 2026-11-16 (V6-1..V6-6, V6.2, V6.3-1..V6.3-4, V7): smoke 84, e51 23, e52 41, hygiene 19, trips 7, tasks 66, tasksn8n 27, tasksatt 24, tasksui 334, tasksmx 79, taskscal 220, director 101, refs 28). Тестов меньше эталона — FAIL. Добавили тесты — поднять `BASELINE` в том же коммите.
+- Эталон числа тестов — массив `BASELINE` в `scripts/verify_all.sh` (единственный источник; на 2026-11-16 (V6-1..V6-6, V6.2, V6.3-1..V6.3-4, V7): smoke 84, e51 23, e52 41, hygiene 19, trips 7, tasks 66, tasksn8n 27, tasksatt 24, tasksui 334, tasksmx 79, taskscal 220, director 101, refs 28, tasklink 43). Тестов меньше эталона — FAIL. Добавили тесты — поднять `BASELINE` в том же коммите.
 - Ручные команды по сьютам (для отладки одного падения):
 
 | Сьют | Команда | Критерий |
@@ -43,6 +43,7 @@ These instructions apply to this project. Keep them operational and concise; dur
 | Синтаксис | `node scripts/check_syntax.js`, `php -l api/<file>.php` | `failed: 0` |
 | ПДн | `bash scripts/check_no_pii.sh` | `OK` |
 | refs (IE-1) | `bash scripts/verify_all.sh refs` (самотесты `node scripts/test_removed_refs.js` + проверка диффа `node scripts/check_removed_refs.js`) | `RESULT: 28 passed, 0 failed`; проверка диффа — `status=PASS`; база — `VERIFY_BASE` (по умолчанию `merge-base HEAD origin/main`), исключения — `scripts/removed_refs_allow.txt` (`имя  # причина`) |
+| tasklink (IE-2) | `bash scripts/verify_all.sh tasklink` (самотесты `bash scripts/test_commit_msg_hook.sh` + проверка диапазона `bash scripts/check_commit_tasks.sh [<диапазон>]`, по умолчанию `origin/main..HEAD`) | `RESULT: 43 passed, 0 failed`; `check_commit_tasks`: `PASS`, `violations=0`; FAIL также при `core.hooksPath` ≠ `scripts/hooks` или хуке без права исполнения |
 
 ## Test
 
@@ -95,6 +96,11 @@ These instructions apply to this project. Keep them operational and concise; dur
 
 - Защищённые файлы/каталоги: `data/app.db` (живые данные), `static/`, корневой `.htaccess`, `staff_project/` (исходные материалы заказчика).
 - Прод: изменения только через бэкап → выкладка изменённых файлов → веб-проверки (grep-маркеры + анонимные HTTP-коды).
+- **Коммит с кодом — только с id Kanban-задачи (IE-2, решение владельца 2026-11-16).** Код меняется только через Kanban-задачу. Коммит, затрагивающий хотя бы один путь вне документов (документы: `reports/**`, `staff_project/**`, любые `*.md`; всё остальное — код, включая `scripts/`, `n8n/`, `data/`, конфиги), обязан нести в сообщении id существующей задачи вида `t_` + 8 hex (например `t_941ab009`); строки, начинающиеся с `#`, не считаются. Коммит только с документами id не требует; merge-коммиты проходят без id (id несут вливаемые коммиты). Принуждение — хук `scripts/hooks/commit-msg` (русское сообщение об отказе: причина, файлы кода, пример); существование id проверяется чтением Kanban-БД (`KANBAN_DB`, по умолчанию `~/.hermes/kanban.db`, только `sqlite3 -readonly`; БД/`sqlite3` недоступны — проверяется только формат, предупреждение в stderr).
+  - **Включить хук на свежем клоне (один раз на клон; worktree наследуют настройку):** `git config core.hooksPath scripts/hooks`. Без этого gate падает (сьют `tasklink`).
+  - **`git commit --no-verify` (и `-c core.hooksPath=…`, правка/удаление хука) агентам ЗАПРЕЩЕНЫ.** Обход обнаруживается: `bash scripts/verify_all.sh` (сьют `tasklink`) → `scripts/check_commit_tasks.sh` проверяет каждый не-merge коммит `origin/main..HEAD`.
+  - **Задачи нет — не коммитить код.** Сначала попросить координатора создать Kanban-задачу, потом коммитить с её id. Не придумывать id и не брать чужой.
+  - `git commit --amend` и `rebase -i` с `reword`/`edit` проходят хук; `git revert`, `git cherry-pick` и `squash` при `rebase -i` хук НЕ вызывают — id должен быть в сообщении (revert/cherry-pick переносят тему исходного коммита с id; если id в ней нет — после операции `git commit --amend -m "… (t_xxxxxxxx)"`); иначе gate упадёт. Подробности и вывод запусков — `reports/IDX_ENFORCE/IE-2_REPORT.md`.
 
 ## Security and side effects
 
