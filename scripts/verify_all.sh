@@ -15,8 +15,8 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 )
-ALL_SUITES=(smoke tasks tasksn8n tasksatt tasksui tasksmx taskscal director e51 e52 hygiene trips syntax phplint pii)
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 )
+ALL_SUITES=(smoke tasks tasksn8n tasksatt tasksui tasksmx taskscal director e51 e52 hygiene trips syntax phplint pii refs)
 SUITE_TIMEOUT=600
 
 if [ $# -gt 0 ]; then SUITES=("$@"); else SUITES=("${ALL_SUITES[@]}"); fi
@@ -78,6 +78,23 @@ run_suite() {
              CNT=$((n-bad)); if [ $bad -eq 0 ]; then RES=PASS; else NOTE="ошибок: $bad из $n"; fi ;;
     pii)     timeout $SUITE_TIMEOUT bash scripts/check_no_pii.sh >"$log" 2>&1; rc=$?
              if [ $rc -eq 0 ]; then RES=PASS; else NOTE="rc=$rc"; fi ;;
+    refs)    # IE-1: самотесты проверки (временная копия в $TMPDIR) + реальная проверка текущего диффа:
+             # удалённая/переименованная функция при оставшихся ссылках на старое имя -> FAIL.
+             timeout $SUITE_TIMEOUT node scripts/test_removed_refs.js >"$log" 2>&1; rc=$?
+             out=$(grep -Eo 'RESULT: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
+             p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
+             CNT=${p:-'-'}
+             local rc2 sm
+             echo "--- реальная проверка диффа (scripts/check_removed_refs.js) ---" >>"$log"
+             timeout $SUITE_TIMEOUT node scripts/check_removed_refs.js >>"$log" 2>&1; rc2=$?
+             sm=$(grep -E '^REFS_SUMMARY ' "$log" | tail -1)
+             if [ -n "$sm" ]; then
+               local n_rem n_ref n_all
+               n_rem=$(echo "$sm" | sed -E 's/.*removed=([0-9]+).*/\1/'); n_ref=$(echo "$sm" | sed -E 's/.*withrefs=([0-9]+).*/\1/'); n_all=$(echo "$sm" | sed -E 's/.*allow=([0-9]+).*/\1/')
+               NOTE="удалено $n_rem, со ссылками $n_ref, исключений $n_all"
+             fi
+             if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && [ $rc2 -eq 0 ]; then RES=PASS
+             else NOTE="${NOTE:+$NOTE; }самотесты rc=$rc failed=${f:-?}, проверка диффа rc=$rc2"; fi ;;
   esac
   # проверка эталона
   if [ -n "${BASELINE[$s]:-}" ] && [ "$RES" = PASS ]; then
@@ -117,7 +134,7 @@ if [ $FAILED -eq 0 ]; then
 else
   echo "GATE: FAIL ($FAILED). Логи: $LOGDIR"
   for s in "${SUITES[@]}"; do
-    if grep -q "^$s *FAIL" <(printf '%s\n' "${ROWS[@]}"); then echo "--- $s (хвост)"; tail -15 "$LOGDIR/$s.log"; fi
+    if grep -q "^$s *FAIL" <(printf '%s\n' "${ROWS[@]}"); then echo "--- $s (хвост)"; tail -$([ "$s" = refs ] && echo 80 || echo 15) "$LOGDIR/$s.log"; fi
   done
   exit 1
 fi
