@@ -38,8 +38,6 @@
     matrixWrapper: null,
     tripsList: null,
     newTripBtn: null,
-    tripFromEmpBtn: null,
-    tripFromEmpCardBtn: null,
     tripModal: null
   };
 
@@ -952,10 +950,6 @@
     _dom.matrixWrapper = findMatrixWrapper();
     _dom.tripsList = document.getElementById('tripsList');
     _dom.newTripBtn = document.getElementById('newTripBtn');
-    _dom.tripFromEmpBtn = document.getElementById('tripFromEmpBtn');
-    // Phase 7 (spec §11): the real entry point lives INSIDE the employee
-    // card panel ("Карточка сотрудника"), not in the page header.
-    _dom.tripFromEmpCardBtn = document.getElementById('tripFromEmpCardBtn');
     
     // Setup tab switching
     if (_dom.tabMatrix && _dom.tabTrips) {
@@ -966,15 +960,6 @@
     // Setup new trip button
     if (_dom.newTripBtn) {
       _dom.newTripBtn.addEventListener('click', openNewTripModal);
-    }
-    
-    // Setup employee trip button
-    if (_dom.tripFromEmpBtn) {
-      _dom.tripFromEmpBtn.addEventListener('click', openTripFromEmployee);
-    }
-    // Phase 7 (spec §11): in-card [Командировка] button
-    if (_dom.tripFromEmpCardBtn) {
-      _dom.tripFromEmpCardBtn.addEventListener('click', openTripFromEmployee);
     }
     
     // T5-DEFECT-6: Remove tab-glow listener, use updateTabGlow function instead
@@ -2114,59 +2099,6 @@
   // =====================
 
   /**
-   * Open trip from employee editor
-   */
-  function openTripFromEmployee() {
-    var currentEditingId = getCurrentEditingEmployeeId();
-    if (!currentEditingId) {
-      if (typeof window.showToast === 'function') {
-        window.showToast('Нет открытого редактора сотрудника', 'error');
-      }
-      return;
-    }
-
-    // Create a draft context for employee pick flow (П14)
-    var draft = {
-      employeeId: currentEditingId,
-      name: getEmployeeName(currentEditingId),
-      participants: [{
-        employeeId: currentEditingId,
-        name: getEmployeeName(currentEditingId),
-        startDate: '', // Empty date as per П13 requirement
-        endDate: ''     // Empty date as per П13 requirement
-      }]
-    };
-
-    // Start employee pick flow with the pre-filled draft
-    startEmployeePick(draft);
-    
-    if (typeof window.showToast === 'function') {
-      window.showToast('Выберите участников командировки: Ctrl+click по карточкам', 'info');
-    }
-  }
-
-  /**
-   * Get currently editing employee ID
-   */
-  function getCurrentEditingEmployeeId() {
-    // Phase 7 (spec §11): the inline editor script exposes the editing id on
-    // window (set in openEditor, cleared on closeEditor).
-    if (window.__editingEmployeeId != null) return window.__editingEmployeeId;
-    // Legacy fallbacks
-    if (typeof window.editingId !== 'undefined') return window.editingId;
-    if (typeof window.currentEditId !== 'undefined') return window.currentEditId;
-    
-    // Look for modal editor context
-    var modal = document.querySelector('.modal-overlay');
-    if (modal) {
-      var match = modal.getAttribute('data-emp-id');
-      if (match) return match;
-    }
-    
-    return null;
-  }
-
-  /**
    * Show trip selection modal
    */
   function showTripSelectionModal(trips, employeeId) {
@@ -2605,7 +2537,6 @@
     openTripModal: openTripModal,
     closeTripModal: closeTripModal,
     saveTrip: saveTrip,
-    openTripFromEmployee: openTripFromEmployee,
     selectTripForEmployee: selectTripForEmployee,
     addParticipantRow: addParticipantRow,
     removeParticipantRow: removeParticipantRow,

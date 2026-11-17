@@ -2244,9 +2244,9 @@
     <div class="row editor-only">
       <button class="btn editor-only" id="cloneEmp">Дублировать сотрудника</button>
     </div>
-    <!-- Phase 7 (spec §11): trip entry point from employee card -->
+    <!-- V8-T3: «Задачи» — admin: форма новой задачи на этого сотрудника; руководитель: список его задач (только просмотр) -->
     <div class="row editor-only">
-      <button class="btn editor-only" id="tripFromEmpCardBtn">Командировка</button>
+      <button class="btn editor-only" id="tasksFromEmpCardBtn">Задачи</button>
     </div>
     <div class="row editor-only">
       <button class="btn editor-only" id="deleteEmp">Удалить сотрудника</button>
@@ -4233,9 +4233,6 @@
       document.getElementById('editDept').value = emp.dept;
       updatePreview(emp.photo);
       editor.classList.add('open');
-      // Phase 7 (spec §11): expose the editing id for the Trips module
-      // (button [Командировка] in the employee card).
-      window.__editingEmployeeId = id;
     }
 
     function updatePreview(src) {
@@ -4601,8 +4598,19 @@
     document.getElementById('closeEditor').addEventListener('click', () => {
       editor.classList.remove('open');
       document.querySelectorAll('.employee.selected').forEach(x => x.classList.remove('selected'));
-      // Phase 7: clear the exposed editing id when the card closes.
-      window.__editingEmployeeId = null;
+    });
+
+    // V8-T3: кнопка «Задачи» в карточке сотрудника. Карточка уступает место панели задач так же,
+    // как при открытии панели из матрицы (resetMatrixEmployeeCard); дальше — js/tasks.js:
+    // admin → «Список» по сотруднику + форма новой задачи, supervisor → «Список» по сотруднику без записи.
+    document.getElementById('tasksFromEmpCardBtn').addEventListener('click', () => {
+      const empId = currentId;
+      if (empId == null || !window.Tasks || typeof window.Tasks.openForEmployee !== 'function') {
+        showToast('Панель задач недоступна', 'error');
+        return;
+      }
+      resetMatrixEmployeeCard();
+      window.Tasks.openForEmployee(empId);
     });
 
     // =============================================

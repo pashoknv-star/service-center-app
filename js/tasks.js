@@ -2743,6 +2743,37 @@
     return activate();
   }
 
+  /**
+   * V8-T3 (п.5 владельца): кнопка «Задачи» в карточке сотрудника (index.html #tasksFromEmpCardBtn).
+   * Открывает панель в «Списке» с фильтром по сотруднику (остальные фильтры сброшены).
+   * admin — дополнительно открывается форма НОВОЙ задачи: emptyDraft() берёт исполнителя из S.filters.emp
+   * (assignees: [S.filters.emp]), сохранение — штатный saveForm → POST api/tasks.php.
+   * supervisor/viewer — только список (canWrite() = false: формы и кнопок записи нет, сервер всё равно отвечает 403).
+   * Возвращает Promise<boolean>: true — панель открыта для этого сотрудника.
+   */
+  function openForEmployee(empId) {
+    var emp = normEmpId(empId);
+    if (!emp) return Promise.resolve(false);
+    ensurePanelOpen();
+    S.view = 'list';
+    S.filters = { emp: emp, due: '', priority: '', label: '', status: '' };
+    S.selectedId = null;
+    S.msg = null;
+    S.form = null;
+    return activate().then(function () {
+      if (!S.user) return false;
+      if (S.empById[emp] === undefined) {
+        // сотрудник есть только на клиенте (ещё не сохранён на сервере) — задачу на него сервер отклонил бы
+        S.filters.emp = '';
+        S.msg = { type: 'error', text: ERR_TEXT.employee_not_found };
+        render();
+        return false;
+      }
+      if (canWrite()) openForm(null);
+      return true;
+    });
+  }
+
   // ---------------------------------------------------------------- T1-8: окно замены исполнителя
   var OPEN_FOR_TIMEOUT_MS = 5000;
 
@@ -3377,6 +3408,7 @@
   window.Tasks = {
     init: init,
     open: openTasksPanel,
+    openForEmployee: openForEmployee,     // V8-T3: кнопка «Задачи» в карточке сотрудника (index.html)
     activate: activate,
     deactivate: deactivate,
     reload: function () { return load(); },
