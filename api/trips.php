@@ -25,7 +25,8 @@ declare(strict_types=1);
  *      (E12-2: после UPDATE, в той же транзакции, каждому участнику
  *      ставится заявка в trip_requests для RPA-робота; дубль-защита D4:
  *      участник с уже висящей queued/delivered заявкой пропускается;
- *      сбой очереди НЕ валит confirm — D1)
+ *      сбой очереди НЕ валит confirm — D1; V8-T2: пустое location ->
+ *      400 location_required, повтор по уже подтверждённой — no-op 200)
  * DELETE api/trips.php?id=trip_...            — удаление (confirmed — только admin)
  *
  * Валидация RPA v1.2 (E12-1): advanceAmount — целое >= 0 (иначе 400
@@ -634,6 +635,15 @@ try {
             if ($existing['status'] !== 'forecast') {
                 sendJson(['error' => 'invalid_status_transition'], 400);
             }
+            // V8-T2 п.7: место назначения уходит роботу как trip.destination —
+            // без него подтверждать нельзя (прогноз без места по-прежнему можно
+            // создавать/править). Проверка ДО транзакции: статус и заявки не меняются.
+            if (trim((string) ($existing['location'] ?? '')) === '') {
+                sendJson([
+                    'error'   => 'location_required',
+                    'message' => 'Укажите место назначения — без него командировку нельзя подтвердить',
+                ], 400);
+            }
             // Гвард не нужен: до этой точки статус === forecast, а зонная
             // проверка по существующим участникам уже выполнена выше
             // (zone_forbidden). Спека §6/D2: confirm разрешён admin и
@@ -689,6 +699,22 @@ try {
                         $p['fullName'] = is_string($fullName) ? $fullName : '';
 
                         $requestId = generateRequestId($id, $pnum + 1);
+                        // V8-T2: generateRequestId() даёт 'SC-trip-<n>-<time()>' — префикс
+                        // substr($tripId,0,4) у ВСЕХ trip одинаков ('trip'), поэтому у двух
+                        // командировок, подтверждённых в одну секунду, совпадал request_id
+                        // (PRIMARY KEY) → INSERT падал, и под общим catch (D1) заявки терялись
+                        // молча при статусе confirmed. При совпадении добавляем суффикс,
+                        // зависящий от trip (формат префикса для робота не меняется).
+                        $stmtRidTaken = $pdo->prepare('SELECT 1 FROM trip_requests WHERE request_id = :r LIMIT 1');
+                        $ridBase = $requestId;
+                        for ($rn = 0; $rn < 20; $rn++) {
+                            $stmtRidTaken->bindValue(':r', $requestId, PDO::PARAM_STR);
+                            $stmtRidTaken->execute();
+                            if (!$stmtRidTaken->fetch(PDO::FETCH_COLUMN)) {
+                                break;
+                            }
+                            $requestId = $ridBase . '-' . substr(sha1($id), 0, 6) . ($rn > 0 ? '-' . $rn : '');
+                        }
                         $payload = trips_build_rpa_payload($requestId, $existing, $p);
                         $stmtReq->bindValue(':request_id', $requestId, PDO::PARAM_STR);
                         $stmtReq->bindValue(':trip_id', $id, PDO::PARAM_STR);

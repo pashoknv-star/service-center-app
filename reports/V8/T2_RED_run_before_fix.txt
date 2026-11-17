@@ -1,0 +1,58 @@
+--- сервер: api/trips.php (forecast → confirmed) ---
+  PASS  сервер: создание прогноза БЕЗ места назначения разрешено (201, forecast)
+  PASS  сервер: у нового прогноза 0 заявок в trip_requests
+  FAIL  п.7 сервер: confirm с пустым location → 400 location_required — 200 {"success":true,"trip":{"id":"trip_6afc862b6e4576.68001986","title":"SRV A","location":"","comment":"","status":"confirmed","version":2,"createdBy":"admin","createdAt":"2026-11-17T16:51:55+00:00","updatedAt":"2026-11-17T16:51:55+00:00","origin":null,"hotel":null,"transportOutRequired":1,"transportOutMode":"avia","transportBackRequired":1,"transportBackMode":"zd","advanceAmount":null,"businessP
+  FAIL  п.7 сервер: ответ несёт понятное сообщение — {"success":true,"trip":{"id":"trip_6afc862b6e4576.68001986","title":"SRV A","location":"","comment":"","status":"confirmed","version":2,"createdBy":"admin","createdAt":"2026-11-17T16:51:55+00:00","updatedAt":"2026-11-17T16:51:55+00:00","origin":null,"hotel":null,"transportOutRequired":1,"transportOutMode":"avia","transportBackRequired":1,"transportBackMode":"zd","advanceAmount":null,"businessProce
+  FAIL  п.7 сервер: после отказа статус прежний (forecast), версия не выросла, заявок 0 — ["confirmed",2,2]
+  FAIL  п.7 сервер: место из одних пробелов тоже не считается заполненным (confirm → 400)
+  FAIL  сервер: PUT прогноза с местом/комментарием сохраняет их, статус остаётся forecast — {"success":true,"trip":{"id":"trip_6afc862b6e4576.68001986","title":"SRV A","location":"Самара","comment":"ком","status":"confirmed","version":4,"createdBy":"admin","createdAt":"2026-11-17T16:51:55+00
+  FAIL  сервер: ... и заявок по-прежнему 0
+  PASS  сервер: confirm прогноза с местом → 200, confirmed
+  PASS  сервер: по одной заявке на каждого участника (2 участника → 2 заявки, разные сотрудники)
+  PASS  сервер: повторный confirm — no-op (200, статус confirmed, версия не выросла)
+  PASS  сервер: ещё 3 подряд confirm — заявки те же (2, без дублей, те же request_id)
+  PASS  сервер: admin правит подтверждённую (200); PUT без status → статус остаётся confirmed
+  PASS  сервер: правка подтверждённой не ставит повторных заявок (всё ещё 2)
+  PASS  сервер: supervisor_zone0 создаёт прогноз своей зоны
+  PASS  сервер: supervisor_zone1 НЕ может подтвердить прогноз чужой зоны (403 zone_forbidden)
+  PASS  сервер: ... статус forecast, заявок 0
+  PASS  сервер: viewer не может подтвердить (403)
+  FAIL  сервер: supervisor_zone0 подтверждает прогноз своей зоны (200, confirmed, 1 заявка) — 200 заявок=0 {"success":true,"trip":{"id":"trip_6afc862bc787e1.01728597","title":"SRV own","location":"Казань","comment":"","status":"confirmed","version":2,"createdBy":"sup
+  PASS  сервер: supervisor НЕ правит подтверждённую (403 confirmed_immutable)
+  PASS  сервер: отклонённая правка supervisor не изменила комментарий
+  PASS  сервер: supervisor не удаляет подтверждённую (403)
+  PASS  сервер: confirm несуществующей → 404
+  FAIL  сервер: 6 командировок, подтверждённых подряд (в одну секунду), получают ВСЕ заявки (по 2 каждая) — [2,0,0,0,0,0]
+  FAIL  сервер: request_id всех 12 заявок различны — 2/2
+  PASS  сервер: префикс request_id для робота сохранён («SC-trip-<n>-<время>…»)
+--- браузер: admin ---
+  FAIL  новая командировка: кнопки «На подтверждение» и «Подтвердить» (и «Отменить»), «Сохранить» нет — ["Отменить","Сохранить"]
+  PASS  новая командировка: нет селекта статуса (в форме только селекты способа проезда)
+  PASS  новая командировка: нет подписи «Статус» и поля tripStatus
+  FAIL  п.7: поля «Место назначения» и «Комментарий» есть в форме и необязательны для «На подтверждение»
+  FAIL  Сценарий ««На подтверждение» = прогноз» выполнен без сбоя теста — page exception: {"exceptionId":1,"text":"Uncaught","lineNumber":0,"columnNumber":61,"scriptId":"25","stackTrace":{"callFrames":[{"functionName":"","scriptId":"25","url":"","lineNumber":0,"columnNumber":61},{"functionName":"","scriptId":"25","url":"","lineNumber":0,"columnNumber":73}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read prope
+  FAIL  Сценарий ««Подтвердить» без места» выполнен без сбоя теста — нет элемента #tripConfirmBtn
+  FAIL  Сценарий ««Подтвердить» = сохранить и подтвердить» выполнен без сбоя теста — page exception: {"exceptionId":2,"text":"Uncaught","lineNumber":0,"columnNumber":62,"scriptId":"39","stackTrace":{"callFrames":[{"functionName":"","scriptId":"39","url":"","lineNumber":0,"columnNumber":62},{"functionName":"","scriptId":"39","url":"","lineNumber":0,"columnNumber":74}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read prope
+  FAIL  прогноз: те же две кнопки «На подтверждение» и «Подтвердить» — ["Отменить","Сохранить","Удалить"]
+  FAIL  Сценарий «существующий прогноз» выполнен без сбоя теста — page exception: {"exceptionId":3,"text":"Uncaught","lineNumber":0,"columnNumber":39,"scriptId":"42","stackTrace":{"callFrames":[{"functionName":"","scriptId":"42","url":"","lineNumber":0,"columnNumber":39}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read properties of null (reading 'value')\n    at <anonymous>:1:40","objectId":"19475887
+  FAIL  Сценарий «прогноз без места → «Подтвердить»» выполнен без сбоя теста — page exception: {"exceptionId":4,"text":"Uncaught","lineNumber":0,"columnNumber":39,"scriptId":"42","stackTrace":{"callFrames":[{"functionName":"","scriptId":"42","url":"","lineNumber":0,"columnNumber":39}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read properties of null (reading 'value')\n    at <anonymous>:1:40","objectId":"19475887
+  FAIL  Сценарий «двойной клик» выполнен без сбоя теста — page exception: {"exceptionId":5,"text":"Uncaught","lineNumber":0,"columnNumber":62,"scriptId":"39","stackTrace":{"callFrames":[{"functionName":"","scriptId":"39","url":"","lineNumber":0,"columnNumber":62},{"functionName":"","scriptId":"39","url":"","lineNumber":0,"columnNumber":74}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read prope
+  PASS  подтверждённая (admin): только «Сохранить» — без «На подтверждение» и «Подтвердить»
+  FAIL  подтверждённая: в заголовке «Подтверждена», селекта статуса нет, поля не заблокированы
+  FAIL  Сценарий «подтверждённая: только «Сохранить»» выполнен без сбоя теста — page exception: {"exceptionId":6,"text":"Uncaught","lineNumber":0,"columnNumber":61,"scriptId":"25","stackTrace":{"callFrames":[{"functionName":"","scriptId":"25","url":"","lineNumber":0,"columnNumber":61},{"functionName":"","scriptId":"25","url":"","lineNumber":0,"columnNumber":73}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read prope
+  FAIL  Сценарий «сбой confirm после сохранения» выполнен без сбоя теста — page exception: {"exceptionId":7,"text":"Uncaught","lineNumber":0,"columnNumber":62,"scriptId":"39","stackTrace":{"callFrames":[{"functionName":"","scriptId":"39","url":"","lineNumber":0,"columnNumber":62},{"functionName":"","scriptId":"39","url":"","lineNumber":0,"columnNumber":74}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read prope
+  FAIL  confirmTrip: сообщение сервера location_required показывается понятным текстом — ok
+  PASS  admin: нет исключений JS в браузере
+--- браузер: supervisor ---
+  FAIL  supervisor своей зоны: новая форма — «На подтверждение» и «Подтвердить» — ["Отменить","Сохранить"]
+  FAIL  supervisor: прогноз своей зоны — обе кнопки — ["Отменить","Сохранить"]
+  FAIL  Сценарий «supervisor_zone0 (своя зона)» выполнен без сбоя теста — нет элемента #tripConfirmBtn
+  FAIL  Сценарий «supervisor_zone1 (чужая зона)» выполнен без сбоя теста — page exception: {"exceptionId":8,"text":"Uncaught","lineNumber":0,"columnNumber":101,"scriptId":"64","stackTrace":{"callFrames":[{"functionName":"","scriptId":"64","url":"","lineNumber":0,"columnNumber":101}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read properties of null (reading 'disabled')\n    at <anonymous>:1:102","objectId":"19
+--- браузер: viewer ---
+  FAIL  Сценарий «viewer» выполнен без сбоя теста — page exception: {"exceptionId":9,"text":"Uncaught","lineNumber":0,"columnNumber":47,"scriptId":"70","stackTrace":{"callFrames":[{"functionName":"","scriptId":"70","url":"","lineNumber":0,"columnNumber":47}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read properties of null (reading 'disabled')\n    at <anonymous>:1:48","objectId":"19475
+  FAIL  js/trips.js: нет селектов статуса (draft-status, tripStatus)
+  FAIL  js/trips.js: кнопка «Подтвердить» вызывает window.Trips.saveAndConfirmTrip, и он экспортирован
+  FAIL  api/trips.php: confirm проверяет location (location_required) до транзакции
+  PASS  data/app.db не изменена прогоном (sha1)
+
+RESULT: 22 passed, 30 failed

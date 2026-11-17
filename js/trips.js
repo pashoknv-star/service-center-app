@@ -23,6 +23,11 @@
     CONFIRMED: 'confirmed'
   };
 
+  /** V8-T2: подпись статуса для списка/формы (статус меняется только кнопками формы). */
+  function tripStatusLabel(status) {
+    return status === TRIP_STATUS.CONFIRMED ? 'Подтверждена' : 'Прогноз';
+  }
+
   // State management
   var _state = {
     trips: [],
@@ -271,7 +276,10 @@
           }
           
           if (response.status === 403) {
-            throw new Error('Недостаточно прав для операции');
+            // V8-T2: причина отказа понятным текстом (чужая зона / подтверждённая),
+            // иначе общая формулировка.
+            throw new Error(error && (error.error === 'zone_forbidden' || error.error === 'confirmed_immutable')
+              ? tripErrorMessage(error) : 'Недостаточно прав для операции');
           }
           
           throw new Error(tripErrorMessage(error));
@@ -336,7 +344,14 @@
           }
           return trip;
         } else {
-          throw new Error(response.data.error || 'Не удалось подтвердить');
+          // V8-T2: понятный текст по коду сервера (location_required, zone_forbidden …),
+          // а не сырой код; сам код остаётся в err.code для вызывающего.
+          var data = response.data || {};
+          var err = new Error(response.status === 403 && !data.error
+            ? 'Недостаточно прав для подтверждения'
+            : (tripErrorMessage(data) || 'Не удалось подтвердить'));
+          err.code = data.error || null;
+          throw err;
         }
       });
   }
@@ -837,6 +852,35 @@
         background: var(--sick-red);
         color: white;
       }
+
+      /* V8-T2: «Подтвердить» — отдельная кнопка рядом с «На подтверждение» */
+      .trip-btn-confirm {
+        background: #1565C0;
+        color: white;
+      }
+
+      /* V8-T2: подпись статуса (список и заголовок формы) */
+      .trip-status-label {
+        font-size: 0.8em;
+        padding: 2px 8px;
+        border-radius: 10px;
+        white-space: nowrap;
+        color: var(--text);
+        border: 1px solid var(--divider);
+      }
+      .trip-status-label-confirmed {
+        background: #1565C0;
+        color: white;
+        border-color: transparent;
+      }
+      .trip-status-label-forecast {
+        background: rgba(33, 150, 243, 0.15);
+      }
+      .trip-form-note {
+        color: var(--accent);
+        font-size: 0.9em;
+        margin: 4px 0 8px;
+      }
       
       .trip-btn:disabled {
         opacity: 0.5;
@@ -1080,6 +1124,7 @@
     trips.forEach(function(trip) {
       var statusIcon = trip.status === TRIP_STATUS.FORECAST ? '▧' : '■';
       var statusClass = 'status-' + trip.status;
+      var statusLabel = tripStatusLabel(trip.status);
       
       var minDate = trip.participants.reduce(function(min, p) {
         return min ? Math.min(min, new Date(p.startDate).getTime()) : new Date(p.startDate).getTime();
@@ -1095,7 +1140,8 @@
       html += `
         <div class="trip-list-item" onclick="window.Trips.openTripModal('${trip.id}')">
           <div class="trip-header">
-            <span class="trip-status ${statusClass}">${statusIcon}</span>
+            <span class="trip-status ${statusClass}" title="${statusLabel}">${statusIcon}</span>
+            <span class="trip-status-label trip-status-label-${trip.status}">${statusLabel}</span>
             <span class="trip-title">${escapeHtml(trip.title)}</span>
             <span class="trip-location">${escapeHtml(trip.location || '')}</span>
           </div>
@@ -1139,11 +1185,21 @@
       }).catch(function() { /* stay anonymous: viewer-like form */ });
       return;
     }
-    var isViewer = user && !user.canEdit;
     var isEdit = trip && trip.id;
+    // V8-T2: форма только для чтения — viewer; supervisor у подтверждённой и у прогноза
+    // чужой зоны (сервер: confirmed_immutable / zone_forbidden). Права — как на сервере.
+    var isViewer = !canEditTripForm(trip, user);
+    var isConfirmedTrip = !!(isEdit && trip.status === TRIP_STATUS.CONFIRMED);
+    var canConfirmBtn = !isViewer && !isConfirmedTrip && (isEdit ? canConfirmTrip(trip, user) : !!user.canEdit);
+    var readOnlyNote = '';
+    if (isViewer && user.canEdit && isEdit) {
+      readOnlyNote = isConfirmedTrip
+        ? 'Подтверждённую командировку может править только администратор.'
+        : 'Командировка сотрудников другого отдела — только просмотр.';
+    }
 
     // V8-T1: запомнить, что именно показано в форме (saveTrip берёт из него
-    // поля, которых в форме нет: место, комментарий, статус, прежний телефон).
+    // прежние значения для полей, которых в разметке нет, и прежний телефон).
     _formTrip = trip || null;
 
     // V8-T1 п.5: у новой командировки (id нет — состав пришёл из Матрицы /
@@ -1167,14 +1223,23 @@
     tripsListView.innerHTML = `
       <div id="tripFormPanel">
         <div class="trip-panel-header">
-          <h2>${isEdit ? 'Редактирование командировки' : 'Новая командировка'}</h2>
+          <h2>${isEdit ? 'Редактирование командировки' : 'Новая командировка'}${isEdit ? ' <span class="trip-status-label trip-status-label-' + trip.status + '" id="tripStatusBadge">' + tripStatusLabel(trip.status) + '</span>' : ''}</h2>
           <button class="trip-panel-close" onclick="window.Trips.closeTripForm()">×</button>
         </div>
+        ${readOnlyNote ? '<div class="trip-form-note" id="tripReadOnlyNote">' + readOnlyNote + '</div>' : ''}
         <div class="trip-form-columns">
           <div class="trip-form-left">
             <div class="trip-form-row">
               <label class="trip-form-label">Название</label>
               <input type="text" class="trip-form-input" id="tripTitle" value="${trip ? escapeHtml(trip.title) : ''}" ${isViewer ? 'disabled' : ''}>
+            </div>
+            <div class="trip-form-row">
+              <label class="trip-form-label">Место назначения</label>
+              <input type="text" class="trip-form-input" id="tripLocation" value="${trip ? escapeHtml(trip.location || '') : ''}" placeholder="Город (обязательно для подтверждения)" ${isViewer ? 'disabled' : ''}>
+            </div>
+            <div class="trip-form-row">
+              <label class="trip-form-label">Комментарий</label>
+              <textarea class="trip-form-input" id="tripComment" rows="2" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.comment || '') : ''}</textarea>
             </div>
             <div class="trip-form-row">
               <label class="trip-form-label">Место отправления</label>
@@ -1239,18 +1304,24 @@
                   return renderParticipantRow(p, i, isViewer);
                 }).join('') : ''}
               </div>
-              <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()">+ Добавить сотрудника</button>
+              <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()" ${isViewer ? 'disabled' : ''}>+ Добавить сотрудника</button>
             </div>
           </div>
         </div>
+        <div class="trip-form-msg"><span id="tripConfirmMsg"></span></div>
         <div class="trip-panel-actions">
             <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отменить</button>
-            <button type="button" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip && trip.id ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>Сохранить</button>
+            ${/* V8-T2: статус меняется только кнопками. Прогноз/новая: «На подтверждение» (сохранить прогноз) и
+                  «Подтвердить» (сохранить и подтвердить; не показывается тем, кому сервер откажет). Подтверждённая:
+                  только «Сохранить» (статус и заявки не трогаются). Только чтение: заблокированная «Сохранить». */ ''}
+            <button type="button" id="tripSaveBtn" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip && trip.id ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>${isViewer || isConfirmedTrip ? 'Сохранить' : 'На подтверждение'}</button>
+            ${canConfirmBtn ? `<button type="button" id="tripConfirmBtn" class="trip-btn trip-btn-confirm" onclick="window.Trips.saveAndConfirmTrip('${trip && trip.id ? trip.id : 'null'}')">Подтвердить</button>` : ''}
             ${/* Err6 fix: "Удалить" только при редактировании (trip.id); из матрицы приходит псевдо-trip без id */ trip && trip.id && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
           </div>
         </div>
       </div>
     `;
+    updateConfirmButtonState();
   }
 
   /**
@@ -1357,13 +1428,6 @@
           <textarea class="trip-form-input" id="tripComment" rows="3" ${isViewer ? 'disabled' : ''}>${escapeHtml(trip.comment || '')}</textarea>
         </div>
         <div class="trip-form-row">
-          <label class="trip-form-label">Статус</label>
-          <select class="trip-form-input" id="tripStatus" ${isViewer || (trip.status === TRIP_STATUS.CONFIRMED && !user.isAdmin) ? 'disabled' : ''}>
-            <option value="${TRIP_STATUS.FORECAST}" ${trip.status === TRIP_STATUS.FORECAST ? 'selected' : ''}>Прогнозируемая</option>
-            <option value="${TRIP_STATUS.CONFIRMED}" ${trip.status === TRIP_STATUS.CONFIRMED ? 'selected' : ''}>Подтверждённая</option>
-          </select>
-        </div>
-        <div class="trip-form-row">
           <label class="trip-form-label">Участники</label>
           <div id="tripParticipants">
             ${trip.participants.map(function(p, i) {
@@ -1393,13 +1457,6 @@
         <div class="trip-form-row">
           <label class="trip-form-label">Комментарий</label>
           <textarea class="trip-form-input" id="tripComment" rows="3" placeholder="Дополнительная информация"></textarea>
-        </div>
-        <div class="trip-form-row">
-          <label class="trip-form-label">Статус</label>
-          <select class="trip-form-input">
-            <option value="${TRIP_STATUS.FORECAST}" selected>Прогнозируемая</option>
-            <option value="${TRIP_STATUS.CONFIRMED}">Подтверждённая</option>
-          </select>
         </div>
         <div class="trip-form-row">
           <label class="trip-form-label">Участники</label>
@@ -1474,6 +1531,7 @@
       var label = rowsWrap.querySelector('.trip-form-label');
       if (label) label.style.display = rowData.length > 0 ? '' : 'none';
     }
+    updateConfirmButtonState();
   }
 
   /**
@@ -1723,7 +1781,12 @@
       zone_forbidden: 'Нельзя оформить командировку сотрудника другого отдела',
       advance_invalid: 'Сумма аванса: целое число >= 0',
       transport_mode_invalid: 'Способ проезда: Авиа или ЖД',
-      confirmed_immutable: 'Подтверждённую командировку может править только администратор'
+      confirmed_immutable: 'Подтверждённую командировку может править только администратор',
+      // V8-T2: механика «прогноз → подтверждена»
+      location_required: 'Укажите место назначения — без него командировку нельзя подтвердить',
+      invalid_status_transition: 'Подтвердить можно только командировку-прогноз',
+      invalid_status: 'Недопустимый статус командировки',
+      not_found: 'Командировка не найдена (возможно, её уже удалили)'
     };
     var code = error && error.error;
     var text = (code && map[code]) || (error && error.message) || code || 'Неизвестная ошибка';
@@ -1740,19 +1803,29 @@
    * «Сохранить» выглядела мёртвой).
    */
   var _saving = false;
-  function saveTrip(id) {
+  function saveTrip(id, mode) {
     // E6-T1 fix: строки 'undefined'/'null'/пустая — это «создание», а не
     // редактирование. Раньше saveTrip('undefined') проходил проверку truthy,
     // updateTrip бросал синхронное «Командировка не найдена» мимо .catch.
     if (id === 'null' || id === 'undefined' || id === '') id = null;
+    // V8-T2: mode 'confirm' — «Подтвердить» (сохранить и подтвердить); иначе —
+    // «На подтверждение» / «Сохранить» (статус не меняется, кроме создания прогноза).
+    if (mode !== 'confirm') mode = 'save';
+    // Повторный клик, пока предыдущий запрос не завершён, игнорируется: два POST
+    // (дубль командировки) и два confirm невозможны.
     if (_saving) return;
     try {
-      saveTripImpl(id);
+      saveTripImpl(id, mode);
     } catch (e) {
       _saving = false;
       console.error(LOG_PREFIX, 'saveTrip failed:', e);
       showError(null, 'Не удалось сохранить: ' + (e && e.message ? e.message : e));
     }
+  }
+
+  /** V8-T2: «Подтвердить» — сохранить форму и подтвердить командировку. */
+  function saveAndConfirmTrip(id) {
+    saveTrip(id, 'confirm');
   }
 
   function formEl(id) { return document.getElementById(id); }
@@ -1763,20 +1836,27 @@
     return fallback == null ? '' : String(fallback);
   }
 
-  function saveTripImpl(id) {
+  function saveTripImpl(id, mode) {
     clearFormErrors();
     var ctx = _formTrip || {};
 
-    // Поля «Место», «Комментарий», «Статус» в форме панели не выводятся (их
-    // нет в разметке renderTripFormInPanel): для правки берём прежние значения
-    // записи, чтобы сохранение их не затёрло; для новой — значения по умолчанию.
+    // V8-T2: «Место назначения» и «Комментарий» есть в форме; если поля нет (форма
+    // иного вида) — прежнее значение записи. Статуса в форме нет: статус меняется
+    // только кнопками (создание = всегда прогноз; правка статус не передаёт —
+    // сервер оставляет прежний; подтверждение — отдельным PUT ...&action=confirm).
     var title = formVal('tripTitle').trim();
     var location = formVal('tripLocation', ctx.location).trim();
     var comment = formVal('tripComment', ctx.comment).trim();
-    var status = formVal('tripStatus', ctx.status || TRIP_STATUS.FORECAST) || TRIP_STATUS.FORECAST;
 
     if (!title) {
       showError('tripTitle', 'Название обязательно');
+      return;
+    }
+
+    // V8-T2 п.7: «Подтвердить» без места назначения не отправляется (ни сохранение,
+    // ни confirm) — ошибка у поля. «На подтверждение» место не требует.
+    if (mode === 'confirm' && !location) {
+      showError('tripLocation', 'Укажите место назначения — без него командировку нельзя подтвердить');
       return;
     }
 
@@ -1928,7 +2008,6 @@
       title: title,
       location: location,
       comment: comment,
-      status: status,
       participants: participants,
       // E12-3: RPA v1.2 (HelpMe) fields
       origin: origin || null,
@@ -1941,6 +2020,10 @@
       businessProcess: businessProcess || null,
       phone: phone
     };
+    // V8-T2: статус в payload — только при создании (всегда прогноз); при правке не
+    // передаётся (у подтверждённой остаётся подтверждённой, у прогноза — прогнозом;
+    // прогноз → подтверждена только через confirmTrip()).
+    if (!id) payload.status = TRIP_STATUS.FORECAST;
     
     // createTrip/updateTrip валидируют синхронно и бросают исключение —
     // ловим его здесь, а не теряем.
@@ -1954,21 +2037,46 @@
       return;
     }
     
+    var wasNew = !id;
+    var savedTrip = null;   // что уже лежит на сервере (после шага «сохранить»)
     promise
+      .then(function(trip) {
+        savedTrip = trip;
+        if (mode !== 'confirm') return trip;
+        // V8-T2: единый путь постановки заявок — PUT ?action=confirm после сохранения.
+        return confirmTrip(trip.id).catch(function(err) {
+          if (err && typeof err === 'object') err.confirmStage = true;
+          throw err;
+        });
+      })
       .then(function(trip) {
         _saving = false;
         // Форма живёт в панели «Командировки», а не в модалке: закрыть её
         // и вернуть список (closeTripModal тут ничего не делал).
         closeTripForm();
-        if (id && typeof window.showToast === 'function') {
-          window.showToast('Командировка сохранена', 'success');
+        if (typeof window.showToast === 'function') {
+          if (mode === 'confirm') window.showToast('Командировка подтверждена', 'success');
+          else if (!wasNew) window.showToast('Командировка сохранена', 'success');
         }
         // «Заведена новая командировка» показывает createTrip (только после
-        // ответа сервера). Матрица — перерисовать наложение командировок.
+        // ответа сервера). Матрица — перерисовать наложение командировок
+        // (класс type-trip-forecast / type-trip-confirmed берётся из _state.trips,
+        // который confirmTrip уже обновил — без перезагрузки страницы).
         try { overlay(); } catch (e) { console.warn(LOG_PREFIX, 'Overlay error:', e); }
       })
       .catch(function(error) {
         _saving = false;
+        if (error && error.confirmStage && savedTrip) {
+          // V8-T2: сохранение прошло, подтверждение — нет. Командировка остаётся
+          // прогнозом; форму перерисовываем уже по сохранённой записи (иначе повторный
+          // клик по новой форме создал бы вторую командировку), ошибка видна, подтвердить
+          // можно позже.
+          try { overlay(); } catch (e) { /* не критично */ }
+          renderTripFormInPanel(savedTrip);
+          showError(formEl('tripConfirmMsg'),
+            'Командировка сохранена как прогноз, но не подтверждена: ' + (error.message || error));
+          return;
+        }
         showError(null, error.message);
       });
   }
@@ -2325,7 +2433,7 @@
       if (participants.length === 0) return false;
       var scopeNorm = String(scope).toLowerCase();
       return participants.every(function(p) {
-        var emp = resolveEmployeesList().find(function(e) { return String(e.id) === String(p.employeeId); });
+        var emp = resolveEmployeesList().find(function(e) { return normEmpId(e.id) === normEmpId(p.employeeId); });
         var zone = employeeZone(emp);
         return zone !== null && zone === scopeNorm;
       });
@@ -2345,6 +2453,43 @@
     if (trip.status !== TRIP_STATUS.FORECAST) return false;
     if (user.role !== 'supervisor') return false;
     return canDeleteTrip(trip, user);
+  }
+
+  /**
+   * V8-T2: можно ли править форму командировки (кнопки «На подтверждение»/«Сохранить»).
+   * Зеркало сервера (api/trips.php, PUT): viewer — нет; admin — любую; supervisor —
+   * только прогноз своей зоны (подтверждённая → confirmed_immutable, чужая зона →
+   * zone_forbidden). Новая командировка (нет id) — любому, кто может править
+   * (зону участников сервер проверяет при POST). Только для показа: решает сервер.
+   */
+  function canEditTripForm(trip, user) {
+    if (!user || !user.canEdit) return false;
+    if (user.isAdmin) return true;
+    if (!trip || !trip.id) return true;
+    return trip.status === TRIP_STATUS.FORECAST && canDeleteTrip(trip, user);
+  }
+
+  /**
+   * V8-T2: кнопка «Подтвердить» скрыта, если сервер откажет: supervisor и среди
+   * участников формы есть сотрудник не его зоны (или зона не определилась).
+   * Вызывается при отрисовке формы и при каждой смене состава участников.
+   */
+  function updateConfirmButtonState() {
+    var btn = document.getElementById('tripConfirmBtn');
+    if (!btn) return;
+    var user = getCurrentUser();
+    if (!user || user.isAdmin) { btn.style.display = ''; return; }
+    var scope = String(user.scopeGroupId || '').toLowerCase();
+    var allOwn = !!scope;
+    var emps = resolveEmployeesList();
+    Array.prototype.forEach.call(document.querySelectorAll('#tripParticipants .trip-participant-row'), function(row) {
+      var attr = row.getAttribute('data-emp-id');
+      if (!attr) return;
+      var emp = emps.find(function(e) { return normEmpId(e.id) === normEmpId(attr); });
+      var zone = employeeZone(emp);
+      if (zone === null || zone !== scope) allOwn = false;
+    });
+    btn.style.display = allOwn ? '' : 'none';
   }
 
   /**
@@ -2537,6 +2682,9 @@
     openTripModal: openTripModal,
     closeTripModal: closeTripModal,
     saveTrip: saveTrip,
+    saveAndConfirmTrip: saveAndConfirmTrip,
+    canEditTripForm: canEditTripForm,
+    tripStatusLabel: tripStatusLabel,
     selectTripForEmployee: selectTripForEmployee,
     addParticipantRow: addParticipantRow,
     removeParticipantRow: removeParticipantRow,
@@ -2762,13 +2910,6 @@
                 <textarea id="draft-comment" placeholder="Комментарий" style="width: 100%; padding: 8px; border: 1px solid var(--divider); border-radius: 8px; height: 80px; color: var(--text); background: white;"></textarea>
               </div>
               <div class="trip-form-row">
-                <label>Статус:</label>
-                <select id="draft-status" style="width: 100%; padding: 8px; border: 1px solid var(--divider); border-radius: 8px; color: var(--text); background: white;">
-                  <option value="forecast">Прогноз</option>
-                  <option value="confirmed">Подтверждена</option>
-                </select>
-              </div>
-              <div class="trip-form-row">
                 <label>Участники:</label>
                 <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--divider); border-radius: 8px; padding: 8px; color: var(--text);">
                   ${participants.map(p => `
@@ -2809,7 +2950,8 @@
     var title = document.getElementById('draft-title').value;
     var location = document.getElementById('draft-location').value;
     var comment = document.getElementById('draft-comment').value;
-    var status = document.getElementById('draft-status').value;
+    // V8-T2: ручного выбора статуса нет — черновик всегда прогноз.
+    var status = TRIP_STATUS.FORECAST;
     
     if (!title.trim()) {
       alert('Название командировки обязательно');

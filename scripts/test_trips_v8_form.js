@@ -153,7 +153,7 @@ async function main() {
     check('П5 сервер: в ответе понятное сообщение и employeeId', /уже в командировке/i.test(r.json.message || '') && r.json.employeeId === 'emp_2', JSON.stringify(r.json));
     check('П5 сервер: после отклонённого POST командировка не создана', !(await findTrip('SRV dup')));
 
-    r = await api(admin, 'POST', 'api/trips.php', baseBody('SRV ok', [p('emp_2'), p('emp_3', D(24), D(26))]));
+    r = await api(admin, 'POST', 'api/trips.php', baseBody('SRV ok', [p('emp_2'), p('emp_3', D(24), D(26))], { location: 'Казань' })); // V8-T2: confirm требует место назначения
     check('П5 сервер: два разных участника — создаётся (200/201)', (r.status === 200 || r.status === 201) && r.json.success === true, r.status + ' ' + JSON.stringify(r.json).slice(0, 200));
     const srvTrip = r.json.trip || {};
     check('П4 сервер: телефон +79991234567 принят и возвращается без изменений', srvTrip.phone === '+79991234567', JSON.stringify(srvTrip.phone));
