@@ -31,7 +31,11 @@ declare(strict_types=1);
  * Валидация RPA v1.2 (E12-1): advanceAmount — целое >= 0 (иначе 400
  * advance_invalid); transportOutMode/transportBackMode — 'avia' | 'zd'
  * (иначе 400 transport_mode_invalid); origin/hotel/businessProcess/phone —
- * строки (trim, пустая строка -> NULL).
+ * строки (trim, пустая строка -> NULL). Телефон — свободная строка; форма
+ * (V8-T1) отправляет канонический вид +7XXXXXXXXXX, прежние форматы принимаются.
+ *
+ * Состав (V8-T1): один сотрудник — одна строка участника; повтор employeeId в
+ * POST/PUT -> 400 { error: 'duplicate_participant', employeeId, message }.
  *
  * Права:
  *   admin      — всё, включая правку/удаление confirmed.
@@ -215,6 +219,15 @@ function trips_normalize_participants(array $raw, PDO $pdo): ?array
         $stmtE->execute();
         if (!$stmtE->fetch()) {
             sendJson(['error' => 'participant_not_found'], 400);
+        }
+        // V8-T1: один сотрудник — одна строка участника. Раньше повтор доходил до
+        // INSERT и падал на PRIMARY KEY (trip_id, employee_id) ответом 500.
+        if (in_array((string) $empId, $empIds, true)) {
+            sendJson([
+                'error'      => 'duplicate_participant',
+                'employeeId' => (string) $empId,
+                'message'    => 'Сотрудник уже в командировке',
+            ], 400);
         }
         $participants[] = [
             'employeeId' => (string) $empId,

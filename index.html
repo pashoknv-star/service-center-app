@@ -4708,8 +4708,10 @@
         participants: [participant]
       });
 
-      // Show success message
-      showToast('Командировка создана', 'success');
+      // Форма открыта с готовым участником и датами; сообщение об успехе
+      // («Заведена новая командировка») показывает createTrip — только после
+      // того, как сервер подтвердил сохранение. V8-T1: тост «Командировка
+      // создана» при одном лишь открытии формы убран.
     }
     window.createTripFromSelection = createTripFromSelection;
     // Attach to the Trips module namespace — the popup handler calls

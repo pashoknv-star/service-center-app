@@ -47,6 +47,10 @@
   var _currentTab = 'matrix';
   var _currentUser = null;
   var _lastLocalActionAt = 0;
+  // V8-T1: что показано в форме командировки в панели (null — формы нет) и
+  // активный режим выбора дат в Матрице (null — режима нет).
+  var _formTrip = null;
+  var _datePick = null;
 
   // =====================
   // INITIALIZATION
@@ -272,7 +276,7 @@
             throw new Error('Недостаточно прав для операции');
           }
           
-          throw new Error(error.error || 'Неизвестная ошибка');
+          throw new Error(tripErrorMessage(error));
         }
       });
   }
@@ -313,7 +317,7 @@
             throw new Error('Другой пользователь изменил командировку. Загружена серверная версия');
           }
           
-          throw new Error(error.error || 'Неизвестная ошибка');
+          throw new Error(tripErrorMessage(error));
         }
       });
   }
@@ -893,6 +897,31 @@
       .trip-pick-edge-btn-secondary:hover {
         background: rgba(119, 0, 255, 0.12);
       }
+
+      /* V8-T1 п.2: режим выбора дат участника в Матрице отпусков */
+      .trip-datepick-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 24px;
+        background: rgba(119, 0, 255, 0.08);
+        border-bottom: 1px solid var(--divider);
+        font-size: 13px;
+        color: var(--text);
+      }
+      body.trip-datepick .matrix-table .day-cell-data { cursor: not-allowed; }
+      body.trip-datepick .matrix-table tr.trip-datepick-row .day-cell-data { cursor: crosshair; }
+      .matrix-table tr.trip-datepick-row .name-col {
+        background: rgba(119, 0, 255, 0.18) !important;
+        font-weight: 700;
+      }
+      .matrix-table .day-cell-data.trip-datepick-sel {
+        background-color: rgba(119, 0, 255, 0.35) !important;
+        background-image: none !important;
+        outline: 2px solid var(--rt-purple);
+        outline-offset: -2px;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -1012,6 +1041,8 @@
    * Switch between tabs
    */
   function switchTab(tab) {
+    // V8-T1: уход с вкладки «Матрица отпусков» во время выбора дат = отмена выбора.
+    if (_datePick && tab !== 'matrix') endDatePick(false);
     _currentTab = tab;
     
     if (_dom.tabMatrix && _dom.tabTrips) {
@@ -1125,6 +1156,28 @@
     }
     var isViewer = user && !user.canEdit;
     var isEdit = trip && trip.id;
+
+    // V8-T1: запомнить, что именно показано в форме (saveTrip берёт из него
+    // поля, которых в форме нет: место, комментарий, статус, прежний телефон).
+    _formTrip = trip || null;
+
+    // V8-T1 п.5: у новой командировки (id нет — состав пришёл из Матрицы /
+    // карточки сотрудника / createTripFromSelection) повтор сотрудника в
+    // составе схлопывается с сообщением. Сохранённые командировки не трогаем.
+    if (trip && !isEdit && trip.participants && trip.participants.length > 1) {
+      var uniq = dedupeParticipants(trip.participants);
+      if (uniq.duplicates.length > 0) {
+        trip = Object.assign({}, trip, { participants: uniq.list });
+        _formTrip = trip;
+        notifyAlreadyInTrip(uniq.duplicates);
+      }
+    }
+
+    // V8-T1 п.3: плечо «нужен билет» отражает данные записи независимо от роли;
+    // select способа блокируется ТОЛЬКО для viewer или когда плечо не требуется.
+    var outRequired = !trip || trip.transportOutRequired === 1 || trip.transportOutRequired === null || trip.transportOutRequired === undefined;
+    var backRequired = !trip || trip.transportBackRequired === 1 || trip.transportBackRequired === null || trip.transportBackRequired === undefined;
+    var phoneShown = trip && trip.phone ? displayPhone(trip.phone) : '';
     
     tripsListView.innerHTML = `
       <div id="tripFormPanel">
@@ -1159,7 +1212,7 @@
             </div>
             <div class="trip-form-row">
               <label class="trip-form-label">Телефон сотрудника</label>
-              <input type="tel" class="trip-form-input" id="tripPhone" value="${trip ? escapeHtml(trip.phone || '') : ''}" maxlength="18" placeholder="+7 (999) 000-00-00" oninput="window.Trips.maskPhoneField(this)" ${isViewer ? 'disabled' : ''}>
+              <input type="tel" class="trip-form-input" id="tripPhone" value="${escapeHtml(phoneShown)}" maxlength="32" placeholder="+7 (999) 000-00-00" oninput="window.Trips.maskPhoneField(this)" onfocus="window.Trips.phoneFieldFocus(this)" onblur="window.Trips.phoneFieldBlur(this)" ${isViewer ? 'disabled' : ''}>
             </div>
             <div class="trip-form-row">
               <label class="trip-form-label">Сумма аванса, руб.</label>
@@ -1170,10 +1223,10 @@
               <div class="trip-transport-columns">
                 <div class="trip-transport-column">
                   <label style="display:flex; align-items:center; margin-bottom:5px;">
-                    <input type="checkbox" id="transportOutRequired" ${(!trip || trip.transportOutRequired === 1 || trip.transportOutRequired === null) && !isViewer ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportOut')">
+                    <input type="checkbox" id="transportOutRequired" ${outRequired ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportOut')">
                     <span style="margin-left:8px;">Выезд нужен билет</span>
                   </label>
-                  <select class="trip-form-input" id="transportOutMode" disabled ${isViewer ? 'disabled' : ''}>
+                  <select class="trip-form-input" id="transportOutMode" ${isViewer || !outRequired ? 'disabled' : ''}>
                     <option value="">Выберите способ</option>
                     <option value="avia" ${trip && trip.transportOutMode === 'avia' ? 'selected' : ''}>Авиа</option>
                     <option value="zd" ${trip && trip.transportOutMode === 'zd' ? 'selected' : ''}>ЖД</option>
@@ -1181,10 +1234,10 @@
                 </div>
                 <div class="trip-transport-column">
                   <label style="display:flex; align-items:center; margin-bottom:5px;">
-                    <input type="checkbox" id="transportBackRequired" ${(!trip || trip.transportBackRequired === 1 || trip.transportBackRequired === null) && !isViewer ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportBack')">
+                    <input type="checkbox" id="transportBackRequired" ${backRequired ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportBack')">
                     <span style="margin-left:8px;">Возврат нужен билет</span>
                   </label>
-                  <select class="trip-form-input" id="transportBackMode" disabled ${isViewer ? 'disabled' : ''}>
+                  <select class="trip-form-input" id="transportBackMode" ${isViewer || !backRequired ? 'disabled' : ''}>
                     <option value="">Выберите способ</option>
                     <option value="avia" ${trip && trip.transportBackMode === 'avia' ? 'selected' : ''}>Авиа</option>
                     <option value="zd" ${trip && trip.transportBackMode === 'zd' ? 'selected' : ''}>ЖД</option>
@@ -1219,6 +1272,9 @@
    * Close trip form in panel and show trips list
    */
   function closeTripForm() {
+    // V8-T1: режим выбора дат в Матрице не должен пережить форму.
+    if (_datePick) endDatePick(false);
+    _formTrip = null;
     // V2-B fix (coordinator): mid-pick close must restore the panel first —
     // otherwise the panel stays slid off-screen with a dead edge button.
     if (window._employeePickActive) {
@@ -1463,27 +1519,107 @@
   }
 
   /**
-   * E12-3: Phone mask validation helper
-   * - Allows 11 digits (Russian format +7XXXXXXXXXX)
-   * - Permits: leading +, digits, spaces, hyphens, parentheses
-   * - Empty field = correct (not mandatory)
-   * - Shows error if <10 digits
+   * V8-T1 п.4: национальная часть номера (до 10 цифр) из любого ввода.
+   * Принимает 8XXXXXXXXXX, 7XXXXXXXXXX, +7XXXXXXXXXX, XXXXXXXXXX и уже
+   * отформатированное «+7 (999) 123-45-67». Префикс «+7», который поле
+   * ставит само, отбрасывается (иначе вставка поверх него давала бы «7…»).
+   */
+  function phoneNationalDigits(value) {
+    var s = String(value == null ? '' : value);
+    var digits = s.replace(/\D/g, '');
+    if (/^\s*\+\s*7/.test(s)) digits = digits.slice(1);
+    // 11 цифр с «8» или «7» впереди — внутренний префикс РФ, не часть номера.
+    if (digits.length === 11 && (digits.charAt(0) === '8' || digits.charAt(0) === '7')) digits = digits.slice(1);
+    return digits.slice(0, 10);
+  }
+
+  /** «+7 » + национальная часть по маске «+7 (999) 123-45-67» (прогрессивно). */
+  function formatPhoneRu(national) {
+    var d = String(national || '');
+    var out = '+7 ';
+    if (d.length > 0) out += '(' + d.slice(0, 3);
+    if (d.length > 3) out += ') ' + d.slice(3, 6);
+    if (d.length > 6) out += '-' + d.slice(6, 8);
+    if (d.length > 8) out += '-' + d.slice(8, 10);
+    return out;
+  }
+
+  /**
+   * Национальная часть ТОЛЬКО для настоящего российского номера (10 цифр или 11 с
+   * 7/8/+7 впереди); иначе null. Номера иного вида (иностранные, короткие) в
+   * прежних записях не разбираются и показываются/сохраняются как хранятся.
+   */
+  function ruNationalStrict(stored) {
+    var s = String(stored == null ? '' : stored);
+    var digits = s.replace(/\D/g, '');
+    if (/^\s*\+\s*7/.test(s)) return digits.length === 11 ? digits.slice(1) : null;
+    if (digits.length === 11 && /^[78]/.test(digits)) return digits.slice(1);
+    if (digits.length === 10) return digits;
+    return null;
+  }
+
+  /** Телефон в виде для показа в поле: российский → единая маска, иначе как хранится. */
+  function displayPhone(stored) {
+    var national = ruNationalStrict(stored);
+    return national ? formatPhoneRu(national) : String(stored == null ? '' : stored);
+  }
+
+  /** Канонический вид для сервера и робота: +7XXXXXXXXXX или null. */
+  function canonicalPhone(value) {
+    var d = phoneNationalDigits(value);
+    return d.length === 10 ? '+7' + d : null;
+  }
+
+  /**
+   * V8-T1 п.4: фокус на пустом поле телефона — ставим «+7 » (удалить нельзя:
+   * maskPhoneField возвращает префикс при любом вводе).
+   */
+  function phoneFieldFocus(el) {
+    if (!el || el.disabled) return;
+    // Заполненное поле (в т.ч. прежний нестандартный номер) не трогаем: приведение
+    // к маске — только при вводе, иначе простой клик по полю искажал бы старую запись.
+    if (String(el.value || '').trim() !== '') return;
+    el.value = '+7 ';
+    var end = el.value.length;
+    try { el.setSelectionRange(end, end); } catch (e) { /* type=tel: ок */ }
+    maskPhoneField(el);
+  }
+
+  /** Уход с поля: один лишь префикс — это «пусто» (виден placeholder). */
+  function phoneFieldBlur(el) {
+    if (!el) return;
+    if (String(el.value || '').replace(/\D/g, '') === '7' && phoneNationalDigits(el.value) === '') {
+      el.value = '';
+    }
+  }
+
+  /**
+   * E12-3 / V8-T1 п.4: маска телефона.
+   * - всегда «+7 » впереди, ввод приводится к «+7 (999) 123-45-67»;
+   * - обязательное поле: меньше 10 цифр — подсветка и setCustomValidity.
    */
   function maskPhoneField(el) {
-    var value = el.value.replace(/[^\d+\s\-\(\)]/g, '');
-    var digits = value.replace(/[^\d]/g, '');
-    
-    // E12-3: empty phone = not allowed (block submission with error)
-    if (value.trim() === '') {
-      el.classList.add('trip-form-error');
-      el.setCustomValidity('Телефон сотрудника: обязательное поле');
-      return;
+    var national = phoneNationalDigits(el.value);
+    // Номер уже полный, а в конец дописали ещё цифру: лишнее игнорируем, а не
+    // «сдвигаем» номер (иначе у номера на 8/7, напр. 8-800…, срабатывал бы
+    // срез внутреннего префикса РФ).
+    var prev = el.__tripPhoneNat;
+    if (prev && prev.length === 10 && national !== prev && /^\s*\+\s*7/.test(el.value) &&
+        el.value.replace(/\D/g, '').slice(1, 11) === prev) {
+      national = prev;
     }
-    
-    // E12-3: validate 10+ digits after +
-    if (digits.length < 10) {
+    el.__tripPhoneNat = national;
+    var formatted = formatPhoneRu(national);
+    if (el.value !== formatted) {
+      el.value = formatted;
+      var end = formatted.length;
+      try { el.setSelectionRange(end, end); } catch (e) { /* type=tel: ок */ }
+    }
+
+    // E12-3: empty/short phone = not allowed (block submission with error)
+    if (national.length < 10) {
       el.classList.add('trip-form-error');
-      el.setCustomValidity('Телефон сотрудника: обязательное поле');
+      el.setCustomValidity('Телефон сотрудника: 10 цифр после +7');
       return;
     }
     
@@ -1543,34 +1679,136 @@
     }
   }
 
+  // =====================
+  // V8-T1: общие помощники формы (участники, ошибки, сообщения сервера)
+  // =====================
+
+  /** Id сотрудника без префикса «emp_»: в Матрице он числовой, на сервере — «emp_<n>». */
+  function normEmpId(v) {
+    return String(v == null ? '' : v).replace(/^emp_/, '');
+  }
+
+  /**
+   * V8-T1 п.5: убрать повторы сотрудника из списка участников.
+   * @return {{list: Array, duplicates: Array}} list — без повторов (порядок сохранён),
+   *         duplicates — отброшенные повторные элементы.
+   */
+  function dedupeParticipants(participants) {
+    var seen = {};
+    var list = [];
+    var duplicates = [];
+    (participants || []).forEach(function(p) {
+      var key = normEmpId(p && p.employeeId);
+      if (key && seen[key]) {
+        duplicates.push(p);
+        return;
+      }
+      if (key) seen[key] = true;
+      list.push(p);
+    });
+    return { list: list, duplicates: duplicates };
+  }
+
+  /** Сообщение «уже в командировке» (имена — из записи, иначе из Матрицы). */
+  function notifyAlreadyInTrip(duplicates, toastType) {
+    var names = [];
+    (duplicates || []).forEach(function(d) {
+      var n = (d && (d.name || d.fullName)) || getEmployeeName(d && d.employeeId) || '';
+      if (n && names.indexOf(n) === -1) names.push(n);
+    });
+    var text = names.length === 1
+      ? 'Сотрудник «' + names[0] + '» уже в командировке'
+      : (names.length > 1 ? 'Уже в командировке: ' + names.join(', ') : 'Сотрудник уже в командировке');
+    if (typeof window.showToast === 'function') {
+      window.showToast(text, toastType || 'info');
+    }
+    return text;
+  }
+
+  /** Понятный текст по коду ошибки api/trips.php (в ответе может быть и свой message). */
+  function tripErrorMessage(error) {
+    var map = {
+      duplicate_participant: 'Сотрудник уже в командировке',
+      participants_required: 'Добавьте хотя бы одного участника',
+      title_required: 'Название обязательно',
+      missing_dates: 'Укажите даты командировки',
+      invalid_date: 'Некорректная дата',
+      date_range_invalid: 'Дата начала не может быть позже даты окончания',
+      participant_not_found: 'Сотрудник не найден',
+      zone_forbidden: 'Нельзя оформить командировку сотрудника другого отдела',
+      advance_invalid: 'Сумма аванса: целое число >= 0',
+      transport_mode_invalid: 'Способ проезда: Авиа или ЖД',
+      confirmed_immutable: 'Подтверждённую командировку может править только администратор'
+    };
+    var code = error && error.error;
+    var text = (code && map[code]) || (error && error.message) || code || 'Неизвестная ошибка';
+    if (code === 'duplicate_participant' && error.message) text = error.message;
+    return text;
+  }
+
   /**
    * Save trip (create or update)
+   *
+   * V8-T1 п.1: ни один выход не молчит — каждая ошибка валидации показывается
+   * у поля (и тостом), а любое неожиданное исключение превращается в сообщение
+   * (раньше ReferenceError/TypeError уходили только в консоль, и кнопка
+   * «Сохранить» выглядела мёртвой).
    */
+  var _saving = false;
   function saveTrip(id) {
     // E6-T1 fix: строки 'undefined'/'null'/пустая — это «создание», а не
     // редактирование. Раньше saveTrip('undefined') проходил проверку truthy,
     // updateTrip бросал синхронное «Командировка не найдена» мимо .catch.
     if (id === 'null' || id === 'undefined' || id === '') id = null;
-    
-    var title = document.getElementById('tripTitle').value.trim();
-    var location = document.getElementById('tripLocation').value.trim();
-    var comment = document.getElementById('tripComment').value.trim();
-    var status = document.getElementById('tripStatus').value;
-    
+    if (_saving) return;
+    try {
+      saveTripImpl(id);
+    } catch (e) {
+      _saving = false;
+      console.error(LOG_PREFIX, 'saveTrip failed:', e);
+      showError(null, 'Не удалось сохранить: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  function formEl(id) { return document.getElementById(id); }
+  /** Значение поля формы; если поля в форме нет — значение из записи формы (ctx). */
+  function formVal(id, fallback) {
+    var el = formEl(id);
+    if (el) return String(el.value == null ? '' : el.value);
+    return fallback == null ? '' : String(fallback);
+  }
+
+  function saveTripImpl(id) {
+    clearFormErrors();
+    var ctx = _formTrip || {};
+
+    // Поля «Место», «Комментарий», «Статус» в форме панели не выводятся (их
+    // нет в разметке renderTripFormInPanel): для правки берём прежние значения
+    // записи, чтобы сохранение их не затёрло; для новой — значения по умолчанию.
+    var title = formVal('tripTitle').trim();
+    var location = formVal('tripLocation', ctx.location).trim();
+    var comment = formVal('tripComment', ctx.comment).trim();
+    var status = formVal('tripStatus', ctx.status || TRIP_STATUS.FORECAST) || TRIP_STATUS.FORECAST;
+
     if (!title) {
       showError('tripTitle', 'Название обязательно');
       return;
     }
-    
+
     var participants = [];
     var participantRows = document.querySelectorAll('#tripParticipants .trip-participant-row');
     var hasMissingDates = false;
-    
+    var hasRowError = false;
+    var seenEmployees = {};
+    var duplicates = [];
+
     participantRows.forEach(function(row) {
-      var name = row.querySelector('.trip-participant-name').value.trim();
+      var nameInput = row.querySelector('.trip-participant-name');
+      var dateInputs = row.querySelectorAll('.trip-participant-date');
+      var name = nameInput.value.trim();
       var attrEmpId = row.getAttribute('data-emp-id');
-      var startDate = row.querySelector('.trip-participant-date').value;
-      var endDate = row.querySelectorAll('.trip-participant-date')[1].value;
+      var startDate = dateInputs[0].value;
+      var endDate = dateInputs[1].value;
       
       // E6-T1: пропустить строку можно только если она ПОЛНОСТЬЮ пуста —
       // нет ни имени, ни data-emp-id.
@@ -1583,7 +1821,13 @@
       // участников оставался пустым и пользователь получал неверное
       // «Добавьте хотя бы одного участника».
       if (!startDate || !endDate) {
+        if (!hasMissingDates) showError(!startDate ? dateInputs[0] : dateInputs[1], 'Укажите даты командировки');
         hasMissingDates = true;
+        return;
+      }
+      if (startDate > endDate) {
+        showError(dateInputs[1], 'Дата начала не может быть позже даты окончания');
+        hasRowError = true;
         return;
       }
       
@@ -1599,22 +1843,30 @@
       // без data-emp-id.
       var employeeId = null;
       if (attrEmpId) {
-        var norm = function(v) { return String(v).replace(/^emp_/, ''); };
-        var wanted = norm(attrEmpId);
-        var employee = resolveEmployeesList().find(function(e) { return norm(e.id) === wanted; });
+        var wanted = normEmpId(attrEmpId);
+        var employee = resolveEmployeesList().find(function(e) { return normEmpId(e.id) === wanted; });
         employeeId = employee ? employee.id : null;
       } else {
         employeeId = findEmployeeIdByName(name);
       }
       if (!employeeId) {
-        showError(row.querySelector('.trip-participant-name'), 'Сотрудник не найден');
+        showError(nameInput, 'Сотрудник не найден');
+        hasRowError = true;
         return;
       }
       // Канонический формат id для API — 'emp_<n>' (та же нормализация, что
       // в selectTripForEmployee): __serverEmployees отдаёт legacy-числовые
       // id, а api/trips.php ищет участника по полному 'emp_<n>'.
       employeeId = /^emp_/.test(String(employeeId)) ? String(employeeId) : 'emp_' + employeeId;
-      
+
+      // V8-T1 п.5: один сотрудник — одна строка (сервер тоже отклонит дубль).
+      if (seenEmployees[employeeId]) {
+        duplicates.push({ employeeId: employeeId, name: name });
+        showError(nameInput, 'Сотрудник «' + name + '» уже в командировке');
+        hasRowError = true;
+        return;
+      }
+      seenEmployees[employeeId] = true;
       
       participants.push({
         employeeId: employeeId,
@@ -1625,36 +1877,42 @@
     
     // E6-T1 fix: даты обязательны — ровно это сообщение и никаких
     // запросов к серверу.
-    if (hasMissingDates) {
-      showError(null, 'Укажите даты командировки');
+    if (hasMissingDates || hasRowError) {
       return;
     }
     
-    // «Добавьте хотя бы одного участника» — только когда строк участников
-    // нет вообще (пустой #tripParticipants), а не когда строки без дат.
-    if (participants.length === 0 && participantRows.length === 0) {
-      showError(null, 'Добавьте хотя бы одного участника');
-      return;
-    }
+    // «Добавьте хотя бы одного участника» — когда в форме нет ни одной
+    // заполненной строки (строк нет вообще или все полностью пусты).
+    // V8-T1: раньше при пустых строках выход был молчаливым.
     if (participants.length === 0) {
-      // Строки были, но ни одна не собралась: ошибка уже показана на строке
-      // («Сотрудник не найден») либо все строки полностью пусты — сервер
-      // не дёргаем.
+      showError(formEl('tripParticipants'), 'Добавьте хотя бы одного участника');
       return;
     }
     
     // E12-3: validate RPA fields before building payload
     // Collect RPA field values first
-    var origin = document.getElementById('tripOrigin').value.trim();
-    var hotel = document.getElementById('tripHotel').value.trim();
-    var businessProcess = document.getElementById('tripBusinessProcess').value.trim();
-    var phone = document.getElementById('tripPhone').value.trim();
-    var advanceAmount = document.getElementById('tripAdvanceAmount').value.trim();
+    var origin = formVal('tripOrigin', ctx.origin).trim();
+    var hotel = formVal('tripHotel', ctx.hotel).trim();
+    var businessProcess = formVal('tripBusinessProcess', ctx.businessProcess).trim();
+    var phoneRaw = formVal('tripPhone', ctx.phone).trim();
+    var advanceAmount = formVal('tripAdvanceAmount', ctx.advanceAmount == null ? '' : ctx.advanceAmount).trim();
     
-    // Phone validation: empty is not allowed, must have 10+ digits (after +)
-    var phoneDigits = phoneEl.value.replace(/[^\\d]/g, '').length;
-    if (phoneDigits < 10) {
-      showError('tripPhone', 'Телефон сотрудника: обязательное поле');
+    // Phone validation: обязателен; на сервер уходит +7XXXXXXXXXX (V8-T1 п.4).
+    // Раньше проверка читала несуществующую переменную phoneEl (ReferenceError
+    // → сохранение обрывалось молча) и считала цифры регэкспом /[^\\d]/ (класс
+    // «не обратный слэш и не буква d»), т.е. «цифр» всегда было 0.
+    // Прежняя запись с нестандартным номером (не РФ): пока поле не менялось,
+    // номер остаётся как был — сохранение из-за него не блокируется.
+    var phone;
+    if (ctx.id && ctx.phone && phoneRaw === displayPhone(ctx.phone)) {
+      var legacyNational = ruNationalStrict(ctx.phone);
+      if (legacyNational) phone = '+7' + legacyNational;
+      else phone = phoneRaw.replace(/\D/g, '').length >= 10 ? String(ctx.phone) : null;
+    } else {
+      phone = canonicalPhone(phoneRaw);
+    }
+    if (!phone) {
+      showError('tripPhone', 'Телефон сотрудника: введите 10 цифр после +7');
       return;
     }
     
@@ -1668,16 +1926,16 @@
     }
     
     // Transport validation: if checkbox checked, select must be filled
-    var transportOutRequired = document.getElementById('transportOutRequired').checked;
-    var transportOutMode = document.getElementById('transportOutMode').value;
+    var transportOutRequired = !!(formEl('transportOutRequired') || {}).checked;
+    var transportOutMode = formVal('transportOutMode');
     if (transportOutRequired && !transportOutMode) {
-      showError('transportOutMode', 'Выберите способ транспорта');
+      showError('transportOutMode', 'Выберите способ проезда «туда»');
       return;
     }
-    var transportBackRequired = document.getElementById('transportBackRequired').checked;
-    var transportBackMode = document.getElementById('transportBackMode').value;
+    var transportBackRequired = !!(formEl('transportBackRequired') || {}).checked;
+    var transportBackMode = formVal('transportBackMode');
     if (transportBackRequired && !transportBackMode) {
-      showError('transportBackMode', 'Выберите способ транспорта');
+      showError('transportBackMode', 'Выберите способ проезда «обратно»');
       return;
     }
     
@@ -1696,19 +1954,36 @@
       transportBackMode: transportBackMode || null,
       advanceAmount: advanceAmount !== '' ? advanceAmount : null,
       businessProcess: businessProcess || null,
-      phone: phone || null
+      phone: phone
     };
     
-    var promise = id ? updateTrip(id, payload) : createTrip(payload);
+    // createTrip/updateTrip валидируют синхронно и бросают исключение —
+    // ловим его здесь, а не теряем.
+    var promise;
+    _saving = true;
+    try {
+      promise = id ? updateTrip(id, payload) : createTrip(payload);
+    } catch (e) {
+      _saving = false;
+      showError(null, e.message);
+      return;
+    }
     
     promise
       .then(function(trip) {
-        closeTripModal();
-        if (_currentTab === 'trips') {
-          renderTripsList();
+        _saving = false;
+        // Форма живёт в панели «Командировки», а не в модалке: закрыть её
+        // и вернуть список (closeTripModal тут ничего не делал).
+        closeTripForm();
+        if (id && typeof window.showToast === 'function') {
+          window.showToast('Командировка сохранена', 'success');
         }
+        // «Заведена новая командировка» показывает createTrip (только после
+        // ответа сервера). Матрица — перерисовать наложение командировок.
+        try { overlay(); } catch (e) { console.warn(LOG_PREFIX, 'Overlay error:', e); }
       })
       .catch(function(error) {
+        _saving = false;
         showError(null, error.message);
       });
   }
@@ -1782,24 +2057,47 @@
 
   /**
    * Show error message
+   *
+   * V8-T1 п.1: `field` — id поля ИЛИ сам элемент (раньше элемент молча терялся:
+   * getElementById(элемент) → null, и сообщение «у поля» не показывалось).
+   * Сообщение выводится под полем (у строки участника — под строкой), поле
+   * получает фокус; предыдущие сообщения формы снимаются перед новым сохранением
+   * (clearFormErrors) и сами исчезают через 8 с. Дублируется тостом.
    */
-  function showError(fieldId, message) {
-    if (fieldId) {
-      var field = document.getElementById(fieldId);
-      if (field) {
-        var errorDiv = document.createElement('div');
-        errorDiv.className = 'trip-form-error';
-        errorDiv.textContent = message;
-        field.parentNode.appendChild(errorDiv);
-        setTimeout(function() {
-          errorDiv.remove();
-        }, 5000);
+  function showError(field, message) {
+    var el = field && typeof field === 'object' ? field : (field ? document.getElementById(field) : null);
+    if (el && el.parentNode) {
+      var errorDiv = document.createElement('div');
+      errorDiv.className = 'trip-form-error';
+      errorDiv.setAttribute('data-trip-err', '1');
+      errorDiv.setAttribute('role', 'alert');
+      errorDiv.textContent = message;
+      var row = el.closest ? el.closest('.trip-participant-row') : null;
+      if (row && row.parentNode) {
+        row.parentNode.insertBefore(errorDiv, row.nextSibling);
+      } else {
+        el.parentNode.appendChild(errorDiv);
       }
+      setTimeout(function() {
+        if (errorDiv.parentNode) errorDiv.parentNode.removeChild(errorDiv);
+      }, 8000);
+      try {
+        if (typeof el.focus === 'function' && !el.disabled) el.focus();
+        if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+      } catch (e) { /* не критично */ }
     }
     
     if (typeof window.showToast === 'function') {
       window.showToast(message, 'error');
     }
+  }
+
+  /** Снять прежние сообщения об ошибках формы (перед новой проверкой). */
+  function clearFormErrors() {
+    var olds = document.querySelectorAll('#tripFormPanel [data-trip-err]');
+    Array.prototype.forEach.call(olds, function(n) {
+      if (n.parentNode) n.parentNode.removeChild(n);
+    });
   }
 
   // T5-DEFECT-6: Update tab-glow effect based on selection count
@@ -2311,6 +2609,10 @@
     selectTripForEmployee: selectTripForEmployee,
     addParticipantRow: addParticipantRow,
     removeParticipantRow: removeParticipantRow,
+    // V8-T1: обработчики разметки формы (oninput/onchange) — без экспорта
+    // `window.Trips.maskPhoneField(this)` / `toggleTransportSelect(...)` падали TypeError'ом
+    maskPhoneField: maskPhoneField,
+    toggleTransportSelect: toggleTransportSelect,
     handleConfirmTripClick: handleConfirmTripClick,
     handleDeleteTripClick: handleDeleteTripClick,
     renderTripFormInPanel: renderTripFormInPanel,
@@ -2383,6 +2685,14 @@
     openDraft: openDraft,
     createDraftFromSelection: createDraftFromSelection,
     startCalendarPick: startCalendarPick,
+    cancelDatePick: cancelDatePick,
+    // V8-T1: телефон и участники (используются разметкой формы и тестами)
+    phoneFieldFocus: phoneFieldFocus,
+    phoneFieldBlur: phoneFieldBlur,
+    phoneNationalDigits: phoneNationalDigits,
+    formatPhoneRu: formatPhoneRu,
+    canonicalPhone: canonicalPhone,
+    dedupeParticipants: dedupeParticipants,
     startEmployeePick: startEmployeePick,
     confirmEmployeePick: confirmEmployeePick,
     cancelEmployeePick: cancelEmployeePick,
@@ -2597,45 +2907,270 @@
     }
   }
 
-  // T5-DEFECT-4: Calendar pick modal for trip dates
+  // V8-T1 п.2: выбор дат участника в Матрице отпусков.
+  //
+  // Кнопка 📅 в строке участника переключает панель на вкладку «Матрица отпусков»
+  // (форма остаётся в DOM вкладки «Командировки», её поля не теряются), подсвечивает
+  // строку нужного сотрудника и ждёт выбора: протяжка мышью по строке — период,
+  // одиночный клик — один день. Результат подставляется в даты ЭТОГО участника, панель
+  // возвращается на форму. Esc / «Отменить» / уход с вкладки — отмена без изменений.
+  //
+  // Обработчики ячеек матрицы принадлежат хост-странице (замыкание index.html:
+  // handleCellMouseDown/MouseEnter/MouseUp/Click, глобального window.handleCellMouseUp
+  // нет), поэтому перехват делается на document в фазе capture: пока режим включён,
+  // события по ячейкам не доходят до хоста (меню «Отпуск/Командировка» не открывается)
+  // и до наложения командировок (клик по ячейке чужой поездки).
+
+  var _calendarPickCleanup = null;
+
+  /** Год, показанный в Матрице (#yearDisplay; currentYear живёт в замыкании index.html). */
+  function matrixYear() {
+    var yd = document.getElementById('yearDisplay');
+    var y = yd ? parseInt(yd.textContent, 10) : NaN;
+    return isNaN(y) ? new Date().getFullYear() : y;
+  }
+
+  /** День года (1 = 1 января) → «YYYY-MM-DD» без часовых поясов. */
+  function dayOfYearToDateStr(year, doy) {
+    var d = new Date(Date.UTC(year, 0, doy));
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+  }
+
+  function datePickCell(target) {
+    return target && target.closest ? target.closest('.day-cell-data') : null;
+  }
+
+  /** Погасить ближайший click по ячейке матрицы (см. onUp); сам снимается через 400 мс. */
+  function swallowNextClick() {
+    var off = function() { document.removeEventListener('click', swallow, true); };
+    var swallow = function(e) {
+      if (datePickCell(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      off();
+    };
+    document.addEventListener('click', swallow, true);
+    setTimeout(off, 400);
+  }
+
+  function paintDatePick() {
+    var dp = _datePick;
+    if (!dp) return;
+    // Матрица могла перерисоваться (смена года, синхронизация) — подсветку строки вернуть.
+    var rowCell = document.querySelector('#matrixBody .day-cell-data[data-emp="' + dp.empKey + '"]');
+    var rowTr = rowCell && rowCell.closest ? rowCell.closest('tr') : null;
+    if (rowTr && rowTr !== dp.row) {
+      if (dp.row && dp.row.classList) dp.row.classList.remove('trip-datepick-row');
+      rowTr.classList.add('trip-datepick-row');
+      dp.row = rowTr;
+    }
+    var painted = document.querySelectorAll('#matrixBody .day-cell-data.trip-datepick-sel');
+    Array.prototype.forEach.call(painted, function(c) { c.classList.remove('trip-datepick-sel'); });
+    if (dp.startDay == null) return;
+    var lo = Math.min(dp.startDay, dp.endDay);
+    var hi = Math.max(dp.startDay, dp.endDay);
+    var cells = document.querySelectorAll('#matrixBody .day-cell-data[data-emp="' + dp.empKey + '"]');
+    Array.prototype.forEach.call(cells, function(c) {
+      var day = parseInt(c.getAttribute('data-day'), 10);
+      if (day >= lo && day <= hi) c.classList.add('trip-datepick-sel');
+    });
+  }
+
+  /**
+   * Включить режим выбора дат для строки участника №index. false — режима нет
+   * (строки/сотрудника/ячеек нет), причина показана сообщением.
+   */
+  function activateDatePick(index) {
+    var rowEls = document.querySelectorAll('#tripParticipants .trip-participant-row');
+    var rowEl = rowEls && rowEls[index];
+    if (!rowEl) return false;
+
+    var nameInput = rowEl.querySelector('.trip-participant-name');
+    var name = nameInput ? String(nameInput.value || '').trim() : '';
+    var empAttr = rowEl.getAttribute('data-emp-id') || '';
+    if (!empAttr && name) empAttr = findEmployeeIdByName(name) || '';
+    var empKey = normEmpId(empAttr);
+    var warn = function(text) {
+      if (typeof window.showToast === 'function') window.showToast(text, 'error');
+      if (_calendarPickCleanup) _calendarPickCleanup();
+      return false;
+    };
+    if (!empKey) return warn('Сначала выберите сотрудника в этой строке');
+
+    var cells = document.querySelectorAll('#matrixBody .day-cell-data[data-emp="' + empKey + '"]');
+    if (!cells || cells.length === 0) {
+      return warn('Сотрудника' + (name ? ' «' + name + '»' : '') + ' нет в Матрице отпусков (проверьте фильтры и год)');
+    }
+
+    switchTab('matrix');
+
+    var year = matrixYear();
+    var dp = { rowIndex: index, empKey: empKey, name: name, year: year, startDay: null, endDay: null, dragging: false, handlers: null, bar: null };
+    _datePick = dp;
+
+    // Панель режима над Матрицей (внутри панели вкладок, чтобы не жить вне неё).
+    var wrap = document.getElementById('matrixWrapper') || _dom.matrixWrapper;
+    var bar = document.createElement('div');
+    bar.id = 'tripDatePickBar';
+    bar.className = 'trip-datepick-bar';
+    bar.innerHTML = '<span class="trip-datepick-text">Выберите даты командировки: <b>' + escapeHtml(name || 'сотрудник') + '</b> — ' +
+      'протяните мышью по его строке (клик — один день). Esc — отмена.</span>' +
+      '<button type="button" class="trip-btn trip-btn-secondary">Отменить</button>';
+    bar.querySelector('button').addEventListener('click', function() { cancelDatePick(); });
+    if (wrap && wrap.parentNode) wrap.parentNode.insertBefore(bar, wrap);
+    dp.bar = bar;
+
+    document.body.classList.add('trip-datepick');
+    var tr = cells[0].closest ? cells[0].closest('tr') : null;
+    if (tr) tr.classList.add('trip-datepick-row');
+    dp.row = tr;
+    dp.prevSuppress = Trips.suppressInfoPanel;
+    Trips.suppressInfoPanel = function() { return true; };
+
+    // Прокрутка к датам участника (начало его периода), иначе к сегодняшнему дню.
+    var startAttr = String((rowEl.querySelectorAll('.trip-participant-date')[0] || {}).value || '');
+    var focusDay = null;
+    if (startAttr.indexOf(String(year)) === 0) focusDay = dateStrToDayOfYear(startAttr);
+    if (!focusDay) {
+      var now = new Date();
+      if (now.getFullYear() === year) focusDay = dateStrToDayOfYear(formatDate(now));
+    }
+    var target = focusDay ? document.querySelector('#matrixBody .day-cell-data[data-emp="' + empKey + '"][data-day="' + focusDay + '"]') : null;
+    if (wrap && (target || tr)) {
+      var el = target || tr;
+      var cr = el.getBoundingClientRect();
+      var wr = wrap.getBoundingClientRect();
+      wrap.scrollLeft += (cr.left - wr.left) - wrap.clientWidth / 2;
+      wrap.scrollTop += (cr.top - wr.top) - wrap.clientHeight / 2;
+    }
+
+    var onDown = function(e) {
+      if (!_datePick) return;
+      var cell = datePickCell(e.target);
+      if (!cell) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.button !== undefined && e.button !== 0) return;
+      if (String(cell.getAttribute('data-emp')) !== dp.empKey) {
+        if (typeof window.showToast === 'function') {
+          window.showToast('Выберите даты в строке сотрудника: ' + (dp.name || 'выбранного'), 'info');
+        }
+        return;
+      }
+      dp.startDay = dp.endDay = parseInt(cell.getAttribute('data-day'), 10);
+      dp.dragging = true;
+      paintDatePick();
+    };
+    var onOver = function(e) {
+      if (!_datePick || !dp.dragging) return;
+      var cell = datePickCell(e.target);
+      if (!cell || String(cell.getAttribute('data-emp')) !== dp.empKey) return;
+      dp.endDay = parseInt(cell.getAttribute('data-day'), 10);
+      paintDatePick();
+    };
+    var onUp = function(e) {
+      if (!_datePick || !dp.dragging) return;
+      e.stopPropagation();
+      dp.dragging = false;
+      var cell = datePickCell(e.target);
+      if (cell && String(cell.getAttribute('data-emp')) === dp.empKey) {
+        dp.endDay = parseInt(cell.getAttribute('data-day'), 10);
+      }
+      // Одиночный клик: браузер пришлёт `click` по ячейке УЖЕ после mouseup, когда
+      // режим снят, — без заслона он открыл бы меню дня хоста или карточку чужой
+      // командировки. Гасим ближайший click (и снимаем заслон по таймеру).
+      swallowNextClick();
+      finishDatePick(Math.min(dp.startDay, dp.endDay), Math.max(dp.startDay, dp.endDay));
+    };
+    var onClick = function(e) {
+      if (!_datePick) return;
+      if (datePickCell(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    dp.handlers = { mousedown: onDown, mouseover: onOver, mouseup: onUp, click: onClick };
+    Object.keys(dp.handlers).forEach(function(type) {
+      document.addEventListener(type, dp.handlers[type], true);
+    });
+    return true;
+  }
+
+  /** Подставить выбранный период в строку участника и вернуться к форме. */
+  function finishDatePick(lo, hi) {
+    var dp = _datePick;
+    if (!dp) return;
+    var startStr = dayOfYearToDateStr(dp.year, lo);
+    var endStr = dayOfYearToDateStr(dp.year, hi);
+    endDatePick(true); // снять режим и вернуться на вкладку «Командировки»
+
+    var rowEls = document.querySelectorAll('#tripParticipants .trip-participant-row');
+    var rowEl = null;
+    Array.prototype.forEach.call(rowEls, function(r, i) {
+      if (!rowEl && normEmpId(r.getAttribute('data-emp-id')) === dp.empKey) rowEl = r;
+    });
+    if (!rowEl) rowEl = rowEls[dp.rowIndex];
+    if (!rowEl) return;
+    var dateInputs = rowEl.querySelectorAll('.trip-participant-date');
+    dateInputs[0].value = startStr;
+    dateInputs[1].value = endStr;
+    Array.prototype.forEach.call(dateInputs, function(inp) {
+      try { inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) { /* не критично */ }
+    });
+    clearFormErrors();
+    // Тоста нет: выбранные даты видны в полях строки, а тост ложится поверх
+    // кнопки «Сохранить» (низ панели) и перехватывает по ней клик.
+  }
+
+  /**
+   * Снять режим выбора дат. returnToForm — вернуться на вкладку «Командировки»
+   * (при уходе с вкладки её переключает сам пользователь — false).
+   */
+  function endDatePick(returnToForm) {
+    var dp = _datePick;
+    if (dp) {
+      _datePick = null;
+      if (dp.handlers) {
+        Object.keys(dp.handlers).forEach(function(type) {
+          document.removeEventListener(type, dp.handlers[type], true);
+        });
+      }
+      if (dp.bar && dp.bar.parentNode) dp.bar.parentNode.removeChild(dp.bar);
+      if (dp.row && dp.row.classList) dp.row.classList.remove('trip-datepick-row');
+      var painted = document.querySelectorAll('#matrixBody .day-cell-data.trip-datepick-sel');
+      Array.prototype.forEach.call(painted, function(c) { c.classList.remove('trip-datepick-sel'); });
+      if (document.body && document.body.classList) document.body.classList.remove('trip-datepick');
+      Trips.suppressInfoPanel = dp.prevSuppress || function() { return false; };
+    }
+    if (_calendarPickCleanup) _calendarPickCleanup();
+    if (dp && returnToForm) switchTab('trips');
+  }
+
+  /** Отмена выбора дат: форма возвращается как была. */
+  function cancelDatePick() {
+    if (_datePick) endDatePick(true);
+    else if (_calendarPickCleanup) _calendarPickCleanup();
+  }
+
+  // T5-DEFECT-4: Calendar pick for trip dates (V8-T1: рабочая версия, см. блок выше)
   function startCalendarPick(tripId, participantIndex) {
     console.log(LOG_PREFIX, 'Starting calendar pick for trip:', tripId, participantIndex);
-    
-    // Store current context for pick mode
+
+    // Повторный запуск (или запуск при незавершённом выборе) снимает прежний режим.
+    if (_datePick) endDatePick(false);
+    if (_calendarPickCleanup) _calendarPickCleanup();
+
+    // Контекст выбора (его читают тесты гигиены R4 и внешние наблюдатели).
     window._calendarPickContext = {
-      tripId: tripId,
+      tripId: tripId || (_formTrip && _formTrip.id) || null,
       participantIndex: participantIndex
     };
-    
-    // Find the participant data
-    var participants = [];
-    if (tripId) {
-      var trip = _state.trips.find(function(t) { return t.id === tripId; });
-      if (trip && trip.participants && trip.participants[participantIndex]) {
-        participants.push(trip.participants[participantIndex]);
-      }
-    }
-    
-    // Highlight the participant row if we have one
-    if (participants.length > 0) {
-      var empId = participants[0].employeeId;
-      var participantRows = document.querySelectorAll('.trip-row-selected');
-      participantRows.forEach(function(row) {
-        if (row.getAttribute('data-emp-id') === empId.toString()) {
-          row.classList.add('trip-row-selected');
-        }
-      });
-    }
-    
-    // Focus on trips tab and show pick mode
-    switchTab('trips');
-    
-    // Set up pick mode handler for mouseup events
+
     // D3: never leak the patch — capture the original and restore it on every
-    // completion path (picked a cell OR cancelled). The original lives in the
-    // host page closure and is NOT a global, so on pages where it was never
-    // exposed as window.handleCellMouseUp the restore leaves the window slot
-    // at whatever it was before (no-op on this build).
+    // completion path (picked a range OR cancelled). window.handleCellMouseUp в
+    // сборке хоста НЕ глобальный (замыкание), для хостов, где он выставлен,
+    // обёртка только пропускает вызов к оригиналу.
     var origHandleCellMouseUp = window.handleCellMouseUp;
     var restoreCellMouseUp = function() {
       if (origHandleCellMouseUp) {
@@ -2645,37 +3180,8 @@
       }
     };
     window.handleCellMouseUp = function(event) {
-      // If we're in pick mode, handle the pick
-      if (window._calendarPickContext) {
-        console.log(LOG_PREFIX, 'Calendar pick handling cell mouse up');
-
-        // Find the day cell that was clicked
-        var dayCell = event.target.closest('.day-cell-data');
-        if (dayCell) {
-          var day = parseInt(dayCell.getAttribute('data-day'));
-          if (day) {
-            // Record the pick
-            var participantIndex = window._calendarPickContext.participantIndex;
-            if (participantIndex !== undefined && _state.draft && _state.draft.participants && _state.draft.participants[participantIndex]) {
-              _state.draft.participants[participantIndex].startDate = formatDateStr(window.currentYear, 0, day);
-              _state.draft.participants[participantIndex].endDate = formatDateStr(window.currentYear, 0, day);
-
-              // Update display and close pick mode
-              console.log(LOG_PREFIX, 'Calendar pick completed:', _state.draft.participants[participantIndex]);
-              window._calendarPickContext = null;
-              restoreCellMouseUp();
-
-              // Switch back to trips tab and refresh
-              switchTab('trips');
-              return;
-            }
-          }
-        }
-      }
-
-      // Call original handler if not in pick mode or no valid cell
       if (origHandleCellMouseUp) {
-        origHandleCellMouseUp(event);
+        return origHandleCellMouseUp(event);
       }
     };
 
@@ -2684,14 +3190,22 @@
     var escHandler = function(e) {
       if (e.key === 'Escape' && window._calendarPickContext) {
         console.log(LOG_PREFIX, 'Calendar pick cancelled (ESC)');
-        window._calendarPickContext = null;
-        restoreCellMouseUp();
-        document.removeEventListener('keydown', escHandler, true);
+        cancelDatePick();
       }
     };
     document.addEventListener('keydown', escHandler, true);
 
-    console.log(LOG_PREFIX, 'Calendar pick mode activated. Press ESC to cancel.');
+    _calendarPickCleanup = function() {
+      _calendarPickCleanup = null;
+      window._calendarPickContext = null;
+      restoreCellMouseUp();
+      document.removeEventListener('keydown', escHandler, true);
+    };
+
+    // Сам выбор — в Матрице отпусков (если есть форма и строка участника).
+    var active = activateDatePick(participantIndex);
+    console.log(LOG_PREFIX, active ? 'Calendar pick mode activated. Press ESC to cancel.' : 'Calendar pick: no participant row to pick for');
+    return active;
   }
 
   // R3 (замечание 10): Employee pick — панель уезжает, сотрудники выбираются
@@ -2913,10 +3427,20 @@
       var employees = resolveEmployeesList();
 
       if (draft && draft.participants) {
+        // V8-T1 п.5: в черновик от карточки сотрудника уже положен сам
+        // сотрудник — повторный выбор того же человека не добавляет вторую строку.
+        var inDraft = {};
+        draft.participants.forEach(function(p) { inDraft[norm(p.employeeId)] = true; });
+        var draftDuplicates = [];
         selectedEmployees.forEach(function(empId) {
           var wanted = norm(empId);
           var employee = employees.find(function(e) { return norm(e.id) === wanted; });
           if (employee) {
+            if (inDraft[norm(employee.id)]) {
+              draftDuplicates.push({ employeeId: employee.id, name: employee.name || employee.fullName || '' });
+              return;
+            }
+            inDraft[norm(employee.id)] = true;
             draft.participants.push({
               employeeId: employee.id,
               name: employee.name || employee.fullName || '',
@@ -2925,6 +3449,7 @@
             });
           }
         });
+        if (draftDuplicates.length > 0) notifyAlreadyInTrip(draftDuplicates);
 
         console.log(LOG_PREFIX, 'Employees added to draft:', selectedEmployees);
       }
@@ -2957,7 +3482,9 @@
       }
 
       // Sync the picked employees into the trip form's participant rows (R2 form).
-      syncPickedEmployeesToForm(selectedEmployees);
+      // Если участники пришли через черновик (форма только что открыта из него),
+      // сообщение о повторах уже показано выше — второй раз не повторяем.
+      syncPickedEmployeesToForm(selectedEmployees, !!(draft && draft.participants));
     }
 
     /**
@@ -2965,27 +3492,39 @@
      * строками в форме командировки (общий #tripParticipants у реальной формы
      * нового/редактируемого трипа; R2 in-panel форма — report-only, см. отчёт).
      */
-    function syncPickedEmployeesToForm(selectedEmployees) {
+    function syncPickedEmployeesToForm(selectedEmployees, silent) {
       var container = document.getElementById('tripParticipants');
       if (!container) return;
-      var norm = function(v) { return String(v).replace(/^emp_/, ''); };
+      var norm = normEmpId;
       var employees = resolveEmployeesList();
       var rowData = collectParticipantRowData();
       var existing = new Set();
       rowData = rowData.map(function(r) {
+        // V8-T1 п.5: строка с data-emp-id учитывается по нему (раньше — только по
+        // совпадению ФИО, и две строки одного сотрудника не распознавались).
+        if (r.employeeId) {
+          existing.add(norm(r.employeeId));
+          return r;
+        }
         // Resolve real id for name-only rows (from collect). renderParticipantRow
         // derives the name from employeeId, so tag it back on to survive re-render.
         var emp = employees.find(function(e) { return e.name === r.name; });
-        if (emp && !r.employeeId) r.employeeId = emp.id;
-        if (emp) existing.add(norm(emp.id));
+        if (emp) {
+          r.employeeId = emp.id;
+          existing.add(norm(emp.id));
+        }
         return r;
       });
 
+      var duplicates = [];
       selectedEmployees.forEach(function(empId) {
         var wanted = norm(empId);
         var employee = employees.find(function(e) { return norm(e.id) === wanted; });
         if (!employee) return;
-        if (existing.has(wanted)) return; // уже есть строка
+        if (existing.has(wanted)) { // уже есть строка — вторую не создаём
+          duplicates.push({ employeeId: employee.id, name: employee.name || employee.fullName || '' });
+          return;
+        }
         existing.add(wanted);
         rowData.push({
           employeeId: employee.id, // renderParticipantRow resolves name from employeeId
@@ -2996,6 +3535,7 @@
         });
       });
       rerenderParticipantRows(rowData);
+      if (duplicates.length > 0 && !silent) notifyAlreadyInTrip(duplicates);
     }
 
     function getEmployeesForPick() {
