@@ -63,8 +63,15 @@
     occurrence_duplicate: 'Повтор совпадает с основной датой задачи или другим повтором.',
     occurrences_too_many: 'Повторов не больше 100.',
     invalid_occurrences: 'Повторы заданы неверно.',
-    occurrence_not_found: 'Повтор не найден (возможно, уже удалён) — календарь обновлён.'
+    occurrence_not_found: 'Повтор не найден (возможно, уже удалён) — календарь обновлён.',
+    // V9-T2: связанные задачи; понятный текст приходит с сервера (message), эти — запасные
+    link_self: 'Задачу нельзя связать саму с собой.',
+    link_unknown: 'В связанных задачах указана несуществующая задача — выберите её заново через (()).',
+    link_target_archived: 'Нельзя связать с удалённой задачей.',
+    links_too_many: 'Связанных задач не больше 50.',
+    invalid_links_text: 'Текст связанных задач слишком длинный (максимум 5000 символов).'
   };
+  var LINK_ERR_RE = /^(link_self|link_unknown|link_target_archived|links_too_many|invalid_links_text)$/;
   var OCC_MAX = 100;                           // V6.3-2: максимум повторов у задачи (как на сервере)
 
   // ---------------------------------------------------------------- state
@@ -90,7 +97,12 @@
     modal: null,                   // T1-8: окно замены { empId, fullName, items, target, error, busy }
     att: null,                     // V7: окно вложений { taskId, title, list, canUpload, limits, loading, error, queue, pending }
     dirty: false,                  // T1-11: sync принёс изменения, пока панель/форма закрыта — перечитать при возврате
-    sort: { key: '', dir: '' }     // V6-1 (R-17): сортировка Списка: key = priority|status, dir = asc|desc; '' = без сортировки
+    sort: { key: '', dir: '' },    // V6-1 (R-17): сортировка Списка: key = priority|status, dir = asc|desc; '' = без сортировки
+    relData: null,                 // V9-T2: «Список» связанных задач (filters.rel): { id, ids, tasks, truncated } из GET ?related=<id>
+    lp: null,                      // V9-T2: окно выбора задачи для токена «(())»: { pos, q, act, items, loading, error, selfId, shown }
+    lpSuppress: -1,                // V9-T2: позиция «(())», где окно отменено: пока курсор не покинет скобки, повторно не открывать
+    pickCache: null,               // V9-T2: кэш GET ?pick=1 (сбрасывается при открытии формы, сохранении, sync)
+    pickGen: 0
   };
   var DOM = {};
 
@@ -257,6 +269,7 @@
     if (r && r.status === 401) code = 'unauthorized';
     if (r && r.status === 403) code = 'forbidden';
     if (code === 'invalid_label' && r.data && r.data.message) return String(r.data.message);     // V6.2 (W-4): понятный текст сервера
+    if (LINK_ERR_RE.test(code || '') && r.data && r.data.message) return String(r.data.message);   // V9-T2: связанные задачи
     // V6.3-2: ошибки повторов несут понятный текст сервера («Повтор 2 (…) совпадает с …»)
     if (/^(invalid_occurrence|occurrence_duplicate|occurrences_too_many|invalid_occurrences)$/.test(code || '') && r.data && r.data.message) return String(r.data.message);
     return ERR_TEXT[code] || ('Ошибка сервера' + (code ? ' (' + code + ')' : '') + '.');
@@ -295,6 +308,7 @@
       q = '?from=' + r.from + '&to=' + r.to;
     }
     if (!silent) { S.loading = true; render(); }
+    if (S.view === 'list' && S.filters.rel) return loadRel(seq, silent);       // V9-T2: «Список» связанных задач
     return api('GET', API + q).then(function (res) {
       if (seq !== S.loadSeq) return;       // устаревший ответ
       S.loading = false;
@@ -316,6 +330,68 @@
       }
       render();
     });
+  }
+
+  // ---------------------------------------------------------------- V9-T2: «Список» связанных задач (S.filters.rel)
+  // GET ?related=<id> → { ids, tasks[] (исходная первой), truncated? }. Ошибки: 404 not_found, 409 task_archived.
+  function relErrText(r) {
+    var code = r && r.data && r.data.error;
+    if (r && r.status === 409 && code === 'task_archived') return 'Задача удалена — связанные задачи недоступны.';
+    if (r && r.status === 404) return 'Задача не найдена (возможно, удалена) — связанные задачи недоступны.';
+    return errText(r);
+  }
+  function relFromResponse(id, data) {
+    var tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    return { id: id, ids: Array.isArray(data.ids) ? data.ids : tasks.map(function (t) { return t.id; }), tasks: tasks, truncated: data.truncated === true };
+  }
+  // перечитать связанные задачи текущего rel (load в виде «Список»); исходная пропала/в архиве → фильтр снимается
+  function loadRel(seq, silent) {
+    var id = S.filters.rel;
+    return api('GET', API + '?related=' + encodeURIComponent(id)).then(function (res) {
+      if (seq !== S.loadSeq) return;
+      S.loading = false;
+      if (res.ok && res.data && res.data.success) {
+        S.relData = relFromResponse(id, res.data);
+        S.relData.tasks.forEach(mergeTask);
+        S.loadError = null;
+        render();
+        return;
+      }
+      if (res.status === 404 || res.status === 409) {
+        delete S.filters.rel;
+        S.relData = null;
+        S.msg = { type: 'error', text: relErrText(res) };
+        return load(true);
+      }
+      if (!silent) S.loadError = errText(res);
+      render();
+    });
+  }
+  function openRel(id) {
+    if (!id) return Promise.resolve();
+    return api('GET', API + '?related=' + encodeURIComponent(id)).then(function (res) {
+      if (!(res.ok && res.data && res.data.success)) {
+        var m = relErrText(res);
+        S.msg = { type: 'error', text: m };
+        toast(m, 'error');
+        render();
+        return;
+      }
+      S.filters = { emp: '', due: '', priority: '', label: '', status: '', rel: id };
+      S.relData = relFromResponse(id, res.data);
+      S.relData.tasks.forEach(mergeTask);
+      S.selectedId = null;
+      S.msg = null;
+      S.form = null;
+      S.view = 'list';
+      render();
+    });
+  }
+  function clearRel() {
+    delete S.filters.rel;
+    S.relData = null;
+    render();
+    load(true);                       // вернуть обычный Список (мог прийти из Календаря с недельной выборкой)
   }
 
   // ---------------------------------------------------------------- filters
@@ -599,6 +675,7 @@
 
   function renderList() {
     var f = S.filters;
+    if (f.rel) return renderListRel();                                    // V9-T2: «Список» связанных задач
     var rows = sortRows(sortByDue(applyFilters(S.tasks, f, true)));      // V6.3-2: по умолчанию — по сроку (next_at)
     var h = '<div class="tk-filters">' +
       '<label>Сотрудник <select data-tk-filter="emp">' + empOptions(f.emp, 'Все', true) + '</select></label>' +
@@ -616,13 +693,18 @@
     if (!rows.length) {
       return h + '<p class="tk-empty">' + (S.loading ? 'Загрузка…' : 'Задач нет.') + '</p>';
     }
-    // V6.2 (W-1): Задача · Описание · Исполнитель (узкая, ~50 % прежней) · Срок · Приор. · Статус; W-2: последняя колонка «Править» (только admin)
+    return h + listTableHtml(rows);
+  }
+
+  // V6.2 (W-1): Задача · Описание · Исполнитель (узкая, ~50 % прежней) · Срок · Приор. · Статус; W-2: последняя колонка «Править» (только admin)
+  function listTableHtml(rows, firstId) {
     var admin = canWrite();
-    h += '<div class="tk-tablewrap"><table class="tk-table tk-table-v62"><thead><tr><th class="tk-c-task">Задача</th><th class="tk-c-desc">Описание</th><th class="tk-c-exec">Исполнитель</th><th>Срок</th>' +
+    var h = '<div class="tk-tablewrap"><table class="tk-table tk-table-v62"><thead><tr><th class="tk-c-task">Задача</th><th class="tk-c-desc">Описание</th><th class="tk-c-exec">Исполнитель</th><th>Срок</th>' +
       sortTh('priority', 'Приор.') + sortTh('status', 'Статус') +
       (admin ? '<th class="tk-c-edit"><span class="tk-sr">Править</span></th>' : '') + '</tr></thead><tbody>';
     rows.forEach(function (t) {
-      h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board">' +
+      h += '<tr class="tk-row' + (t.status === 'closed' ? ' tk-dim' : '') + (isOrphan(t) ? ' tk-orph' : '') + '" data-tk-act="openTask" data-id="' + esc(t.id) + '" data-view="board"' +
+        (firstId && t.id === firstId ? ' data-tk-rel-src="1"' : '') + '>' +
         '<td class="tk-c-task"><b>' + esc(t.title) + '</b><div class="tk-badges">' + badgesHtml(t, true).replace('<span class="tk-tag tk-closed">закрыта</span>', '') + '</div></td>' +
         descCell(t) + '<td class="tk-c-exec"' + (!isOrphan(t) && namesTitle(t) ? ' title="' + esc(namesTitle(t)) + '"' : '') + '>' + nameLinks(t, true, true) + '</td>' +
         '<td class="tk-nowrap" data-tk-due="1"' + (occsOf(t).length ? ' title="' + esc(allDatesText(t)) + '"' : '') + '>' + esc(dueText(t)) + occBadge(t) + '</td>' +
@@ -632,6 +714,22 @@
         '</tr>';
     });
     return h + '</tbody></table></div>';
+  }
+
+  // V9-T2: «Список» связанных задач (S.filters.rel): плашка «Связанные задачи: <название>» + «×»; остальные фильтры не применяются;
+  // первая строка — исходная задача (без выделения), далее остальные по обычной сортировке Списка; открытые и закрытые вместе.
+  function renderListRel() {
+    var R = S.relData && S.relData.id === S.filters.rel ? S.relData : null;
+    var src = R && R.tasks.length ? R.tasks[0] : null;
+    var h = '<div class="tk-filters tk-filters-rel"><span class="tk-relbar" data-tk-relbar="1" role="status">Связанные задачи: <b class="tk-relname">' +
+      esc(src ? src.title : (S.loading ? '…' : '')) + '</b>' +
+      (R && R.truncated ? ' <span class="tk-muted">· показаны первые 200</span>' : '') +
+      ' <button type="button" class="tk-x tk-relx" data-tk-act="clearRel" title="Сбросить: вернуться к обычному Списку" aria-label="Сбросить фильтр «Связанные задачи»">×</button></span></div>';
+    if (!R || !src) return h + '<p class="tk-empty">' + (S.loading || !R ? 'Загрузка…' : 'Задач нет.') + '</p>';
+    var rest = sortRows(sortByDue(R.tasks.slice(1)));
+    h += listTableHtml([src].concat(rest), src.id);
+    if (R.tasks.length === 1) h += '<p class="tk-muted tk-rel-none">У этой задачи нет активных связанных задач.</p>';
+    return h;
   }
 
   function cardHtml(t) {
@@ -1834,6 +1932,253 @@
     if (ev && ev.key === 'Escape' && S.att) attClose();
   }
 
+  // ---------------------------------------------------------------- V9-T2: связанные задачи
+  // Текст связей (tasks.links_text) — свободный текст с токенами ((ID|название)); истина — ID, название в токене — снимок.
+  // Регулярка разбора согласована с серверной (api/tasks_links.php: TASKS_LINKS_ID_RE, разбор токена): ID [A-Za-z0-9_.-]{1,64},
+  // название — любые символы без перевода строки до первых «))» (может быть пустым / без «|»).
+  var LINK_TOKEN_SRC = '\\(\\([ \\t\\r\\n\\f\\v]*([A-Za-z0-9_.\\-]{1,64})[ \\t\\r\\n\\f\\v]*(?:\\|([^\\r\\n]*?))?\\)\\)';
+  var LP_TITLE_MAX = 80;                       // длина названия в токене (снимок для режима правки)
+  var LP_SHOW_MAX = 100;                       // строк в окне выбора за раз (остальное — через поиск)
+  function linkTokenRe() { return new RegExp(LINK_TOKEN_SRC, 'g'); }
+  function linksOf(t) { return Array.isArray(t && t.links) ? t.links : []; }
+
+  // чип связи: активная ссылка (клик → «Список» связанных задач; data-id — задача, из чьей карточки кликнули) или
+  // перечёркнутая (задача удалена: archived=1) — без перехода
+  function linkChipHtml(l, cardId) {
+    var title = String(l.title == null ? '' : l.title);
+    if (+l.archived) {
+      return '<s class="tk-lk tk-lk-gone" data-tk-lk="gone" data-link="' + esc(l.id) + '" title="Задача удалена">' + esc(title) + '</s>';
+    }
+    return '<a href="#" class="tk-lk' + (l.status === 'closed' ? ' tk-lk-closed' : '') + '" data-tk-lk="active" data-tk-act="openRel" data-id="' + esc(cardId) +
+      '" data-link="' + esc(l.id) + '" title="' + esc(title + (l.status === 'closed' ? ' (закрыта)' : '') + ' — показать все связанные задачи') + '">' + esc(title) + '</a>';
+  }
+  // блок карточки «Связанные задачи» (под «Описанием»): текст links_text с токенами → чипы (название актуальное, из links[]);
+  // токен без записи в links[] — «задача не найдена»; затем «Также связана с:» — входящие связи, которых нет в собственном тексте
+  function linksBlockHtml(t) {
+    var text = String(t.links_text == null ? '' : t.links_text), links = linksOf(t);
+    var hasText = text.trim() !== '';
+    if (!hasText && !links.length) return '';
+    var byId = {}, used = {};
+    links.forEach(function (l) { byId[l.id] = l; });
+    var h = '<div class="tk-kv tk-links" data-tk-links="1"><span>Связанные задачи</span>';
+    if (hasText) {
+      var body = '', last = 0, re = linkTokenRe(), m;
+      while ((m = re.exec(text)) !== null) {
+        body += esc(text.slice(last, m.index));
+        var l = byId[m[1]];
+        if (l) { body += linkChipHtml(l, t.id); used[l.id] = 1; }
+        else body += '<span class="tk-lk tk-lk-miss" data-tk-lk="missing" title="Связь не найдена (возможно, уже удалена)">задача не найдена</span>';
+        last = m.index + m[0].length;
+      }
+      body += esc(text.slice(last));
+      h += '<div class="tk-pre tk-links-text">' + body + '</div>';
+    }
+    var also = links.filter(function (l) { return !used[l.id]; });
+    if (also.length) {
+      h += '<div class="tk-links-also" data-tk-links-also="1"><span class="tk-muted tk-links-also-l">Также связана с:</span> ' +
+        also.map(function (l) { return linkChipHtml(l, t.id); }).join(' ') + '</div>';
+    }
+    return h + '</div>';
+  }
+
+  // --- поле формы: ключ «(())» и окно выбора задачи
+  // позиция «((» перед курсором, если курсор стоит ровно между «((» и «))»; иначе -1
+  function linksCaretPos(ta) {
+    var v = String(ta && ta.value != null ? ta.value : ''), a = ta ? ta.selectionStart : null, b = ta ? ta.selectionEnd : null;
+    if (typeof a !== 'number' || a !== b || a < 2) return -1;
+    return v.slice(a - 2, a) === '((' && v.slice(a, a + 2) === '))' ? a - 2 : -1;
+  }
+  function linksCheck(ta) {
+    if (!S.form || !canWrite()) return;
+    var pos = linksCaretPos(ta);
+    if (pos < 0) { S.lpSuppress = -1; return; }          // курсор вне скобок — следующий заход в скобки снова открывает окно
+    if (S.lp || S.lpSuppress === pos) return;             // окно уже открыто / было отменено на этих скобках
+    lpOpen(pos);
+  }
+  // токен для вставки: название очищается от ( ) | и переводов строк, ≤ 80 символов
+  function linkTokenText(id, title) {
+    var s = String(title == null ? '' : title).replace(/[()|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (s.length > LP_TITLE_MAX) s = s.slice(0, LP_TITLE_MAX).replace(/\s+$/, '');
+    return s ? '((' + id + '|' + s + '))' : '((' + id + '))';
+  }
+  function linksTa() {
+    return DOM.root && DOM.root.querySelector ? DOM.root.querySelector('[data-tk-field="linksText"]') : null;
+  }
+  // перед перерисовкой: textarea «Связанные задачи» в фокусе → запомнить курсор/выделение и прокрутку
+  function linksCaretKeep() {
+    try {
+      var a = typeof document !== 'undefined' ? document.activeElement : null;
+      if (!a || !a.dataset || a.dataset.tkField !== 'linksText' || typeof a.selectionStart !== 'number') return null;
+      return { s: a.selectionStart, e: a.selectionEnd, top: a.scrollTop || 0, dir: a.selectionDirection || 'none' };
+    } catch (e) { return null; }
+  }
+  function linksCaretRestore(k) {
+    try {
+      var ta = linksTa();
+      if (!ta || !k) return;
+      if (ta.focus) ta.focus();
+      if (ta.setSelectionRange) ta.setSelectionRange(k.s, k.e, k.dir);
+      ta.scrollTop = k.top;
+    } catch (e) { /* без возврата курсора поле остаётся с актуальным текстом */ }
+  }
+  function pickReset() { S.pickCache = null; S.pickGen++; }
+  function fmtDmy(s) { var p = parseYmd(s); return p ? pad(p.d) + '.' + pad(p.m) + '.' + p.y : ''; }
+
+  function lpOpen(pos) {
+    lpClose(true);
+    var LP = S.lp = { pos: pos, q: '', act: 0, items: S.pickCache, loading: !S.pickCache, error: '', selfId: (S.form && S.form.id) || '', shown: [] };
+    lpMount();
+    if (!S.pickCache) lpFetch(LP);
+  }
+  function lpFetch(LP) {
+    var gen = S.pickGen;
+    return api('GET', API + '?pick=1').then(function (r) {
+      if (S.lp !== LP) return;
+      LP.loading = false;
+      if (r.ok && r.data && r.data.success && Array.isArray(r.data.tasks)) {
+        if (gen === S.pickGen) S.pickCache = r.data.tasks;
+        LP.items = r.data.tasks;
+      } else {
+        LP.error = errText(r);
+      }
+      lpRenderList();
+    });
+  }
+  function lpMount() {
+    var el = document.createElement('div');
+    el.id = 'tasksLinkPick';
+    el.className = 'tk-modal-back tk-lp-back';
+    el.addEventListener('click', onLpClick);
+    el.addEventListener('input', onLpInput);
+    DOM.lp = el;
+    lpRender();
+    (document.body || document.documentElement).appendChild(el);
+    if (typeof document.addEventListener === 'function') document.addEventListener('keydown', onLpKey);
+    var inp = el.querySelector ? el.querySelector('[data-tk-lp-search]') : null;
+    if (inp && inp.focus) inp.focus();
+    lpRenderList();
+  }
+  function lpClose() {
+    var el = DOM.lp;
+    S.lp = null;
+    DOM.lp = null;
+    if (el) {
+      if (el.parentNode && el.parentNode.removeChild) el.parentNode.removeChild(el);
+      else if (el.remove) el.remove();
+    }
+    if (typeof document.removeEventListener === 'function') document.removeEventListener('keydown', onLpKey);
+  }
+  function lpRender() {
+    if (!S.lp || !DOM.lp) return;
+    DOM.lp.innerHTML = '<div class="tk-modal tk-lp-modal" role="dialog" aria-modal="true" aria-label="Выбор связанной задачи">' +
+      '<div class="tk-att-head"><h4 class="tk-mtitle">Связанная задача</h4>' +
+      '<button type="button" class="tk-x tk-att-x" data-tk-act="lpClose" title="Закрыть" aria-label="Закрыть">×</button></div>' +
+      '<input type="text" class="tk-lp-search" data-tk-lp-search="1" autocomplete="off" placeholder="Поиск по названию" aria-label="Поиск задачи по названию">' +
+      '<div class="tk-lp-listwrap" data-tk-lp-list="1"></div>' +
+      '<div class="tk-muted tk-hint">↑/↓ — выбор, Enter — вставить, Esc — отмена.</div>' +
+      '<div class="tk-actions"><button type="button" class="tk-btn" data-tk-act="lpClose">Отмена</button></div></div>';
+  }
+  // список строк по поиску (без учёта регистра по названию); сама редактируемая задача исключена
+  function lpFiltered() {
+    var LP = S.lp, q = String(LP.q || '').trim().toLowerCase();
+    return (LP.items || []).filter(function (t) {
+      return t.id !== LP.selfId && (!q || String(t.title || '').toLowerCase().indexOf(q) >= 0);
+    });
+  }
+  function lpRenderList() {
+    var LP = S.lp, wrap = DOM.lp && DOM.lp.querySelector ? DOM.lp.querySelector('[data-tk-lp-list]') : null;
+    if (!LP || !wrap) return;
+    var h;
+    if (LP.error) h = '<div class="tk-msg tk-msg-error" role="alert">' + esc(LP.error) + '</div>';
+    else if (LP.loading) h = '<p class="tk-muted">Загрузка…</p>';
+    else {
+      var all = lpFiltered(), rows = all.slice(0, LP_SHOW_MAX);
+      LP.shown = rows.map(function (t) { return t.id; });
+      if (LP.act >= rows.length) LP.act = Math.max(0, rows.length - 1);
+      if (!rows.length) h = '<p class="tk-muted tk-lp-none">' + (LP.items && LP.items.length ? 'Ничего не найдено.' : 'Других задач пока нет.') + '</p>';
+      else {
+        h = '<ul class="tk-lp-list" role="listbox" aria-label="Задачи">' + rows.map(function (t, i) {
+          return '<li class="tk-lp-it' + (i === LP.act ? ' tk-lp-act' : '') + (t.status === 'closed' ? ' tk-lp-closed' : '') + '" role="option" aria-selected="' + (i === LP.act ? 'true' : 'false') +
+            '" data-tk-lp-id="' + esc(t.id) + '"><span class="tk-lp-title">' + esc(t.title) + '</span>' +
+            '<span class="tk-lp-meta"><span class="tk-lp-st">' + (t.status === 'closed' ? 'Закрыта' : 'Открыта') + '</span>' +
+            (fmtDmy(t.start_at) ? ' <span class="tk-lp-date">' + esc(fmtDmy(t.start_at)) + '</span>' : '') + '</span></li>';
+        }).join('') + '</ul>' + (all.length > rows.length ? '<div class="tk-muted tk-hint">Показаны первые ' + rows.length + ' из ' + all.length + ' — уточните поиск.</div>' : '');
+      }
+    }
+    wrap.innerHTML = h;
+    lpScrollActive();
+  }
+  function lpScrollActive() {
+    var a = DOM.lp && DOM.lp.querySelector ? DOM.lp.querySelector('.tk-lp-act') : null;
+    if (a && a.scrollIntoView) { try { a.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ } }
+  }
+  function lpMove(d) {
+    var LP = S.lp;
+    if (!LP || !LP.shown.length) return;
+    LP.act = (LP.act + d + LP.shown.length) % LP.shown.length;
+    lpRenderList();
+  }
+  // выбор: «(())» → токен ((ID|название)); курсор — сразу после токена, фокус — в textarea
+  function lpPick(id) {
+    var LP = S.lp, F = S.form;
+    if (!LP || !F) return;
+    var it = null;
+    (LP.items || []).forEach(function (t) { if (t.id === id) it = t; });
+    if (!it) return;
+    var ta = linksTa(), v = String(ta ? ta.value : (F.draft.linksText || '')), pos = LP.pos;
+    if (v.slice(pos, pos + 4) !== '(())') pos = v.indexOf('(())');        // текст мог сместиться — ищем скобки
+    var token = linkTokenText(it.id, it.title), next, caret;
+    if (pos < 0) { next = v + token; caret = next.length; }
+    else { next = v.slice(0, pos) + token + v.slice(pos + 4); caret = pos + token.length; }
+    F.draft.linksText = next;
+    F.linksErr = '';
+    S.lpSuppress = -1;
+    lpClose();
+    if (ta) {
+      ta.value = next;
+      var er = DOM.root.querySelector('[data-tk-links-err]');
+      if (er && er.parentNode) er.parentNode.removeChild(er);
+      if (ta.focus) ta.focus();
+      if (ta.setSelectionRange) ta.setSelectionRange(caret, caret);
+    }
+  }
+  // отмена: «(())» остаётся как есть; повторно окно не откроется, пока курсор не покинет скобки и не вернётся
+  function lpCancel() {
+    var LP = S.lp;
+    if (!LP) return;
+    S.lpSuppress = LP.pos;
+    lpClose();
+    var ta = linksTa();
+    if (ta && ta.focus) {
+      ta.focus();
+      if (ta.setSelectionRange) ta.setSelectionRange(LP.pos + 2, LP.pos + 2);
+    }
+  }
+  function onLpClick(ev) {
+    var t = ev.target, el = t && t.closest ? t.closest('[data-tk-lp-id]') : null;
+    if (el) { lpPick(el.dataset.tkLpId); return; }
+    var btn = t && t.closest ? t.closest('[data-tk-act="lpClose"]') : null;
+    if (btn || t === DOM.lp) lpCancel();                    // «Отмена» / «×» / клик по подложке вне окна
+  }
+  function onLpInput(ev) {
+    var t = ev.target;
+    if (!S.lp || !t || !t.dataset || t.dataset.tkLpSearch === undefined) return;
+    S.lp.q = t.value;
+    S.lp.act = 0;
+    lpRenderList();
+  }
+  function onLpKey(ev) {
+    var LP = S.lp;
+    if (!LP || !ev) return;
+    if (ev.key === 'Escape') { if (ev.preventDefault) ev.preventDefault(); lpCancel(); }
+    else if (ev.key === 'ArrowDown') { if (ev.preventDefault) ev.preventDefault(); lpMove(1); }
+    else if (ev.key === 'ArrowUp') { if (ev.preventDefault) ev.preventDefault(); lpMove(-1); }
+    else if (ev.key === 'Enter') {
+      if (ev.preventDefault) ev.preventDefault();
+      if (LP.shown.length) lpPick(LP.shown[Math.min(LP.act, LP.shown.length - 1)]);
+    }
+  }
+
   // --- карточка (справа)
   function renderDetail() {
     var t = S.selectedId ? findTask(S.selectedId) : null;
@@ -1862,6 +2207,7 @@
         '<div class="tk-muted">Закрыть задачу можно и без исполнителя.</div></div>';
     }
     h += '<div class="tk-kv"><span>Описание</span><div class="tk-pre">' + (t.description ? esc(t.description) : '<span class="tk-muted">нет описания</span>') + '</div></div>';
+    h += linksBlockHtml(t);                                                        // V9-T2: «Связанные задачи» — под «Описанием»
     if (t.checklist && t.checklist.length) {
       h += '<div class="tk-kv"><span>Чек-лист</span><ul class="tk-ck">' + t.checklist.map(function (c) {
         return '<li class="' + (c.done ? 'tk-done' : '') + '">' + (c.done ? '☑' : '☐') + ' ' + esc(c.text) + '</li>';
@@ -1911,7 +2257,7 @@
     var dr = {
       title: '', description: '', assignees: S.filters.emp ? [S.filters.emp] : [],
       watchers: [], kind: 'single', startDate: d, startTime: '', endDate: d, endTime: '',
-      priority: 2, labels: [], labelInput: '', checklist: [], occ: []
+      priority: 2, labels: [], labelInput: '', checklist: [], occ: [], linksText: ''
     };
     // V6-2 (R-10): дата/время из клика по ячейке календаря
     if (pre) ['kind', 'startDate', 'startTime', 'endDate', 'endTime'].forEach(function (k) { if (pre[k] !== undefined) dr[k] = pre[k]; });
@@ -1929,7 +2275,8 @@
       endDate: t.end_at ? dateOf(t.end_at) : dateOf(t.start_at), endTime: timeOf(t.end_at),
       priority: +t.priority || 2, labels: tagsOf(t), labelInput: '',
       checklist: (t.checklist || []).map(function (c) { return { id: c.id, text: c.text, done: !!c.done }; }),
-      occ: occsOf(t).map(function (o) { return { date: dateOf(o.start_at), time: timeOf(o.start_at) }; })     // V6.3-2: повторы (дата + время)
+      occ: occsOf(t).map(function (o) { return { date: dateOf(o.start_at), time: timeOf(o.start_at) }; }),     // V6.3-2: повторы (дата + время)
+      linksText: t.links_text == null ? '' : String(t.links_text)                                              // V9-T2: связанные задачи (текст с токенами)
     };
   }
   // ---- V6.3-2 (Д-1): раздел «Повторения» формы. Строка = { date: 'YYYY-MM-DD', time: 'HH:MM' | '' }.
@@ -2049,6 +2396,10 @@
     var attN = F.id ? attsOf(findTask(F.id)).length : (F.pendingFiles || []).length;
     h += fieldRow('Вложения', '<button type="button" class="tk-btn tk-attformbtn" data-tk-act="attOpenForm">' + CLIP_SVG + ' Вложения' + (attN ? ' · ' + attN : '') + '</button>' +
       '<div class="tk-muted tk-hint">' + (F.id ? 'Файлы прикрепляются сразу, без кнопки «Сохранить».' : 'Файлы загрузятся после сохранения задачи.') + '</div>');
+    // V9-T2: связанные задачи — текст со ссылками; «(())» + курсор между скобками → окно выбора задачи (только admin: форма записи есть только у него)
+    h += fieldRow('Связанные задачи', '<textarea rows="2" maxlength="5000" spellcheck="false" aria-describedby="tkLinksHint" data-tk-field="linksText">' + esc(d.linksText || '') + '</textarea>' +
+      (F.linksErr ? '<div class="tk-links-err" role="alert" data-tk-links-err="1">' + esc(F.linksErr) + '</div>' : '') +
+      '<div class="tk-muted tk-hint" id="tkLinksHint">Введите (()) и поставьте курсор между скобками — откроется список задач</div>', 'tk-f-links');
     var wnames = d.watchers.map(empName).join(', ');
     h += fieldRow('Наблюдатель', '<select disabled title="Поле хранится, но в MVP неактивно"><option>' + esc(wnames || 'не используется в MVP') + '</option></select>', 'tk-f-off');
     h += '<div class="tk-actions"><button type="button" class="tk-btn tk-primary" data-tk-act="saveForm"' + (S.busy ? ' disabled' : '') + '>Сохранить</button>' +
@@ -2069,8 +2420,13 @@
     else if (S.view === 'calendar') h += renderCalendar();
     else h += renderList();
     h += '</div>';
+    // V9-T2: перерисовка (sync, load, ошибка) не сбрасывает набор в «Связанных задачах»: текст уже в черновике (onInput),
+    // курсор/выделение и фокус запоминаем и возвращаем в пересозданное поле
+    var keep = showForm ? linksCaretKeep() : null;
+    if (S.lp && !showForm) lpClose();
     DOM.root.innerHTML = h;
     if (!showForm && !showCal && S.view !== 'board') fitListWidths();   // V6.3-4: ширины колонок Списка (синхронно, до отрисовки — без мерцания)
+    if (keep) linksCaretRestore(keep);                                   // V9-T2: курсор/фокус в «Связанных задачах» после перерисовки
     if (showCal) calScrollApply();
     if (!S.form && typeof DOM.root.querySelector === 'function') {
       var sel = DOM.root.querySelector('.tk-sel');
@@ -2132,6 +2488,7 @@
     // watchers намеренно не отправляются: поле хранится на сервере, UI его не меняет.
     // V6.3-2 (Д-1): повторы — полная замена набора (при правке тоже: пустой список = все повторы удалены)
     p.occurrences = occPayload(d);
+    p.links_text = String(d.linksText || '').trim();            // V9-T2: связанные задачи (пусто = очистить связи этой задачи)
     return p;
   }
 
@@ -2163,6 +2520,7 @@
   }
   function onRemoteChange() {
     var cnt = refreshOrphanCount();
+    pickReset();                                          // V9-T2: список задач для окна «(())» мог измениться
     if (!S.active) return cnt;
     if (!isPanelOpen() || S.form) { S.dirty = true; return cnt; }   // перечитаем, когда панель/форма освободятся
     S.dirty = false;
@@ -2188,6 +2546,8 @@
     S.busy = false;
     if (r.ok && r.data && r.data.success) {
       notifyChanged();
+      pickReset();                                        // V9-T2: список для окна «(())» устарел (новая/изменённая/закрытая задача)
+      lpClose();
       S.form = null;
       var task = r.data.task;
       if (task && task.archived) {
@@ -2246,6 +2606,16 @@
       render();
       return Promise.resolve();
     }
+    // V9-T2: ошибки связанных задач (link_self / link_unknown / link_target_archived / links_too_many / invalid_links_text) —
+    // рядом с полем «Связанные задачи»; набранный текст и курсор остаются (VERSION_CONFLICT — выше, как у остальных полей)
+    if (S.form && LINK_ERR_RE.test(code || '')) {
+      S.form.linksErr = errText(r);
+      S.form.error = '';
+      render();
+      var lt = linksTa();
+      if (lt && lt.scrollIntoView) { try { lt.scrollIntoView({ block: 'center' }); } catch (e3) { /* ignore */ } }
+      return Promise.resolve();
+    }
     var text = errText(r);
     if (S.form) S.form.error = text; else S.msg = { type: 'error', text: text };
     render();
@@ -2300,6 +2670,9 @@
     var t = id ? findTask(id) : null;
     S.form = { id: t ? t.id : null, version: t ? t.version : null, draft: t ? draftFromTask(t) : emptyDraft(pre), blocked: null, error: '', focus: focus || '' };
     S.msg = null;
+    lpClose();
+    pickReset();                                          // V9-T2: каждая форма берёт свежий список задач для «(())»
+    S.lpSuppress = -1;
     render();
     if (focus === 'assignees' && DOM.root.querySelector) {
       var el = DOM.root.querySelector('[data-tk-field="assigneePick"]');
@@ -2394,6 +2767,13 @@
       window.openMatrixAt({ employeeId: el.dataset.emp || '', date: el.dataset.date || '' });
     },
     clearEmp: function () { S.filters.emp = ''; render(); },
+    // V9-T2: чип связи в карточке → «Список» связанных задач (data-id — задача, из чьей карточки кликнули); «×» плашки — обычный Список
+    openRel: function (el, ev) {
+      if (ev && ev.preventDefault) ev.preventDefault();
+      openRel(el.dataset.id);
+    },
+    clearRel: function () { clearRel(); },
+    lpClose: function () { lpCancel(); },     // V9-T2: окно «(())» живёт вне корня панели (свой обработчик onLpClick); запись — для соответствия data-tk-act ↔ ACTIONS
     newTask: function () { openForm(null); },
     editTask: function (el, ev) {
       // V6.2 (W-2): та же функция и у «Править» в карточке, и у ✎ в строке Списка; клик по ✎ не открывает карточку строки
@@ -2430,7 +2810,7 @@
       refreshTags(true);
     },
     saveForm: function () { submitForm(); },
-    cancelForm: function () { if (S.att && S.att.pending) attClose(true); S.form = null; render(); flushDirty(); },
+    cancelForm: function () { if (S.att && S.att.pending) attClose(true); lpClose(); S.form = null; render(); flushDirty(); },
     removeAssignee: function (el) {
       if (!S.form) return;
       S.form.draft.assignees = S.form.draft.assignees.filter(function (x) { return x !== el.dataset.emp; });
@@ -2580,6 +2960,7 @@
   // ---------------------------------------------------------------- events
   function onClick(ev) {
     var t = ev.target;
+    if (t && t.dataset && t.dataset.tkField === 'linksText') linksCheck(t);      // V9-T2: клик мышью по textarea — курсор мог встать между «((» и «))»
     var el = t && t.closest ? t.closest('[data-tk-act]') : null;
     if (!el) return;
     var fn = ACTIONS[el.dataset.tkAct];
@@ -2599,6 +2980,17 @@
     var t = ev.target;
     if (t && t.dataset && t.dataset.tkField === 'labelInput') { onTagKey(ev); return; }   // V6.2 (W-4)
     onKeyTag(ev);
+  }
+  // V9-T2: стрелки/Home/End в textarea «Связанные задачи» двигают курсор → проверка «между скобками»
+  function onKeyUp(ev) {
+    var t = ev.target;
+    if (t && t.dataset && t.dataset.tkField === 'linksText') linksCheck(t);
+  }
+  // V9-T2: selectionchange (курсор перенесён мышью/программно/тачем без click и keyup)
+  function onSelectionChange() {
+    if (!S.form || !S.active) return;
+    var a = typeof document !== 'undefined' ? document.activeElement : null;
+    if (a && a.dataset && a.dataset.tkField === 'linksText') linksCheck(a);
   }
   function onChange(ev) {
     var t = ev.target;
@@ -2634,7 +3026,7 @@
     }
     if (f === 'kind') { d.kind = t.value === 'period' ? 'period' : 'single'; render(); return; }
     if (f === 'priority') { d.priority = +t.value || 2; return; }
-    if (['title', 'description', 'labelInput', 'startDate', 'startTime', 'endDate', 'endTime'].indexOf(f) >= 0) {
+    if (['title', 'description', 'labelInput', 'startDate', 'startTime', 'endDate', 'endTime', 'linksText'].indexOf(f) >= 0) {
       d[f] = t.value;
       if (f === 'startDate' && d.kind === 'period' && (!d.endDate || d.endDate < d.startDate)) {
         d.endDate = d.startDate;
@@ -2651,6 +3043,7 @@
     var f = t.dataset.tkField;
     if (f === 'labelInput') { onTagInput(ev, t); return; }
     if (f === 'title' || f === 'description') d[f] = t.value;
+    if (f === 'linksText') { d.linksText = t.value; linksCheck(t); }       // V9-T2: набор в черновике; «(())» + курсор между скобками → окно
   }
   function onDragStart(ev) {
     var t = ev.target;
@@ -3350,11 +3743,45 @@
       '@media (max-width:760px){.tk-att-dnd{display:none}.tk-att-modal{padding:12px}.tk-att-drop{padding:10px}}';
   }
 
+  // V9-T2: связанные задачи — поле формы, окно выбора «(())», чипы в карточке, плашка фильтра Списка
+  function cssV9() {
+    return '' +
+      '.tk-f-links textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:44px;max-height:240px}' +
+      '.tk-links-err{margin:4px 0 0;padding:4px 8px;border:1px solid rgba(211,47,47,.35);border-radius:6px;background:rgba(211,47,47,.06);color:#a3261b;font-size:12px;overflow-wrap:anywhere}' +
+      '.tk-lp-back{z-index:20001}' +
+      '.tk-lp-modal{width:560px;display:flex;flex-direction:column;box-sizing:border-box}' +
+      '.tk-lp-search{width:100%;box-sizing:border-box;margin:6px 0;border:1px solid var(--divider);border-radius:6px;padding:6px 8px;font:inherit;background:#fff;color:var(--text)}' +
+      '.tk-lp-search:focus{outline:2px solid rgba(0,136,204,.35);border-color:var(--rt-blue)}' +
+      '.tk-lp-listwrap{flex:1 1 auto;min-height:60px;overflow:auto}' +
+      '.tk-lp-list{list-style:none;margin:0;padding:0;max-height:48vh;overflow:auto}' +
+      '.tk-lp-it{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:6px 8px;border:1px solid transparent;border-radius:6px;cursor:pointer}' +
+      '.tk-lp-it:hover{background:rgba(0,136,204,.06)}' +
+      '.tk-lp-it.tk-lp-act{background:rgba(0,136,204,.12);border-color:rgba(0,136,204,.45)}' +
+      '.tk-lp-title{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-weight:600}' +
+      '.tk-lp-meta{flex:none;display:inline-flex;gap:8px;color:#6b7a90;font-size:11px;white-space:nowrap}' +
+      '.tk-lp-closed .tk-lp-title{color:#6b7a90;font-weight:400}' +
+      '.tk-lp-closed .tk-lp-st{color:#8a94a6}' +
+      '.tk-links-text{margin:2px 0}' +
+      '.tk-links-also{margin-top:4px}' +
+      '.tk-links-also-l{display:inline;text-transform:none;font-size:12px}' +
+      '.tk-lk{display:inline-block;max-width:100%;box-sizing:border-box;vertical-align:bottom;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;margin:1px 2px 1px 0;border:1px solid rgba(0,136,204,.4);border-radius:12px;background:rgba(0,136,204,.08);color:#0b4f8a;font-weight:600;text-decoration:none;line-height:20px}' +
+      'a.tk-lk:hover,a.tk-lk:focus-visible{background:rgba(0,136,204,.18);border-color:var(--rt-blue);outline:0;text-decoration:underline}' +
+      '.tk-lk-closed{color:#6b7a90;background:#f2f4f7;border-color:var(--divider);font-weight:400}' +
+      '.tk-lk-gone{color:#8a94a6;background:#f2f4f7;border-color:var(--divider);text-decoration:line-through;cursor:help;font-weight:400;white-space:normal;overflow-wrap:anywhere}' +
+      '.tk-lk-miss{color:#8a94a6;background:transparent;border-style:dashed;font-weight:400;cursor:help}' +
+      '.tk-filters-rel{margin-bottom:8px}' +
+      '.tk-relbar{display:inline-flex;align-items:center;gap:6px;max-width:100%;box-sizing:border-box;padding:3px 6px 3px 10px;border:1px solid rgba(0,136,204,.45);border-radius:14px;background:rgba(0,136,204,.08);color:#0b4f8a}' +
+      '.tk-relname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60vw}' +
+      '.tk-relx{flex:none;font-size:18px;line-height:1;padding:0 4px;color:#4a5568}.tk-relx:hover{color:var(--sick-red)}' +
+      '.tk-rel-none{margin:8px 0}' +
+      '@media (max-width:760px){.tk-lp-modal{padding:12px;width:100%}.tk-lp-it{flex-direction:column;gap:2px}.tk-lp-list{max-height:52vh}.tk-relname{max-width:48vw}}';
+  }
+
   function injectStyles() {
     if (document.getElementById('tasksModuleStyles')) return;
     var st = document.createElement('style');
     st.id = 'tasksModuleStyles';
-    st.textContent = css() + cssV61() + cssV621() + cssV62() + cssV631() + cssV632() + cssV7();
+    st.textContent = css() + cssV61() + cssV621() + cssV62() + cssV631() + cssV632() + cssV7() + cssV9();
     document.head.appendChild(st);
   }
   function init() {
@@ -3384,6 +3811,8 @@
     }
     DOM.root.addEventListener('click', onClick);
     DOM.root.addEventListener('keydown', onKeyDown);
+    DOM.root.addEventListener('keyup', onKeyUp);                       // V9-T2
+    if (typeof document.addEventListener === 'function') document.addEventListener('selectionchange', onSelectionChange);
     DOM.root.addEventListener('change', onChange);
     DOM.root.addEventListener('input', onInput);
     // Enter в поле формы не должен перезагружать страницу; сохранение — только кнопкой.
@@ -3432,6 +3861,7 @@
       calDropCalc: calDropCalc, calPasteCalc: calPasteCalc, calClipOf: calClipOf, calMove: calMove, calPaste: calPaste, calCopy: calCopy,
       calDeleteOcc: calDeleteOcc, calInstances: calInstances, calInstById: calInstById, dueText: dueText, allDatesText: allDatesText, nextWhen: nextWhen,   // V6.3-2 (Д-1)
       occDraftError: occDraftError, occPayload: occPayload, occSort: occSort,
+      linksBlockHtml: linksBlockHtml, linkTokenText: linkTokenText, linksCaretPos: linksCaretPos,                       // V9-T2
       onCalPointerDown: onCalPointerDown, onContextMenu: onContextMenu, onClickCapture: onClickCapture, HOOK: HOOK,
       drag: function () { return DRAG; }, clip: function () { return _clip; }, clearClip: function () { _clip = null; }, ctxOpen: function () { return !!_ctx; }, ctxClose: ctxClose, calToastClose: calToastClose
     }

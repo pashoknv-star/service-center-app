@@ -1,0 +1,74 @@
+--- форма: поле «Связанные задачи» ---
+  FAIL  форма «Новая задача»: есть textarea «Связанные задачи» (data-tk-field=linksText)
+  FAIL  поле стоит ПОСЛЕ строки «Вложения» (порядок в DOM) — null
+  FAIL  подпись строки — «Связанные задачи» — null
+  FAIL  подсказка под полем: «Введите (()) и поставьте курсор между скобками — откроется список задач» — null
+  FAIL  Сценарий «форма» выполнен без сбоя теста — Error: page exception: {"exceptionId":1,"text":"Uncaught","lineNumber":0,"columnNumber":103,"scriptId":"17","stackTrace":{"callFrames":[{"functionName":"","scriptId":"17","url":"","lineNumber":0,"columnNumber":103},{"functionName":"","scriptId":"17","url":"","lineNumber":0,"columnNumber":202}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot 
+  PASS  supervisor: в «Списке» нет «+ Новая задача» и ✎
+  PASS  supervisor: форма записи не открывается (поля «Связанные задачи» нет)
+  PASS  viewer: в «Списке» нет «+ Новая задача» и ✎
+  PASS  viewer: форма записи не открывается (поля «Связанные задачи» нет)
+--- окно (()): когда открывается / не открывается ---
+  FAIL  форма правки T2 открылась по ✎ в Списке
+  FAIL  у T2 без связей поле пустое — null
+  FAIL  Сценарий «окно: открытие» выполнен без сбоя теста — Error: page exception: {"exceptionId":2,"text":"Uncaught","lineNumber":0,"columnNumber":66,"scriptId":"40","stackTrace":{"callFrames":[{"functionName":"","scriptId":"40","url":"","lineNumber":0,"columnNumber":66}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read properties of null (reading 'focus')\n    at <anonymous>:1:67","objectId":"1
+  FAIL  Сценарий «окно: поиск» выполнен без сбоя теста — Error: page exception: {"exceptionId":3,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"41","stackTrace":{"callFrames":[{"functionName":"","scriptId":"41","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"41","url":"","lineNumber":0,"columnNumber":157}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot re
+  FAIL  Сценарий «окно: клавиатура и выбор» выполнен без сбоя теста — Error: page exception: {"exceptionId":4,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"41","stackTrace":{"callFrames":[{"functionName":"","scriptId":"41","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"41","url":"","lineNumber":0,"columnNumber":157}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot re
+  FAIL  Сценарий «окно: токен и курсор» выполнен без сбоя теста — Error: page exception: {"exceptionId":5,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"42","stackTrace":{"callFrames":[{"functionName":"","scriptId":"42","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"42","url":"","lineNumber":0,"columnNumber":211}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot re
+  FAIL  Сценарий «окно: отмена» выполнен без сбоя теста — Error: page exception: {"exceptionId":6,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"43","stackTrace":{"callFrames":[{"functionName":"","scriptId":"43","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"43","url":"","lineNumber":0,"columnNumber":161}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot re
+--- сохранение, карточка, чипы ---
+  FAIL  Сценарий «сохранение T2 → T1» выполнен без сбоя теста — Error: page exception: {"exceptionId":7,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"48","stackTrace":{"callFrames":[{"functionName":"","scriptId":"48","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"48","url":"","lineNumber":0,"columnNumber":195}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot re
+  FAIL  карточка T2: блок «Связанные задачи» показан
+  FAIL  блок связей стоит сразу ПОД «Описанием» — [2,-1]
+  FAIL  в карточке T2 — один чип-ссылка (<a>) «Заказ клиента», активный (data-tk-act=openRel) — []
+  FAIL  текст вокруг чипа показан как есть: «Смотри ещё: Заказ клиента — конец.» + вторая строка — null
+  FAIL  Сценарий «карточка: чипы» выполнен без сбоя теста — Error: page exception: {"exceptionId":8,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"55","stackTrace":{"callFrames":[{"functionName":"","scriptId":"55","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.\n 
+--- клик по ссылке → Список, цепочка ---
+  FAIL  цепочка T1—T2, T3—T2, T3—T5 в БД — ["task_6afdee09d5f978.76045981|task_6afdee09dd3ce1.41334019","task_6afdee09dd3ce1.41334019|task_6afdee09e70648.11665395"]
+  FAIL  Сценарий «цепочка» выполнен без сбоя теста — Error: нет элемента #tasksView .tk-detail .tk-links-also a.tk-lk |     at k.click (/home/hermes/service-center-app/scripts/v6_accept_lib.js:113:83) |     at async /home/hermes/service-center-app/scripts/test_tasks_links_ui.js:439:7
+  FAIL  Сценарий «rel: ошибки» выполнен без сбоя теста — Error: page exception: {"exceptionId":9,"text":"Uncaught","lineNumber":0,"columnNumber":18,"scriptId":"59","stackTrace":{"callFrames":[{"functionName":"","scriptId":"59","url":"","lineNumber":0,"columnNumber":18}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Tasks.__t.ACTIONS.openRel is not a function\n    at <anonymous>:1:19","objectId":"108107
+--- экранирование ---
+  FAIL  Сценарий «экранирование» выполнен без сбоя теста — Error: PUT links_text → 422 {"error":"link_unknown","link_id":"task_net.404","message":"Связанная задача не найдена."} |     at setLinks (/home/hermes/service-center-app/scripts/test_tasks_links_ui.js:73:35) |     at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+--- ошибки записи рядом с полем ---
+  FAIL  Сценарий «ошибки link_*» выполнен без сбоя теста — Error: page exception: {"exceptionId":10,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"65","stackTrace":{"callFrames":[{"functionName":"","scriptId":"65","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"65","url":"","lineNumber":0,"columnNumber":195}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot r
+--- новая задача с токеном ---
+  FAIL  Сценарий «новая задача» выполнен без сбоя теста — Error: page exception: {"exceptionId":11,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"73","stackTrace":{"callFrames":[{"functionName":"","scriptId":"73","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"73","url":"","lineNumber":0,"columnNumber":158}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot r
+--- архив: перечёркнутая ссылка у обеих сторон ---
+  FAIL  до архива: чип B у A активный (<a>) — []
+  PASS  другой клиент архивировал B (DELETE 200)
+  FAIL  у A чип B стал перечёркнутым (<s class=tk-lk-gone>), не ссылка — []
+  FAIL  Сценарий «архив» выполнен без сбоя теста — TypeError: Cannot read properties of undefined (reading 'title') |     at /home/hermes/service-center-app/scripts/test_tasks_links_ui.js:656:56 |     at async guard (/home/hermes/service-center-app/scripts/test_tasks_links_ui.js:59:48)
+--- закрытие/переоткрытие ---
+  PASS  закрытие задачи: связи (БД) те же, новых не создано
+  PASS  ... закрытая A видна у B как связанная со status=closed
+  FAIL  ... чип «Также связана с: Закрываемая А» у B (закрытая — приглушённый класс) — []
+  PASS  переоткрытие: связи прежние
+  PASS  ... текст связей у A не изменился
+--- sync / render ---
+  FAIL  Сценарий «sync» выполнен без сбоя теста — Error: page exception: {"exceptionId":12,"text":"Uncaught","lineNumber":0,"columnNumber":66,"scriptId":"96","stackTrace":{"callFrames":[{"functionName":"","scriptId":"96","url":"","lineNumber":0,"columnNumber":66}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Cannot read properties of null (reading 'focus')\n    at <anonymous>:1:67","objectId":"
+--- supervisor / viewer ---
+  FAIL  supervisor: в карточке T2 есть блок связей с активным чипом «Заказ клиента» — []
+  PASS  supervisor: нет кнопок записи (Править/Закрыть/В архив), нет поля связей
+  FAIL  Сценарий «роль supervisor» выполнен без сбоя теста — Error: нет элемента #tasksView .tk-detail .tk-links a.tk-lk |     at k.click (/home/hermes/service-center-app/scripts/v6_accept_lib.js:113:83) |     at async /home/hermes/service-center-app/scripts/test_tasks_links_ui.js:760:9
+  FAIL  viewer: в карточке T2 есть блок связей с активным чипом «Заказ клиента» — []
+  PASS  viewer: нет кнопок записи (Править/Закрыть/В архив), нет поля связей
+  FAIL  Сценарий «роль viewer» выполнен без сбоя теста — Error: нет элемента #tasksView .tk-detail .tk-links a.tk-lk |     at k.click (/home/hermes/service-center-app/scripts/v6_accept_lib.js:113:83) |     at async /home/hermes/service-center-app/scripts/test_tasks_links_ui.js:760:9
+--- лимит 200 ---
+  PASS  API: компонент хаба усечён до 200 с truncated=true
+  FAIL  Сценарий «лимит 200» выполнен без сбоя теста — Error: page exception: {"exceptionId":13,"text":"Uncaught","lineNumber":0,"columnNumber":18,"scriptId":"112","stackTrace":{"callFrames":[{"functionName":"","scriptId":"112","url":"","lineNumber":0,"columnNumber":18}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Tasks.__t.ACTIONS.openRel is not a function\n    at <anonymous>:1:19","objectId":"108
+--- вёрстка 1280 / 375 ---
+  PASS  1280: карточка с длинными чипами — без горизонтального скролла панели/страницы
+  PASS  1280: все чипы внутри карточки
+  FAIL  1280: длинное название чипа обрезается многоточием, полный текст — в title — null
+  PASS  1280: форма с длинным текстом связей — без горизонтального скролла
+  FAIL  Сценарий «вёрстка» выполнен без сбоя теста — Error: page exception: {"exceptionId":14,"text":"Uncaught","lineNumber":0,"columnNumber":99,"scriptId":"122","stackTrace":{"callFrames":[{"functionName":"","scriptId":"122","url":"","lineNumber":0,"columnNumber":99},{"functionName":"","scriptId":"122","url":"","lineNumber":0,"columnNumber":252}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Canno
+--- кэш окна выбора ---
+  FAIL  Сценарий «кэш» выполнен без сбоя теста — Error: page exception: {"exceptionId":15,"text":"Uncaught","lineNumber":0,"columnNumber":89,"scriptId":"128","stackTrace":{"callFrames":[{"functionName":"","scriptId":"128","url":"","lineNumber":0,"columnNumber":89},{"functionName":"","scriptId":"128","url":"","lineNumber":0,"columnNumber":157}]},"exception":{"type":"object","subtype":"error","className":"TypeError","description":"TypeError: Canno
+--- прочее ---
+  PASS  новая задача без связей: links_text пуст, links=[]
+  FAIL  buildPayload: links_text отправляется (обрезанный trim) — {"title":"x","description":"","assignees":["emp_2"],"start_at":"2031-01-01","end_at":null,"priority":2,"label":"","checklist":[],"occurrences":[]}
+  FAIL  buildPayload: черновик без linksText → links_text: "" (очистка), не undefined — {"title":"x","description":"","assignees":["emp_2"],"start_at":"2031-01-01","end_at":"","priority":2,"label":"","checklist":[],"occurrences":[]}
+  PASS  в браузере нет необработанных исключений из js/tasks.js
+  PASS  диалогов confirm/alert браузера не появлялось
+  PASS  data/app.db не изменена (sha1)
+RESULT: 19 passed, 39 failed
