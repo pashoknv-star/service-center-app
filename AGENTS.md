@@ -30,7 +30,7 @@ These instructions apply to this project. Keep them operational and concise; dur
 - **Одна команда:** `bash scripts/verify_all.sh` (все сьюты) или `bash scripts/verify_all.sh e51 e52` (выборочно). Exit 0 и строка `GATE: PASS` — gate пройден; exit 1 — провал; exit 2 — прогон не начат (например, незакоммиченная `data/app.db`). В квитанцию и ревью прикладывать итоговую таблицу скрипта целиком.
 - Задача или фаза считается выполненной **только** при зелёном прогоне: код выхода 0 и итоговая строка без падений (`RESULTS: N passed, 0 failed`, `RESULT: N passed, 0 failed`, `ALL TESTS PASSED`, `OK`). Без вывода прогона статус done / «готово» не ставится, Kanban-задача не закрывается.
 - Во время итераций — только релевантный сьют (см. ниже). Перед закрытием фазы и перед деплоем — **все** сьюты из таблицы.
-- Эталон числа тестов — массив `BASELINE` в `scripts/verify_all.sh` (единственный источник; на 2026-11-17 (V6-1..V6-6, V6.2, V6.3-1..V6.3-4, V7, V8-T1, V8-T2, V8-T3): smoke 84, e51 23, e52 41, hygiene 19, trips 7, tripsform 99, tripsstatus 96, tasks 66, tasksn8n 27, tasksatt 24, tasksui 334, tasksmx 79, taskscal 220, director 101, emptasks 34, refs 28, tasklink 43). Тестов меньше эталона — FAIL. Добавили тесты — поднять `BASELINE` в том же коммите.
+- Эталон числа тестов — массив `BASELINE` в `scripts/verify_all.sh` (единственный источник; на 2026-11-18 (V6-1..V6-6, V6.2, V6.3-1..V6.3-4, V7, V8-T1, V8-T2, V8-T3, V8-T7): smoke 84, e51 23, e52 41, hygiene 19, trips 7, tripsform 131, tripsstatus 147, tasks 66, tasksn8n 27, tasksatt 24, tasksui 334, tasksmx 79, taskscal 220, director 101, emptasks 34, refs 28, tasklink 43). Тестов меньше эталона — FAIL. Добавили тесты — поднять `BASELINE` в том же коммите.
 - Ручные команды по сьютам (для отладки одного падения):
 
 | Сьют | Команда | Критерий |
@@ -40,8 +40,8 @@ These instructions apply to this project. Keep them operational and concise; dur
 | e52 | `node scripts/test_e52_pick_semantics.js` | `0 failed` |
 | hygiene | `node scripts/test_r4_hygiene.js` | `0 failed` |
 | trips frontend | `bash scripts/test_trips_frontend.sh` | `ALL TESTS PASSED` |
-| tripsform (V8-T1) | `bash scripts/verify_all.sh tripsform` (= `node scripts/test_trips_v8_form.js`; реальный headless Chromium по CDP + `php -S` на копии `data/app.db`, ~50 с) | `RESULT: 99 passed, 0 failed`; без Chromium (`CHROME_BIN` или `~/.cache/ms-playwright/chromium_headless_shell-1208/…`) сьют падает, а не пропускается |
-| tripsstatus (V8-T2) | `bash scripts/verify_all.sh tripsstatus` (= `node scripts/test_trips_v8_status.js`; реальный headless Chromium по CDP + `php -S` на копии `data/app.db`, ~50 с) | `RESULT: 96 passed, 0 failed`; механика «прогноз → подтверждена»: кнопки «На подтверждение»/«Подтвердить», место назначения обязательно для подтверждения (сервер: 400 `location_required`), заявки `trip_requests` по одной на участника без дублей и потерь, права admin/supervisor/viewer; без Chromium падает, а не пропускается |
+| tripsform (V8-T1, V8-T7) | `bash scripts/verify_all.sh tripsform` (= `node scripts/test_trips_v8_form.js`; реальный headless Chromium по CDP + `php -S` на копии `data/app.db`, ~60 с; год сценариев — год текущей даты, для проверки другого года: `TRIPS_FAKE_NOW=2027-03-15T12:00:00Z bash scripts/verify_all.sh tripsform`) | `RESULT: 131 passed, 0 failed`; без Chromium (`CHROME_BIN` или `~/.cache/ms-playwright/chromium_headless_shell-1208/…`) сьют падает, а не пропускается; посимвольный набор телефона (8…/7…/+7…/10 цифр), выбор дат 📅 при смене года Матрицы, пометки «*», подпись «Участники» |
+| tripsstatus (V8-T2, V8-T7) | `bash scripts/verify_all.sh tripsstatus` (= `node scripts/test_trips_v8_status.js`; реальный headless Chromium по CDP + `php -S` на копии `data/app.db`, ~60 с; `TRIPS_FAKE_NOW` — как у `tripsform`) | `RESULT: 147 passed, 0 failed`; механика «прогноз → подтверждена»: кнопки «На подтверждение»/«Подтвердить», место назначения и телефон обязательны только для подтверждения (сервер: 400 `location_required` / `phone_required`, в т.ч. для PUT подтверждённой с пустым значением), статус меняется только `PUT …&action=confirm` (POST со `status:'confirmed'` → 400 `invalid_status`, PUT с иным `status` → 400 `status_change_forbidden`), заявки `trip_requests` по одной на участника без дублей и потерь, права admin/supervisor/viewer; без Chromium падает, а не пропускается |
 | emptasks (V8-T3) | `bash scripts/verify_all.sh emptasks` (= `node scripts/test_emp_tasks_btn.js`) | `RESULT: 34 passed, 0 failed`; кнопка «Задачи» в карточке сотрудника: admin → форма новой задачи на сотрудника, supervisor → список только для чтения |
 | Синтаксис | `node scripts/check_syntax.js`, `php -l api/<file>.php` | `failed: 0` |
 | ПДн | `bash scripts/check_no_pii.sh` | `OK` |
@@ -117,6 +117,15 @@ These instructions apply to this project. Keep them operational and concise; dur
 - **Командировки отложены.** Сущность пока не применяется в бизнесе: починка формы и долг relay/trips — бэклог BL-01. Безопасность эндпоинтов `trips.php`/`trip_relay.php` при этом закрывается в общих фазах.
 - **Юридические вопросы (152-ФЗ) отложены.** Не поднимать и не включать в планы до команды владельца; архив — `reports/AUDIT_2026-10/DEFERRED_LEGAL_152FZ.md`.
 - Текущий план: `reports/HOTFIX_H0/PLAN.md` (запуск по «Старт»). Точка входа для новой сессии: `reports/HANDOFF.md`.
+
+## Решения владельца 2026-11-17/18 (V8 «Командировки: юзабилити», релиз принят 2026-11-18)
+
+- **Командировки возобновлены** (снимает пункт «Командировки отложены» от 2026-10-26 в части формы): форма и механика статусов исправлены в V8, прод = `d24fdd7`. Остаток долга BL-01 — `reports/BACKLOG.md`.
+- **Статусы:** прогноз → подтверждена только действием «Подтвердить» (`PUT api/trips.php?id=&action=confirm`); обратного перехода нет; подтверждение ставит заявки роботу в очередь `trip_requests`, обработку очереди не трогать (робот HelpMe не работает).
+- **Место назначения и телефон сотрудника обязательны только для «Подтвердить»** (и у подтверждённой не могут стать пустыми); прогноз сохраняется без них. Обязательные поля формы помечаются «*».
+- **Карточка сотрудника:** кнопка «Задачи» открывает форму новой задачи на этого сотрудника (admin) или его задачи (остальные); создание командировки из карточки убрано.
+- **Отложено:** протяжка диапазона в Матрице не открывает меню — BL-09; мелочи V8 (P3) — BL-10. Не запускать без команды владельца.
+- Документы фазы: `reports/V8/` (specs, отчёты T1–T8, `V8_DEPLOY.md`); архитектура — `reports/ARCHITECTURE_TRIPS.md` §9.
 
 ## Source of truth
 

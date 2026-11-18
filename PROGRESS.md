@@ -9,6 +9,8 @@
 
 ## Current State
 
+- **На 2026-11-18 (актуально; строки ниже — история):** прод = `main` `d24fdd7` — фаза V8 «Командировки: юзабилити», выложена 2026-11-18 (`reports/V8/V8_DEPLOY.md`), **релиз принят владельцем полностью 2026-11-18**; роадмап — строка «К-3». Gate на `c41474f`: `GATE: PASS`, 20 сьютов (эталон — `BASELINE` в `scripts/verify_all.sh`). Схема БД 13. Открытое по командировкам — бэклог BL-01 (остаток), BL-09, BL-10. Новых фаз в работе нет.
+
 - Last commit: см. `git log --grep "T1-3"` (T1-3, 2026-11-07, поверх `6aadaee`); `c0ce47c` — последний прод-релевантный коммит (main = origin/main, push делает координатор).
 - Прод: HOTFIX-H0 выложен (коммит `4cf6f27`), анонимная матрица OK — `reports/HOTFIX_H0/DEPLOY_REPORT.md`.
 - Gate: `bash scripts/verify_all.sh` → `GATE: PASS (11 suites)` на T1-3, 2026-11-07 (smoke 84, tasks 33, tasksui 63, tasksmx 70, e51 23, e52 41, hygiene 19, trips 7, syntax, phplint 32 файла, pii, clean).
