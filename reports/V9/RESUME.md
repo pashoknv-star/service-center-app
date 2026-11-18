@@ -16,3 +16,7 @@
 4. Цепочка: T2 стартует только после проверенной приёмки T1; T3 — после T2. Приёмку каждого звена делать по `coordinator-quality-gate` (дифф + `bash scripts/verify_all.sh` + тесты; отчёт — не доказательство).
 5. После приёмки каждой задачи — коммит в main локально; push в `origin/main` — после принятой фазы (приёмка T3 + мой разбор), по правилам AGENTS.md.
 6. Статусы — в Telegram: `hermes send --to telegram "..."` (короткие, по-русски).
+
+## Карточки (id)
+
+V9-T1 `t_f1a7ff61` (sd_worker_01) → V9-T2 `t_eb3af290` (sd_worker_02) → V9-T3 `t_ae231c91` (sd_worker_03). Спеки закоммичены `3d6e7df`. Запуск T1: 2026-11-18 ~22:45 (+05). Перезапуск по rate limits: cron «V9 resume check Thu 01:30» (2026-11-19 01:30, Asia/Yekaterinburg).
