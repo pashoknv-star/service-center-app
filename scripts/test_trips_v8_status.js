@@ -32,8 +32,15 @@ const sha1 = (f) => crypto.createHash('sha1').update(fs.readFileSync(f)).digest(
 const REAL_DB = path.join(L.ROOT, 'data/app.db');
 const SHOTS = process.env.TRIPSSTATUS_SHOTS || '';          // каталог для скриншотов (по умолчанию не снимаются)
 
-const D = (n) => '2026-11-' + String(n).padStart(2, '0');
-const DOY = (n) => 304 + n;                                  // 2026-11-n → день года
+// V8-T7 (P3-3): год сценариев — год ТЕКУЩЕЙ даты (Матрица открывается в текущем календарном году), а не зашитый 2026.
+// TRIPS_FAKE_NOW=2027-03-15T12:00:00Z — подменить «сейчас» в самом тесте и в браузере (фиктивный Date до загрузки страницы).
+const FAKE_NOW = process.env.TRIPS_FAKE_NOW ? new Date(process.env.TRIPS_FAKE_NOW) : null;
+const NOW = FAKE_NOW || new Date();
+const Y = NOW.getFullYear();
+const NOV0 = Math.round((Date.UTC(Y, 10, 1) - Date.UTC(Y, 0, 1)) / 86400000);   // день года 31 октября Y
+const D = (n) => Y + '-11-' + String(n).padStart(2, '0');
+const DOY = (n) => NOV0 + n;                                  // Y-11-n → день года
+const fakeDateScript = (ts) => '(function(){var R=Date,off=' + (ts - Date.now()) + ';function F(){if(!(this instanceof F))return new R(R.now()+off).toString();if(arguments.length===0)return new R(R.now()+off);return new (Function.prototype.bind.apply(R,[null].concat([].slice.call(arguments))))();}F.prototype=R.prototype;F.now=function(){return R.now()+off;};F.UTC=R.UTC;F.parse=R.parse;window.Date=F;})();';
 const PHONE = '+7' + '9991234567';
 
 async function main() {
@@ -51,6 +58,7 @@ async function main() {
     const api = (ck, method, url, body) => L.http(env.base, ck, method, url, body);
 
     const { cdp } = await env.openBrowser();
+    if (FAKE_NOW) await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeDateScript(FAKE_NOW.getTime()) });
     const k = L.pageKit(cdp, env.base, SHOTS || process.env.TMPDIR || '/tmp');
     if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
     const shot = async (n) => { if (SHOTS) await k.shot(n); };
@@ -131,16 +139,16 @@ async function main() {
     const fieldError = (id) => ev('(() => { const f = document.getElementById(' + q(id) + '); if (!f) return null; const e = [...f.parentNode.querySelectorAll("div.trip-form-error")].find(x => x.offsetParent !== null && x.textContent.trim()); return e ? e.textContent.trim() : null; })()');
     const visibleButtons = () => ev('[...document.querySelectorAll("#tripFormPanel .trip-panel-actions button")].filter(b => b.offsetParent !== null).map(b => b.textContent.trim())');
     const formSelects = () => ev('[...document.querySelectorAll("#tripFormPanel select")].map(s => s.id)');
-    async function fillValid(title) {
+    async function fillValid(title, opts) {
       await typeInto('tripTitle', title);
-      await typeInto('tripPhone', '89991234567');
+      if (!(opts && opts.nophone)) await typeInto('tripPhone', '89991234567');
       await ev('(() => { const o = document.getElementById("transportOutMode"), b = document.getElementById("transportBackMode"); o.value = "avia"; o.dispatchEvent(new Event("change",{bubbles:true})); b.value = "zd"; b.dispatchEvent(new Event("change",{bubbles:true})); })()');
     }
     // новая форма: название, телефон, проезд, (место), (комментарий), участники с датами
     async function fillNew(title, o) {
       o = o || {};
       await newForm();
-      await fillValid(title);
+      await fillValid(title, o);
       if (o.location) await typeInto('tripLocation', o.location);
       if (o.comment) await typeInto('tripComment', o.comment);
       await pickEmployees(o.emps || [2, 3]);
@@ -221,6 +229,101 @@ async function main() {
       check('сервер: 6 командировок, подтверждённых подряд (в одну секунду), получают ВСЕ заявки (по 2 каждая)', perTrip.every((n) => n === 2), JSON.stringify(perTrip));
       check('сервер: request_id всех 12 заявок различны', new Set(allIds).size === 12 && allIds.length === 12, allIds.length + '/' + new Set(allIds).size);
       check('сервер: префикс request_id для робота сохранён («SC-trip-<n>-<время>…»)', allIds.every((x) => /^SC-trip-[12]-\d+/.test(x)), JSON.stringify(allIds.slice(0, 3)));
+
+      // ----------------------------------------------------------------------------------------------
+      // V8-T7 P2-2: статус меняется ТОЛЬКО через PUT ?action=confirm (в обход — нельзя ни POST, ни PUT)
+      // ----------------------------------------------------------------------------------------------
+      r = await api(admin, 'POST', 'api/trips.php', body('SRV bypass post', [p('emp_2', D(1), D(2))], { status: 'confirmed', location: '' }));
+      check('P2-2 admin POST status=confirmed → 400 invalid_status', r.status === 400 && r.json.error === 'invalid_status', r.status + ' ' + JSON.stringify(r.json));
+      check('P2-2 ... командировка не создана', (await tripsByTitle('SRV bypass post')).length === 0);
+      r = await api(admin, 'POST', 'api/trips.php', body('SRV bypass post', [p('emp_2', D(1), D(2))], { status: 'confirmed' }));
+      check('P2-2 admin POST status=confirmed даже с местом → 400 (создаётся только прогноз)', r.status === 400 && r.json.error === 'invalid_status' && (await tripsByTitle('SRV bypass post')).length === 0, r.status + ' ' + JSON.stringify(r.json));
+      r = await api(admin, 'POST', 'api/trips.php', body('SRV bypass post', [p('emp_2', D(1), D(2))], { status: 'bogus' }));
+      check('P2-2 POST с неизвестным status → 400 invalid_status', r.status === 400 && r.json.error === 'invalid_status', r.status + ' ' + JSON.stringify(r.json));
+      r = await api(admin, 'POST', 'api/trips.php', body('SRV post fc', [p('emp_2', D(1), D(2))], { status: 'forecast' }));
+      check('P2-2 POST status=forecast (как шлёт форма) → 201 forecast', r.status === 201 && r.json.trip.status === 'forecast', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      const noStatus = body('SRV post nostatus', [p('emp_2', D(1), D(2))]); delete noStatus.status;
+      r = await api(admin, 'POST', 'api/trips.php', noStatus);
+      check('P2-2 POST без status → 201 forecast (по умолчанию)', r.status === 201 && r.json.trip.status === 'forecast', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+
+      // (б) supervisor пытается подтвердить своим PUT: статус и заявки не меняются
+      const mine = await create(sup0, 'SRV bypass put', [p('emp_4', D(3), D(4))], { location: 'Пенза' });
+      r = await api(sup0, 'PUT', 'api/trips.php?id=' + mine.id, { status: 'confirmed', entryVersion: mine.version });
+      check('P2-2 supervisor PUT status=confirmed на своём прогнозе → 400 status_change_forbidden', r.status === 400 && r.json.error === 'status_change_forbidden', r.status + ' ' + JSON.stringify(r.json));
+      const mine1 = await getTrip(mine.id);
+      check('P2-2 ... статус остался forecast, версия не выросла, заявок 0', mine1.status === 'forecast' && mine1.version === mine.version && reqCount(mine.id) === 0, JSON.stringify([mine1.status, mine1.version, reqCount(mine.id)]));
+      r = await api(sup0, 'PUT', 'api/trips.php?id=' + mine.id, { status: 'confirmed', comment: 'левый заход', entryVersion: mine.version });
+      check('P2-2 ... вместе с другими полями тело не применяется целиком (комментарий не изменён)', r.status === 400 && (await getTrip(mine.id)).comment !== 'левый заход');
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { status: 'confirmed', entryVersion: mine.version });
+      check('P2-2 admin PUT status=confirmed на прогнозе → тоже 400 status_change_forbidden', r.status === 400 && r.json.error === 'status_change_forbidden' && (await getTrip(mine.id)).status === 'forecast', r.status + ' ' + JSON.stringify(r.json));
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { status: 'bogus' });
+      check('P2-2 PUT с неизвестным status → 400 invalid_status', r.status === 400 && r.json.error === 'invalid_status', r.status + ' ' + JSON.stringify(r.json));
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { status: 'forecast', comment: 'тот же статус', entryVersion: mine.version });
+      check('P2-2 PUT со status, равным текущему (forecast), допустим (совместимость) → 200', r.status === 200 && r.json.trip.status === 'forecast' && r.json.trip.comment === 'тот же статус', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      // confirm остаётся единственным путём
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id + '&action=confirm');
+      check('P2-2 PUT ?action=confirm по-прежнему подтверждает (200 confirmed, 1 заявка)', r.status === 200 && r.json.trip.status === 'confirmed' && reqCount(mine.id) === 1, r.status + ' заявок=' + reqCount(mine.id));
+      // (в) обратный переход confirmed → forecast невозможен
+      const vc = (await getTrip(mine.id)).version;
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { status: 'forecast', entryVersion: vc });
+      check('P2-2 admin PUT status=forecast на подтверждённой → 400 status_change_forbidden (обратного перехода нет)', r.status === 400 && r.json.error === 'status_change_forbidden', r.status + ' ' + JSON.stringify(r.json));
+      const mc = await getTrip(mine.id);
+      check('P2-2 ... статус остался confirmed, версия та же, заявка на месте', mc.status === 'confirmed' && mc.version === vc && reqCount(mine.id) === 1, JSON.stringify([mc.status, mc.version, reqCount(mine.id)]));
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { status: 'confirmed', comment: 'админ правит', entryVersion: vc });
+      check('P2-2 PUT со status=confirmed на подтверждённой (равен текущему) допустим → 200', r.status === 200 && r.json.trip.status === 'confirmed' && r.json.trip.comment === 'админ правит', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      check('P2-2 ... повторных заявок не появилось', reqCount(mine.id) === 1);
+
+      // ----------------------------------------------------------------------------------------------
+      // V8-T7 P3-6: подтверждённая не остаётся без места (PUT admin с пустым location → 400 location_required)
+      // ----------------------------------------------------------------------------------------------
+      const vl = (await getTrip(mine.id)).version;
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { location: '', entryVersion: vl });
+      check('P3-6 admin PUT location="" на подтверждённой → 400 location_required', r.status === 400 && r.json.error === 'location_required', r.status + ' ' + JSON.stringify(r.json));
+      check('P3-6 ... ответ несёт понятное сообщение', /место назначения/i.test(r.json.message || ''), JSON.stringify(r.json));
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { location: '   ', entryVersion: vl });
+      check('P3-6 место из одних пробелов — тоже 400 location_required', r.status === 400 && r.json.error === 'location_required', r.status + ' ' + JSON.stringify(r.json));
+      const ml = await getTrip(mine.id);
+      check('P3-6 ... место и версия не изменились', ml.location === 'Пенза' && ml.version === vl, JSON.stringify([ml.location, ml.version]));
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + mine.id, { location: 'Пенза-2', entryVersion: vl });
+      check('P3-6 смена места на непустое на подтверждённой допустима (200)', r.status === 200 && r.json.trip.location === 'Пенза-2', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      const fcl = await create(admin, 'SRV fc noloc put', [p('emp_2', D(5), D(6))], { location: 'Уфа' });
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + fcl.id, { location: '', entryVersion: fcl.version });
+      check('P3-6 у ПРОГНОЗА пустое место по-прежнему допустимо (PUT location="" → 200)', r.status === 200 && r.json.trip.location === '', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+
+      // ----------------------------------------------------------------------------------------------
+      // V8-T7 P3-5: телефон обязателен только для подтверждения (решение владельца 2026-11-18)
+      // ----------------------------------------------------------------------------------------------
+      r = await api(admin, 'POST', 'api/trips.php', body('SRV nophone', [p('emp_3', D(5), D(6))], { phone: '' }));
+      check('P3-5 создание прогноза БЕЗ телефона разрешено (201 forecast)', r.status === 201 && r.json.trip.status === 'forecast' && !r.json.trip.phone, r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      const np = r.json.trip;
+      const np0 = body('SRV nophone2', [p('emp_3', D(5), D(6))]); delete np0.phone;
+      r = await api(admin, 'POST', 'api/trips.php', np0);
+      check('P3-5 создание прогноза без поля phone вообще — тоже 201', r.status === 201 && r.json.trip.status === 'forecast', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      const np2 = r.json.trip;
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + np.id, { comment: 'без телефона', entryVersion: np.version });
+      check('P3-5 правка прогноза без телефона разрешена (200)', r.status === 200, r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + np.id + '&action=confirm');
+      check('P3-5 confirm командировки без телефона → 400 phone_required', r.status === 400 && r.json.error === 'phone_required', r.status + ' ' + JSON.stringify(r.json));
+      check('P3-5 ... ответ несёт понятное сообщение про телефон', /телефон/i.test(r.json.message || ''), JSON.stringify(r.json));
+      const npa = await getTrip(np.id);
+      check('P3-5 ... статус forecast, заявок 0', npa.status === 'forecast' && reqCount(np.id) === 0, JSON.stringify([npa.status, reqCount(np.id)]));
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + np2.id, { location: 'Кострома', phone: '   ', entryVersion: np2.version });
+      check('P3-5 телефон из одних пробелов — тоже пусто: confirm → 400 phone_required', (await api(admin, 'PUT', 'api/trips.php?id=' + np2.id + '&action=confirm')).json.error === 'phone_required' && reqCount(np2.id) === 0);
+      r = await api(sup0, 'PUT', 'api/trips.php?id=' + (await create(sup0, 'SRV sup nophone', [p('emp_4', D(21), D(22))], { phone: '' })).id + '&action=confirm');
+      check('P3-5 supervisor: confirm без телефона → 400 phone_required (как и admin)', r.status === 400 && r.json.error === 'phone_required', r.status + ' ' + JSON.stringify(r.json));
+      // место проверяется первым, но обе ошибки понятны: без места и без телефона
+      const both = await create(admin, 'SRV noboth', [p('emp_3', D(7), D(8))], { phone: '', location: '' });
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + both.id + '&action=confirm');
+      check('P3-5 без места и без телефона: 400 (location_required — первая из проверок), статус не меняется', r.status === 400 && /^(location|phone)_required$/.test(r.json.error) && (await getTrip(both.id)).status === 'forecast');
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + np.id, { phone: PHONE, location: 'Курган', entryVersion: (await getTrip(np.id)).version });
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + np.id + '&action=confirm');
+      check('P3-5 с телефоном и местом confirm проходит (200 confirmed, 1 заявка)', r.status === 200 && r.json.trip.status === 'confirmed' && reqCount(np.id) === 1, r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
+      const vp = (await getTrip(np.id)).version;
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + np.id, { phone: '', entryVersion: vp });
+      check('P3-5 admin PUT подтверждённой с пустым телефоном → 400 phone_required', r.status === 400 && r.json.error === 'phone_required', r.status + ' ' + JSON.stringify(r.json));
+      check('P3-5 ... телефон и версия не изменились', (await getTrip(np.id)).phone === PHONE && (await getTrip(np.id)).version === vp);
+      r = await api(admin, 'PUT', 'api/trips.php?id=' + np.id, { phone: '+7' + '9990001122', entryVersion: vp });
+      check('P3-5 смена телефона подтверждённой на непустой допустима (200)', r.status === 200 && r.json.trip.phone === '+7' + '9990001122', r.status + ' ' + JSON.stringify(r.json).slice(0, 160));
     });
 
     // ==============================================================================================
@@ -246,7 +349,7 @@ async function main() {
       await fillNew('UI forecast', { emps: [2, 3], comment: 'ком-1', d0: 27 });
       await clickSave();
       const t = await waitTrip('UI forecast');
-      check('«На подтверждение» (без места): командировка создана как forecast', !!t && t.status === 'forecast', JSON.stringify(t && t.status));
+      check('«На подтверждение» (без места): командировка создана как forecast', !!t && t.status === 'forecast', JSON.stringify(t && t.status) + ' toasts=' + JSON.stringify(await toasts()) + ' err=' + JSON.stringify(await ev('[...document.querySelectorAll("#tripFormPanel .trip-form-error")].map(e => e.textContent)')) + ' form=' + (await ev('!!document.getElementById("tripFormPanel")')));
       check('«На подтверждение»: заявок в очереди 0', t && reqCount(t.id) === 0);
       check('«На подтверждение»: место пустое, комментарий сохранён', t && t.location === '' && t.comment === 'ком-1', JSON.stringify(t && [t.location, t.comment]));
       await sleep(300);
@@ -411,6 +514,110 @@ async function main() {
       await ev('Trips.confirmTrip(' + q(f.id) + ').then(() => "ok", e => e.message)').then(async (m) => {
         check('confirmTrip: сообщение сервера location_required показывается понятным текстом', /место назначения/i.test(m), m);
       });
+    });
+
+    // ---- V8-T7 P3-5 (UI): телефон обязателен только для «Подтвердить» ----
+    await guard('P3-5 UI: телефон только для «Подтвердить»', async () => {
+      await fillNew('UI nophone', { emps: [2], location: 'Липецк', nophone: true, d0: 1 });
+      await clickConfirm();
+      await sleep(500);
+      check('P3-5 «Подтвердить» без телефона: ошибка у поля телефона', /телефон/i.test((await fieldError('tripPhone')) || ''), JSON.stringify(await fieldError('tripPhone')));
+      check('P3-5 ... ни сохранения, ни confirm на сервер не ушли (командировки нет)', (await tripsByTitle('UI nophone')).length === 0);
+      check('P3-5 ... форма осталась открытой с введёнными данными', await ev('!!document.getElementById("tripFormPanel") && document.getElementById("tripTitle").value === "UI nophone"'));
+      if (SHOTS) {
+        // ошибка у поля телефона при «Подтвердить» без телефона — 1440 и 375 px
+        await k.size(1440, 900); await sleep(300);
+        await k.shotEl('#tripFormPanel', 'T7_confirm_no_phone_1440', { maxW: 1440 });
+        await k.size(375, 812, true); await sleep(400);
+        await k.shotEl('#tripFormPanel', 'T7_confirm_no_phone_375');
+        await k.size(1400, 900); await sleep(300);
+      }
+      await clickSave();
+      const t = await waitTrip('UI nophone');
+      check('P3-5 «На подтверждение» без телефона проходит: прогноз создан, телефона нет', !!t && t.status === 'forecast' && !t.phone, JSON.stringify(t && [t.status, t.phone]));
+      check('P3-5 ... заявок 0', t && reqCount(t.id) === 0);
+      await sleep(300);
+      await refresh();
+      await openExisting(t.id);
+      await clickConfirm();
+      await sleep(500);
+      const t1 = await getTrip(t.id);
+      check('P3-5 прогноз без телефона → «Подтвердить»: ошибка у поля, статус forecast, 0 заявок', /телефон/i.test((await fieldError('tripPhone')) || '') && t1.status === 'forecast' && reqCount(t.id) === 0, JSON.stringify([await fieldError('tripPhone'), t1.status, reqCount(t.id)]));
+      await typeInto('tripPhone', '89991234567');
+      await clickConfirm();
+      const s = await waitStatus(t.id, 'confirmed');
+      check('P3-5 ... после ввода телефона «Подтвердить» проходит: confirmed, телефон +7 + 10 цифр, 1 заявка', s.status === 'confirmed' && s.phone === PHONE && reqCount(t.id) === 1, JSON.stringify([s.status, s.phone, reqCount(t.id)]));
+      // неполный номер — ошибка у поля даже для «На подтверждение»
+      await fillNew('UI badphone', { emps: [3], location: 'Липецк', nophone: true, d0: 1 });
+      await typeInto('tripPhone', '123');
+      await clickSave();
+      await sleep(500);
+      check('P3-5 неполный номер: ошибка у поля даже для «На подтверждение», запроса нет', /телефон/i.test((await fieldError('tripPhone')) || '') && (await tripsByTitle('UI badphone')).length === 0, JSON.stringify(await fieldError('tripPhone')));
+    });
+
+    // ---- V8-T7 P3-6/P3-5 (UI): подтверждённая — нельзя стереть место и телефон ----
+    await guard('подтверждённая: нельзя стереть место и телефон', async () => {
+      const f = await create(admin, 'UI conf clear', [p('emp_2', D(14), D(15))], { location: 'Орск' });
+      await api(admin, 'PUT', 'api/trips.php?id=' + f.id + '&action=confirm');
+      await refresh(); await openExisting(f.id);
+      await ev('document.getElementById("tripLocation").value = ""');
+      await clickSave();
+      await sleep(500);
+      check('P3-6 подтверждённая: «Сохранить» с пустым местом — ошибка у поля «Место назначения», запроса нет', /место назначения/i.test((await fieldError('tripLocation')) || '') && (await getTrip(f.id)).location === 'Орск', JSON.stringify(await fieldError('tripLocation')));
+      if (SHOTS) {
+        await k.size(1440, 900); await sleep(300);
+        await k.shotEl('#tripFormPanel', 'T7_confirmed_no_location_1440', { maxW: 1440 });
+        await k.size(375, 812, true); await sleep(400);
+        await k.shotEl('#tripFormPanel', 'T7_confirmed_no_location_375');
+        await k.size(1400, 900); await sleep(300);
+      }
+      await ev('document.getElementById("tripLocation").value = "Орск"; document.getElementById("tripPhone").value = ""');
+      await clickSave();
+      await sleep(500);
+      check('P3-5 подтверждённая: «Сохранить» с пустым телефоном — ошибка у поля телефона, запроса нет', /телефон/i.test((await fieldError('tripPhone')) || '') && (await getTrip(f.id)).phone === PHONE, JSON.stringify(await fieldError('tripPhone')));
+      check('P3-5/P3-6 ... форма осталась открытой, статус confirmed, заявки те же', await ev('!!document.getElementById("tripFormPanel")') && (await getTrip(f.id)).status === 'confirmed' && reqCount(f.id) === 1);
+    });
+
+    // ---- V8-T7 P2-2 (UI): ни один штатный путь не шлёт status иначе, чем forecast при создании ----
+    await guard('UI не шлёт status', async () => {
+      await ev('(() => { window.__tripReq = []; window.__spyOrig = window.fetch; window.fetch = function(u, o) { try { if (/api\\/trips\\.php/.test(String(u)) && o && /^(POST|PUT)$/.test(o.method || "")) window.__tripReq.push({ m: o.method, u: String(u), b: o.body ? JSON.parse(o.body) : null }); } catch (e) { /* */ } return window.__spyOrig.apply(this, arguments); }; })()');
+      try {
+        // (i) новая → «На подтверждение»; (ii) новая → «Подтвердить»
+        await fillNew('UI spy 1', { emps: [2], location: 'Рязань', d0: 3 });
+        await clickSave();
+        const t1 = await waitTrip('UI spy 1');
+        await fillNew('UI spy 2', { emps: [3], location: 'Рязань', d0: 3 });
+        await clickConfirm();
+        const t2 = await waitTrip('UI spy 2');
+        await waitStatus(t2.id, 'confirmed');
+        // (iii) правка прогноза → «На подтверждение»; (iv) правка подтверждённой → «Сохранить»
+        await refresh(); await openExisting(t1.id);
+        await typeInto('tripComment', 'spy-правка');
+        await clickSave();
+        await sleep(800);
+        await refresh(); await openExisting(t2.id);
+        await typeInto('tripComment', 'spy-правка-2');
+        await clickSave();
+        await sleep(800);
+        // (v) создание из Матрицы (мультивыбор/popup) — та же форма
+        await ev('Trips.closeTripForm && Trips.closeTripForm(); window.createTripFromSelection(4, ' + DOY(12) + ', ' + DOY(13) + ')');
+        await sleep(500);
+        await typeInto('tripTitle', 'UI spy 3');
+        await typeInto('tripLocation', 'Рязань');
+        await typeInto('tripPhone', '89991234567');
+        await ev('(() => { const o = document.getElementById("transportOutMode"), b = document.getElementById("transportBackMode"); o.value = "avia"; b.value = "zd"; })()');
+        await clickConfirm();
+        const t3 = await waitTrip('UI spy 3');
+        if (t3) await waitStatus(t3.id, 'confirmed');
+        const reqs = await ev('window.__tripReq');
+        const posts = reqs.filter((x) => x.m === 'POST'), puts = reqs.filter((x) => x.m === 'PUT');
+        check('P2-2 UI: записано достаточно запросов (3 POST; PUT: 2 confirm + 2 правки)', posts.length === 3 && puts.length === 4, JSON.stringify(reqs.map((x) => x.m + ' ' + x.u.replace(/^.*trips\.php/, ''))));
+        check('P2-2 UI: каждый POST создаёт прогноз (status=forecast)', posts.every((x) => x.b && x.b.status === 'forecast'), JSON.stringify(posts.map((x) => x.b && x.b.status)));
+        check('P2-2 UI: ни один PUT (правка/подтверждение) не несёт поле status', puts.every((x) => !x.b || !('status' in x.b)), JSON.stringify(puts.map((x) => x.b && Object.keys(x.b))));
+        check('P2-2 UI: подтверждение — только PUT …&action=confirm (по одному на «Подтвердить»)', puts.filter((x) => /action=confirm/.test(x.u)).length === 2, JSON.stringify(puts.map((x) => x.u.replace(/^.*trips\.php/, ''))));
+      } finally {
+        await ev('if (window.__spyOrig) window.fetch = window.__spyOrig');
+      }
     });
 
     check('admin: нет исключений JS в браузере', cdp.exceptions.length === 0, cdp.exceptions.join(' | '));

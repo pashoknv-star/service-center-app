@@ -711,6 +711,12 @@
         text-transform: uppercase;
         margin-bottom: 3px;
       }
+      #tripFormPanel .trip-form-row > .trip-form-label .trip-form-hint {
+        text-transform: none;
+        font-size: 10px;
+        opacity: 0.85;
+        margin-left: 2px;
+      }
       #tripFormPanel .trip-form-input {
         padding: 4px 6px;
         border: 1px solid var(--divider);
@@ -1264,11 +1270,11 @@
         ${readOnlyNote ? '<div class="trip-form-note" id="tripReadOnlyNote">' + readOnlyNote + '</div>' : ''}
         <div class="trip-form-fields">
             <div class="trip-form-row">
-              <label class="trip-form-label">Название</label>
+              <label class="trip-form-label">Название *</label>
               <input type="text" class="trip-form-input" id="tripTitle" value="${trip ? escapeHtml(trip.title) : ''}" ${isViewer ? 'disabled' : ''}>
             </div>
             <div class="trip-form-row">
-              <label class="trip-form-label">Место назначения</label>
+              <label class="trip-form-label">Место назначения * <span class="trip-form-hint">для подтверждения</span></label>
               <input type="text" class="trip-form-input" id="tripLocation" value="${trip ? escapeHtml(trip.location || '') : ''}" placeholder="Город (обязательно для подтверждения)" ${isViewer ? 'disabled' : ''}>
             </div>
             <div class="trip-form-row">
@@ -1276,7 +1282,7 @@
               <textarea class="trip-form-input" id="tripComment" rows="2" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.comment || '') : ''}</textarea>
             </div>
             <div class="trip-form-row">
-              ${trip && trip.participants && trip.participants.length > 0 ? '<label class="trip-form-label">Участники</label>' : ''}
+              <label class="trip-form-label" id="tripParticipantsLabel">Участники *</label>
               <div id="tripParticipants">
                 ${trip && trip.participants ? trip.participants.map(function(p, i) {
                   return renderParticipantRow(p, i, isViewer);
@@ -1304,7 +1310,7 @@
               </datalist>
             </div>
             <div class="trip-form-row">
-              <label class="trip-form-label">Телефон сотрудника</label>
+              <label class="trip-form-label">Телефон сотрудника * <span class="trip-form-hint">для подтверждения</span></label>
               <input type="tel" class="trip-form-input" id="tripPhone" value="${escapeHtml(phoneShown)}" maxlength="32" placeholder="+7 (999) 000-00-00" oninput="window.Trips.maskPhoneField(this)" onfocus="window.Trips.phoneFieldFocus(this)" onblur="window.Trips.phoneFieldBlur(this)" ${isViewer ? 'disabled' : ''}>
             </div>
             <div class="trip-form-row">
@@ -1312,7 +1318,7 @@
               <input type="number" class="trip-form-input" id="tripAdvanceAmount" min="0" step="1" value="${trip && trip.advanceAmount !== null ? trip.advanceAmount : ''}" placeholder="Не указано" ${isViewer ? 'disabled' : ''}>
             </div>
             <div class="trip-form-row trip-transport-block">
-              <label class="trip-form-label">Транспорт (билеты)</label>
+              <label class="trip-form-label">Транспорт (билеты) * <span class="trip-form-hint">способ — если нужен билет</span></label>
               <div class="trip-transport-columns">
                 <div class="trip-transport-column">
                   <label class="trip-check">
@@ -1555,13 +1561,8 @@
     participantsContainer.innerHTML = rowData.map(function(data, i) {
       return renderParticipantRow(data, i, !!data.disabled);
     }).join('');
-    // Err2 fix: лейбл «Участники» скрывается и при удалении последнего
-    // участника, не только при первичном рендере формы.
-    var rowsWrap = participantsContainer.closest('.trip-form-row');
-    if (rowsWrap) {
-      var label = rowsWrap.querySelector('.trip-form-label');
-      if (label) label.style.display = rowData.length > 0 ? '' : 'none';
-    }
+    // V8-T7 (P3-2): подпись «Участники *» есть всегда (раньше пряталась при пустом составе и
+    // не появлялась в новой форме после добавления первого участника) — не трогаем.
     updateConfirmButtonState();
   }
 
@@ -1652,7 +1653,12 @@
     if (!el || el.disabled) return;
     // Заполненное поле (в т.ч. прежний нестандартный номер) не трогаем: приведение
     // к маске — только при вводе, иначе простой клик по полю искажал бы старую запись.
-    if (String(el.value || '').trim() !== '') return;
+    if (String(el.value || '').trim() !== '') {
+      // V8-T7: состояние набора (см. maskPhoneField) — от того, что уже в поле
+      el.__tripPhoneNat = phoneNationalDigits(el.value);
+      el.__tripPhoneLen = String(el.value).length;
+      return;
+    }
     el.value = '+7 ';
     var end = el.value.length;
     try { el.setSelectionRange(end, end); } catch (e) { /* type=tel: ок */ }
@@ -1674,13 +1680,29 @@
    */
   function maskPhoneField(el) {
     var national = phoneNationalDigits(el.value);
+    var hasPrefix = /^\s*\+\s*7/.test(el.value);
     // Номер уже полный, а в конец дописали ещё цифру: лишнее игнорируем, а не
     // «сдвигаем» номер (иначе у номера на 8/7, напр. 8-800…, срабатывал бы
     // срез внутреннего префикса РФ).
     var prev = el.__tripPhoneNat;
-    if (prev && prev.length === 10 && national !== prev && /^\s*\+\s*7/.test(el.value) &&
+    if (prev && prev.length === 10 && national !== prev && hasPrefix &&
         el.value.replace(/\D/g, '').slice(1, 11) === prev) {
       national = prev;
+    }
+    // V8-T7 P1-1: набор С КЛАВИАТУРЫ по одному символу. «8…», «7…» и «+7…» — привычные
+    // способы начать номер, и первая «8»/«7», набранная в пустом поле (сразу после «+7 »),
+    // — код страны, а не цифра номера (срез префикса по «ровно 11 цифр» срабатывал только
+    // при вставке целиком: «89991234567» по цифрам давало «+7 (899) 912-34-56»). Код
+    // страны принимается один раз: следующая «8»/«7» — уже цифра номера (812…, 800…).
+    // Поле очищено/перезаписано (нет «+7» впереди) или цифру удалили — «код страны» снова не набран.
+    var curLen = String(el.value || '').length;
+    if (!hasPrefix || (el.__tripPhoneLen !== undefined && curLen < el.__tripPhoneLen)) el.__tripPhoneCC = false;
+    if (national.length === 1 && (national === '8' || national === '7') && !el.__tripPhoneCC &&
+        (prev === undefined || prev === '' || !hasPrefix)) {
+      national = '';
+      el.__tripPhoneCC = true;
+    } else if (national.length > 0) {
+      el.__tripPhoneCC = false;
     }
     el.__tripPhoneNat = national;
     var formatted = formatPhoneRu(national);
@@ -1689,9 +1711,10 @@
       var end = formatted.length;
       try { el.setSelectionRange(end, end); } catch (e) { /* type=tel: ок */ }
     }
+    el.__tripPhoneLen = formatted.length;
 
-    // E12-3: empty/short phone = not allowed (block submission with error)
-    if (national.length < 10) {
+    // V8-T7 P3-5: пустой номер допустим (обязателен только для «Подтвердить»); неполный — ошибка
+    if (national.length > 0 && national.length < 10) {
       el.classList.add('trip-form-error');
       el.setCustomValidity('Телефон сотрудника: 10 цифр после +7');
       return;
@@ -1815,6 +1838,9 @@
       confirmed_immutable: 'Подтверждённую командировку может править только администратор',
       // V8-T2: механика «прогноз → подтверждена»
       location_required: 'Укажите место назначения — без него командировку нельзя подтвердить',
+      // V8-T7: телефон — для подтверждения; статус меняется только действием «Подтвердить»
+      phone_required: 'Укажите телефон сотрудника — без него командировку нельзя подтвердить',
+      status_change_forbidden: 'Статус командировки меняется только действием «Подтвердить»',
       invalid_status_transition: 'Подтвердить можно только командировку-прогноз',
       invalid_status: 'Недопустимый статус командировки',
       not_found: 'Командировка не найдена (возможно, её уже удалили)'
@@ -1884,10 +1910,18 @@
       return;
     }
 
+    // V8-T7: место назначения и телефон сотрудника обязательны для подтверждения — «Подтвердить»
+    // и сохранение уже подтверждённой (сервер: location_required / phone_required). «На подтверждение»
+    // и сохранение прогноза обходятся без них.
+    var needConfirmFields = mode === 'confirm' || !!(id && ctx.status === TRIP_STATUS.CONFIRMED);
+
     // V8-T2 п.7: «Подтвердить» без места назначения не отправляется (ни сохранение,
     // ни confirm) — ошибка у поля. «На подтверждение» место не требует.
-    if (mode === 'confirm' && !location) {
-      showError('tripLocation', 'Укажите место назначения — без него командировку нельзя подтвердить');
+    // V8-T7 P3-6: подтверждённая тоже не может остаться без места.
+    if (needConfirmFields && !location) {
+      showError('tripLocation', mode === 'confirm'
+        ? 'Укажите место назначения — без него командировку нельзя подтвердить'
+        : 'Место назначения у подтверждённой командировки не может быть пустым');
       return;
     }
 
@@ -1993,21 +2027,33 @@
     var phoneRaw = formVal('tripPhone', ctx.phone).trim();
     var advanceAmount = formVal('tripAdvanceAmount', ctx.advanceAmount == null ? '' : ctx.advanceAmount).trim();
     
-    // Phone validation: обязателен; на сервер уходит +7XXXXXXXXXX (V8-T1 п.4).
+    // Телефон (V8-T1 п.4, V8-T7 P3-5): на сервер уходит +7XXXXXXXXXX. Обязателен только для
+    // «Подтвердить» и сохранения подтверждённой (решение владельца 2026-11-18); для прогноза
+    // пустой телефон допустим, неполный/некорректный — по-прежнему ошибка у поля.
     // Раньше проверка читала несуществующую переменную phoneEl (ReferenceError
     // → сохранение обрывалось молча) и считала цифры регэкспом /[^\\d]/ (класс
     // «не обратный слэш и не буква d»), т.е. «цифр» всегда было 0.
     // Прежняя запись с нестандартным номером (не РФ): пока поле не менялось,
     // номер остаётся как был — сохранение из-за него не блокируется.
     var phone;
+    var phoneBlank = false;
     if (ctx.id && ctx.phone && phoneRaw === displayPhone(ctx.phone)) {
       var legacyNational = ruNationalStrict(ctx.phone);
       if (legacyNational) phone = '+7' + legacyNational;
       else phone = phoneRaw.replace(/\D/g, '').length >= 10 ? String(ctx.phone) : null;
+    } else if (phoneNationalDigits(phoneRaw) === '') {
+      phoneBlank = true;       // пусто или один лишь префикс «+7 »
+      phone = null;
     } else {
       phone = canonicalPhone(phoneRaw);
     }
-    if (!phone) {
+    if (phoneBlank && needConfirmFields) {
+      showError('tripPhone', mode === 'confirm'
+        ? 'Укажите телефон сотрудника — без него командировку нельзя подтвердить'
+        : 'Телефон сотрудника у подтверждённой командировки не может быть пустым');
+      return;
+    }
+    if (!phoneBlank && !phone) {
       showError('tripPhone', 'Телефон сотрудника: введите 10 цифр после +7');
       return;
     }
@@ -3198,6 +3244,21 @@
     Object.keys(dp.handlers).forEach(function(type) {
       document.addEventListener(type, dp.handlers[type], true);
     });
+    // V8-T7 (P2-1): Матрица перерисовывается (смена года ◀/▶ — дважды, затем при синхронизации),
+    // и строка нового tbody остаётся без подсветки, пока не придёт событие мыши. Следим за
+    // перерисовкой (childList #matrixBody; смена классов подсветки её не вызывает) и возвращаем подсветку.
+    var mBody = document.getElementById('matrixBody');
+    if (mBody && typeof MutationObserver === 'function') {
+      var repaintTimer = null;
+      dp.observer = new MutationObserver(function() {
+        if (repaintTimer) return;
+        repaintTimer = setTimeout(function() {
+          repaintTimer = null;
+          if (_datePick === dp) paintDatePick();
+        }, 0);
+      });
+      dp.observer.observe(mBody, { childList: true });
+    }
     return true;
   }
 
@@ -3205,8 +3266,13 @@
   function finishDatePick(lo, hi) {
     var dp = _datePick;
     if (!dp) return;
-    var startStr = dayOfYearToDateStr(dp.year, lo);
-    var endStr = dayOfYearToDateStr(dp.year, hi);
+    // V8-T7 (P2-1): день года (data-day ячейки) относится к году, ПОКАЗАННОМУ в Матрице в
+    // момент выбора. Год, запомненный при входе в режим (dp.year), устаревает, если
+    // пользователь переключил год кнопками ◀/▶ Матрицы: даты тогда получали «старый» год.
+    // Выбран вариант «режим продолжается при смене года» (форма и введённое не теряются),
+    // поэтому год берётся здесь, а подсветка строки возвращается после перерисовки (см. paintDatePick).
+    var startStr = dayOfYearToDateStr(matrixYear(), lo);
+    var endStr = dayOfYearToDateStr(matrixYear(), hi);
     endDatePick(true); // снять режим и вернуться на вкладку «Командировки»
 
     var rowEls = document.querySelectorAll('#tripParticipants .trip-participant-row');
@@ -3241,6 +3307,7 @@
         });
       }
       if (dp.bar && dp.bar.parentNode) dp.bar.parentNode.removeChild(dp.bar);
+      if (dp.observer) { try { dp.observer.disconnect(); } catch (e) { /* не критично */ } dp.observer = null; }
       if (dp.row && dp.row.classList) dp.row.classList.remove('trip-datepick-row');
       var painted = document.querySelectorAll('#matrixBody .day-cell-data.trip-datepick-sel');
       Array.prototype.forEach.call(painted, function(c) { c.classList.remove('trip-datepick-sel'); });

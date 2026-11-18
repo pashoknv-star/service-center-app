@@ -28,9 +28,18 @@ const sha1 = (f) => crypto.createHash('sha1').update(fs.readFileSync(f)).digest(
 const REAL_DB = path.join(L.ROOT, 'data/app.db');
 const SHOTS = process.env.TRIPSFORM_SHOTS || '';          // каталог для скриншотов (по умолчанию не снимаются)
 
-// 2026-11-23 = день года 327 (янв 31, фев 28, мар 31, апр 30, май 31, июн 30, июл 31, авг 31, сен 30, окт 31 = 304; +23)
-const D = (n) => '2026-11-' + String(n).padStart(2, '0');
-const DOY = (n) => 304 + n;
+// V8-T7 (P3-3): год сценариев — год ТЕКУЩЕЙ даты (Матрица открывается в текущем календарном году), а не зашитый 2026.
+// TRIPS_FAKE_NOW=2027-03-15T12:00:00Z — подменить «сейчас» и в самом тесте, и в браузере (фиктивный Date до загрузки
+// страницы): так проверяется, что сьют зелёный не только в 2026 году (см. reports/V8/T7_REPORT.md).
+const FAKE_NOW = process.env.TRIPS_FAKE_NOW ? new Date(process.env.TRIPS_FAKE_NOW) : null;
+const NOW = FAKE_NOW || new Date();
+const Y = NOW.getFullYear();
+// день года для 1 ноября Y минус 1 (в високосный год +1): DOY(n) = n-е ноября
+const NOV0 = Math.round((Date.UTC(Y, 10, 1) - Date.UTC(Y, 0, 1)) / 86400000);
+const D = (n) => Y + '-11-' + String(n).padStart(2, '0');
+const DOY = (n) => NOV0 + n;
+// скрипт, подменяющий Date в браузере (ставится до загрузки страницы)
+const fakeDateScript = (ts) => '(function(){var R=Date,off=' + (ts - Date.now()) + ';function F(){if(!(this instanceof F))return new R(R.now()+off).toString();if(arguments.length===0)return new R(R.now()+off);return new (Function.prototype.bind.apply(R,[null].concat([].slice.call(arguments))))();}F.prototype=R.prototype;F.now=function(){return R.now()+off;};F.UTC=R.UTC;F.parse=R.parse;window.Date=F;})();';
 
 async function main() {
   if (!fs.existsSync(process.env.CHROME_BIN || path.join(require('os').homedir(), '.cache/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell'))) {
@@ -46,6 +55,7 @@ async function main() {
     const api = (ck, method, url, body) => L.http(env.base, ck, method, url, body);
 
     const { cdp } = await env.openBrowser();
+    if (FAKE_NOW) await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeDateScript(FAKE_NOW.getTime()) });
     const k = L.pageKit(cdp, env.base, SHOTS || process.env.TMPDIR || '/tmp');
     if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
     const shot = async (n) => { if (SHOTS) await k.shot(n); };
@@ -88,6 +98,17 @@ async function main() {
       await cdp.send('Input.insertText', { text });
       await sleep(60);
     }
+    // V8-T7 (P1-1): ПОСИМВОЛЬНЫЙ набор, как с клавиатуры: на каждый символ — keyDown с text (браузер шлёт отдельное
+    // input-событие) и keyUp. Вставка целиком (insertText) такой набор не воспроизводит.
+    async function typeKeys(id, text) {
+      await ev('document.getElementById(' + q(id) + ').focus()');
+      for (const ch of text) {
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch });
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+      }
+      await sleep(60);
+    }
+    const resetPhone = () => ev('(() => { const e = document.getElementById("tripPhone"); e.value = ""; e.dispatchEvent(new Event("input",{bubbles:true})); e.focus(); })()');
     const val = (id) => ev('document.getElementById(' + q(id) + ').value');
     const pickBtn = () => ev('[...document.querySelectorAll("#tripFormPanel button")].find(b => /Добавить сотрудника/.test(b.textContent)).click()');
     async function pickEmployees(ids) {
@@ -120,22 +141,39 @@ async function main() {
       await ev('(() => { const o = document.getElementById("transportOutMode"), b = document.getElementById("transportBackMode"); o.value = "avia"; o.dispatchEvent(new Event("change",{bubbles:true})); b.value = "zd"; b.dispatchEvent(new Event("change",{bubbles:true})); })()');
     }
     const cellRect = (emp, day) => ev('(() => { const c = document.querySelector(\'#matrixBody .day-cell-data[data-emp="' + emp + '"][data-day="' + day + '"]\'); if (!c) return null; const r = c.getBoundingClientRect(); return {x: r.left + r.width/2, y: r.top + r.height/2, w: r.width}; })()');
-    async function drag(emp, d1, d2) {
-      const a = await cellRect(emp, DOY(d1));
-      if (!a) return false;
-      const b = await cellRect(emp, DOY(d2));
+    // V8-T7 (P3-3/P3-4): ячейка нужного дня должна быть на экране ДО клика/протяжки — иначе при показе другого времени года
+    // (Матрица открывается на сегодняшнем дне) клик уходит мимо панели и закрывает её. Прокручиваем именно обёртку Матрицы:
+    // scrollIntoView(center) сдвигает ВСЕ прокручиваемые предки (в т.ч. панель с overflow:hidden) и уводит Матрицу за экран.
+    const centerCell = (emp, day) => ev('(() => { const w = document.getElementById("matrixWrapper"); const c = document.querySelector(\'#matrixBody .day-cell-data[data-emp="' + emp + '"][data-day="' + day + '"]\'); if (!w || !c) return false; const cr = c.getBoundingClientRect(), wr = w.getBoundingClientRect(); w.scrollLeft += (cr.left - wr.left) - (w.clientWidth - cr.width) / 2; w.scrollTop += (cr.top - wr.top) - (w.clientHeight - cr.height) / 2; return true; })()');
+    // V8-T7 (P3-4): протяжка не по «голому sleep»: ждём панель выбора дат, прокручиваем ячейки в видимую область
+    // и убеждаемся, что обе ячейки на экране и ничем не перекрыты; по завершении ждём снятия режима.
+    const dragDays = async (emp, day1, day2) => {
+      if (!(await k.waitFor('!!document.getElementById("tripDatePickBar")', 6000))) return false;
+      const lo = Math.min(day1, day2), hi = Math.max(day1, day2);
+      // середина диапазона по центру области прокрутки Матрицы (#matrixWrapper): обе крайние ячейки помещаются на экран.
+      await centerCell(emp, Math.round((lo + hi) / 2));
+      const vis = (day) => '(() => { const c = document.querySelector(\'#matrixBody .day-cell-data[data-emp="' + emp + '"][data-day="' + day + '"]\'); if (!c) return false; const r = c.getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2); return r.width > 0 && r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight && !!e && (e === c || c.contains(e)); })()';
+      if (!(await k.waitFor(vis(day1) + ' && ' + vis(day2), 4000))) {
+        // диагностика вместо молчаливого отказа (T5 #4): где ячейки и что их перекрывает
+        const diag = await ev('(() => { const o = []; for (const d of [' + day1 + ', ' + day2 + ']) { const c = document.querySelector(\'#matrixBody .day-cell-data[data-emp="' + emp + '"][data-day="\' + d + \'"]\'); if (!c) { o.push({ d, cell: null }); continue; } const r = c.getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2); o.push({ d, l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom), top: e ? (e.tagName + "." + e.className) : null }); } return { cells: o, iw: innerWidth, ih: innerHeight, year: document.getElementById("yearDisplay").textContent, matrixDisplay: getComputedStyle(document.getElementById("matrixWrapper")).display, wrap: (() => { const w = document.getElementById("matrixWrapper"), r = w.getBoundingClientRect(); return { l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), sl: w.scrollLeft }; })(), panel: (() => { const p = document.getElementById("vacationPanel"), r = p.getBoundingClientRect(); return { cls: p.className, l: Math.round(r.left), w: Math.round(r.width), sl: p.scrollLeft, tr: getComputedStyle(p).transform }; })() }; })()');
+        console.log('  DIAG dragDays(' + emp + ', ' + day1 + ', ' + day2 + '): ' + JSON.stringify(diag));
+        return false;
+      }
+      const a = await cellRect(emp, day1);
+      const b = await cellRect(emp, day2);
       await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x, y: a.y });
       await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: a.x, y: a.y, button: 'left', clickCount: 1 });
-      if (d2 !== d1) {
-        const steps = Math.abs(d2 - d1);
+      if (day2 !== day1) {
+        const steps = Math.abs(day2 - day1);
         for (let i = 1; i <= steps; i++) {
           await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x + (b.x - a.x) * i / steps, y: a.y, button: 'left', buttons: 1 });
         }
       }
       await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: b.x, y: b.y, button: 'left', clickCount: 1 });
-      await sleep(350);
-      return true;
-    }
+      // режим выбора завершается синхронно по mouseup; ждём условие, а не фиксированную паузу
+      return await k.waitFor('!document.getElementById("tripDatePickBar")', 4000);
+    };
+    const drag = (emp, d1, d2) => dragDays(emp, DOY(d1), DOY(d2));
     const matrixVisible = () => ev('getComputedStyle(document.getElementById("matrixWrapper")).display !== "none"');
     const formVisible = () => ev('getComputedStyle(document.getElementById("tripsListView")).display !== "none" && !!document.getElementById("tripFormPanel")');
     const pickBarPresent = () => ev('!!document.getElementById("tripDatePickBar")');
@@ -207,6 +245,25 @@ async function main() {
     for (const ch of '999') { await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch }); await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch }); }
     await sleep(80);
     check('П4 посимвольный набор «999» после «+7 » → «+7 (999»', (await val('tripPhone')) === '+7 (999', JSON.stringify(await val('tripPhone')));
+    // V8-T7 P1-1: все формы набора ПО ОДНОМУ СИМВОЛУ дают «+7 (999) 123-45-67»; «8»/«7» сразу после «+7 » — код страны
+    const typedForms = [['89991234567', 'с 8'], ['79991234567', 'с 7'], ['+7' + '9991234567', 'с +7'], ['9991234567', '10 цифр']];
+    for (const [raw, label] of typedForms) {
+      await resetPhone();
+      await typeKeys('tripPhone', raw);
+      const got = await val('tripPhone');
+      check('П1-1 посимвольный набор ' + label + ' (' + raw + ') → «+7 (999) 123-45-67»', got === '+7 (999) 123-45-67', JSON.stringify(got));
+      check('П1-1 ... и на сервер уйдёт полный номер +7 + 10 цифр (canonicalPhone)', (await ev('Trips.canonicalPhone(document.getElementById("tripPhone").value)')) === '+7' + '9991234567', JSON.stringify(await ev('Trips.canonicalPhone(document.getElementById("tripPhone").value)')));
+    }
+    await resetPhone();
+    await typeKeys('tripPhone', '8');
+    check('П1-1 первая «8» после «+7 » — код страны: поле остаётся «+7 », цифры номера нет', (await val('tripPhone')) === '+7 ', JSON.stringify(await val('tripPhone')));
+    await typeKeys('tripPhone', '812');
+    check('П1-1 после кода страны «8» номер с «8» (812…) вводится как обычные цифры → «+7 (812»', (await val('tripPhone')) === '+7 (812', JSON.stringify(await val('tripPhone')));
+    await ev('document.getElementById("tripPhone").value = "+7 (999) 123-45-67"; document.getElementById("tripPhone").select()');
+    await typeKeys('tripPhone', '8');
+    check('П1-1 выделили весь номер и набрали «8» — снова код страны (поле «+7 »)', (await val('tripPhone')) === '+7 ', JSON.stringify(await val('tripPhone')));
+    await typeKeys('tripPhone', '9991234567');
+    check('П1-1 ... и дальнейший набор 9991234567 даёт «+7 (999) 123-45-67»', (await val('tripPhone')) === '+7 (999) 123-45-67', JSON.stringify(await val('tripPhone')));
     await shot('T1_phone_prefix');
     await ev('(() => { const e = document.getElementById("tripPhone"); e.value = ""; e.dispatchEvent(new Event("input",{bubbles:true})); e.blur(); })()');
     await sleep(60);
@@ -336,17 +393,19 @@ async function main() {
     await pickEmployees([2]);
     await setDates(0, D(23), D(25));
     await ev('(() => { const o = document.getElementById("transportOutMode"); o.value = "avia"; const b = document.getElementById("transportBackMode"); b.value = "zd"; })()');
+    await typeInto('tripLocation', 'Казань');
     await clearToasts();
-    await clickSave();
+    // V8-T7 P3-5: телефон обязателен только для «Подтвердить»; для «На подтверждение»/«Сохранить» пустой допустим
+    await k.click('#tripConfirmBtn');
     await sleep(500);
-    check('П1 пустой телефон: сообщение видно у поля телефона', /Телефон/.test((await fieldError('tripPhone')) || ''), JSON.stringify(await fieldError('tripPhone')));
+    check('П1 пустой телефон + «Подтвердить»: сообщение видно у поля телефона', /телефон/i.test((await fieldError('tripPhone')) || ''), JSON.stringify(await fieldError('tripPhone')));
     await shot('T1_validation_phone');
-    check('П1 пустой телефон: запрос не ушёл', (await listTrips()).length === before);
+    check('П1 пустой телефон + «Подтвердить»: запрос не ушёл', (await listTrips()).length === before);
     await typeInto('tripPhone', '123');
     await clearToasts();
     await clickSave();
     await sleep(400);
-    check('П1 телефон из 3 цифр: сообщение у поля', /Телефон/.test((await fieldError('tripPhone')) || ''), JSON.stringify(await fieldError('tripPhone')));
+    check('П1 телефон из 3 цифр: сообщение у поля (и для «На подтверждение»)', /Телефон/.test((await fieldError('tripPhone')) || ''), JSON.stringify(await fieldError('tripPhone')));
     await typeInto('tripPhone', '', true);
     await ev('document.getElementById("tripPhone").value = ""');
     await typeInto('tripPhone', '9991234567');
@@ -378,6 +437,102 @@ async function main() {
     check('П1 валидация: командировки с ошибочными данными не созданы', !(await findTrip('FORM V')) && !(await findTrip('FORM V2')));
     });
 
+    // ---- V8-T7 P3-5: телефон обязателен только для «Подтвердить»; P1-1: набранный по символам номер доходит до сервера ----
+    await guard('P3-5 прогноз без телефона / P1-1 набор до сервера', async () => {
+      const setTransport = () => ev('(() => { const o = document.getElementById("transportOutMode"), b = document.getElementById("transportBackMode"); o.value = "avia"; b.value = "zd"; })()');
+      await newForm();
+      await typeInto('tripTitle', 'FORM NOPH');
+      await pickEmployees([3]);
+      await setDates(0, D(8), D(9));
+      await setTransport();
+      await clickSave();
+      const t = await waitTrip('FORM NOPH');
+      check('П3-5 «На подтверждение» без телефона: прогноз создан (forecast, телефон пуст)', !!t && t.status === 'forecast' && !t.phone, JSON.stringify(t && [t.status, t.phone]));
+      if (t) {
+        await openExisting(t.id);
+        check('П3-5 форма прогноза без телефона: поле телефона пустое', (await val('tripPhone')) === '', JSON.stringify(await val('tripPhone')));
+        await typeInto('tripTitle', 'FORM NOPH 2', true);
+        await clickSave();
+        const t2 = await waitTrip('FORM NOPH 2');
+        check('П3-5 повторное «На подтверждение» прогноза без телефона проходит (правка сохранена)', !!t2 && t2.id === t.id && !t2.phone && t2.status === 'forecast', JSON.stringify(t2 && [t2.id === t.id, t2.phone]));
+      }
+      // посимвольный набор «8…» → на сервере +7 + 10 цифр
+      await newForm();
+      await typeInto('tripTitle', 'FORM TYPED');
+      await typeKeys('tripPhone', '89991234567');
+      await pickEmployees([4]);
+      await setDates(0, D(8), D(9));
+      await setTransport();
+      await clickSave();
+      const tt = await waitTrip('FORM TYPED');
+      check('П1-1 номер, набранный по символам «89991234567», сохранён на сервере как +7 + 10 цифр', !!tt && tt.phone === '+7' + '9991234567', JSON.stringify(tt && tt.phone));
+    });
+
+    // ---- V8-T7 P3-2 + решение владельца: подпись «Участники» всегда; обязательные поля помечены «*» как в форме задачи ----
+    await guard('P3-2 подпись «Участники», пометки «*»', async () => {
+      await newForm();
+      const labels = () => ev('[...document.querySelectorAll("#tripFormPanel .trip-form-row > .trip-form-label")].filter(l => l.offsetParent !== null).map(l => l.textContent.replace(/\\s+/g, " ").trim())');
+      const ls = await labels();
+      check('П3-2 подпись «Участники» видна в новой форме до добавления первого участника', ls.some((l) => /^Участники/.test(l)), JSON.stringify(ls));
+      check('«*»: «Название *» — тот же вид, что «Название *» в форме новой задачи', ls.includes('Название *'), JSON.stringify(ls));
+      check('«*»: «Участники *» (хотя бы один участник с датами — для любого сохранения)', ls.some((l) => /^Участники \*$/.test(l)), JSON.stringify(ls));
+      check('«*»: «Место назначения *» с пояснением «для подтверждения»', ls.some((l) => /^Место назначения \*\s*для подтверждения$/.test(l)), JSON.stringify(ls));
+      check('«*»: «Телефон сотрудника *» с пояснением «для подтверждения»', ls.some((l) => /^Телефон сотрудника \*\s*для подтверждения$/.test(l)), JSON.stringify(ls));
+      check('«*»: «Транспорт (билеты) *» с пояснением (способ нужен, если отмечен билет)', ls.some((l) => /^Транспорт \(билеты\) \*\s*способ — если нужен билет$/.test(l)), JSON.stringify(ls));
+      const optional = ['Комментарий', 'Место отправления', 'Данные о гостинице', 'Бизнес-процесс (HelpMe)', 'Сумма аванса, руб.'];
+      check('«*»: необязательные поля (комментарий, отправление, гостиница, бизнес-процесс, аванс) без «*»', optional.every((o) => ls.includes(o)) && !ls.filter((l) => optional.includes(l)).some((l) => l.indexOf('*') >= 0), JSON.stringify(ls));
+      const tasksSrc = fs.readFileSync(path.join(L.ROOT, 'js/tasks.js'), 'utf8');
+      check('«*»: в js/tasks.js обязательное помечается тем же « *» в тексте <label> (fieldRow(\'Название *\'…))', /fieldRow\('Название \*'/.test(tasksSrc));
+      await pickEmployees([2]);
+      await ev('Trips.removeParticipantRow(0)');
+      await sleep(150);
+      check('П3-2 после удаления последнего участника подпись «Участники» остаётся', (await labels()).some((l) => /^Участники/.test(l)), JSON.stringify(await labels()));
+      if (SHOTS) {
+        // скриншоты на 1440 и 375 px (форма целиком, с «*» и пояснениями)
+        await k.size(1440, 900);
+        await sleep(300);
+        await k.shotEl('#tripFormPanel', 'T7_required_marks_1440', { maxW: 1440 });
+        await k.size(375, 812, true);
+        await sleep(400);
+        await k.shotEl('#tripFormPanel', 'T7_required_marks_375');
+        await k.size(1400, 900);
+        await sleep(300);
+      }
+    });
+
+    // ---- V8-T7 P2-1: смена года Матрицы в режиме выбора дат ----
+    await guard('P2-1 смена года в режиме выбора дат', async () => {
+      const matrixSettled = (quiet) => ev('new Promise(res => { const b = document.getElementById("matrixBody"); let t = setTimeout(done, ' + quiet + '); const mo = new MutationObserver(() => { clearTimeout(t); t = setTimeout(done, ' + quiet + '); }); mo.observe(b, { childList: true, subtree: true }); function done() { mo.disconnect(); res(true); } })');
+      const yearIs = (y) => k.waitFor('document.getElementById("yearDisplay").textContent === "' + y + '"', 6000);
+      const rowHl = () => ev('!!document.querySelector("#matrixBody tr.trip-datepick-row .day-cell-data[data-emp=\\"2\\"]")');
+      let moved = false;
+      try {
+        await newForm();
+        await typeInto('tripTitle', 'YEAR pick');
+        await pickEmployees([2, 3]);
+        await k.click('#tripParticipants .trip-participant-row:nth-child(1) button[title*="календар"]');
+        check('П2-1 режим выбора дат включён (год Матрицы ' + Y + ')', (await k.waitFor('!!document.getElementById("tripDatePickBar")', 5000)) && (await ev('document.getElementById("yearDisplay").textContent')) === String(Y));
+        await ev('document.getElementById("nextYear").click()');
+        moved = true;
+        check('П2-1 ▶ в режиме выбора переключает год Матрицы на ' + (Y + 1) + ', режим выбора остаётся', (await yearIs(Y + 1)) && await pickBarPresent());
+        await matrixSettled(700);   // матрица перерисовывается дважды (сразу и после загрузки производственного календаря)
+        check('П2-1 после смены года подсветка строки сотрудника не пропала', await rowHl(), 'tr.trip-datepick-row отсутствует');
+        check('П2-1 ... и панель режима выбора на месте', await pickBarPresent());
+        await shot('T7_year_change_pick_mode');
+        check('П2-1 протяжка по ячейкам 10–12 января нового года выполнена', await dragDays(2, 10, 12));
+        const ry = await rows();
+        check('П2-1 даты подставлены того года, который показан в Матрице (' + (Y + 1) + '-01-10 .. ' + (Y + 1) + '-01-12)', ry[0] && ry[0].s === (Y + 1) + '-01-10' && ry[0].e === (Y + 1) + '-01-12', JSON.stringify(ry));
+        check('П2-1 форма вернулась, остальные поля (название) на месте', (await formVisible()) && (await val('tripTitle')) === 'YEAR pick');
+      } finally {
+        if (moved) {
+          await ev('Trips.closeTripForm && Trips.closeTripForm(); document.getElementById("tabMatrix").click()');
+          await ev('document.getElementById("prevYear").click()');
+          await yearIs(Y);
+          await matrixSettled(700);
+        }
+      }
+    });
+
     // ---- п.2: 📅 — выбор дат в Матрице ----
     await guard('п.2 выбор дат', async () => {
     await newForm();
@@ -394,6 +549,7 @@ async function main() {
     check('П2 строка выбранного сотрудника выделена в Матрице', await ev('!!document.querySelector("#matrixBody tr.trip-datepick-row .day-cell-data[data-emp=\\"2\\"]")'));
     await shot('T1_datepick_mode');
     // клик по ячейке ДРУГОГО сотрудника не завершает выбор
+    await centerCell(3, DOY(30));
     const other = await cellRect(3, DOY(30));
     if (other) await k.clickXY(other.x, other.y);
     await sleep(300);

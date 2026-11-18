@@ -11,7 +11,8 @@ declare(strict_types=1);
  * GET  api/trips.php                          — список всех trips с участниками
  *                                              { success, trips: [...], lastSyncId }
  * POST api/trips.php                          — создание (auth + edit + зона)
- *      body: { title, location?, comment?, status?('forecast'|'confirmed'),
+ *      body: { title, location?, comment?, status?('forecast' — только прогноз;
+ *              'confirmed' -> 400 invalid_status, V8-T7),
  *              participants: [{employeeId, startDate, endDate}] (>=1),
  *              origin?, hotel?, transportOutRequired?, transportOutMode?,
  *              transportBackRequired?, transportBackMode?, advanceAmount?,
@@ -21,12 +22,19 @@ declare(strict_types=1);
  *      body: { title?, location?, comment?, status?,
  *              participants?: [...], entryVersion?,  (E8-сверка версии)
  *              <те же RPA-поля v1.2, что в POST> }
+ *      V8-T7: status, отличный от текущего -> 400 status_change_forbidden (статус
+ *      меняется только PUT ?action=confirm; обратного перехода confirmed -> forecast
+ *      нет), равный текущему — допустим; у confirmed пустое location -> 400
+ *      location_required, пустой phone -> 400 phone_required (проверяются поля,
+ *      присланные в теле: так прежние подтверждённые записи без них правятся по
+ *      другим полям).
  * PUT  api/trips.php?id=trip_...&action=confirm — forecast -> confirmed
  *      (E12-2: после UPDATE, в той же транзакции, каждому участнику
  *      ставится заявка в trip_requests для RPA-робота; дубль-защита D4:
  *      участник с уже висящей queued/delivered заявкой пропускается;
  *      сбой очереди НЕ валит confirm — D1; V8-T2: пустое location ->
- *      400 location_required, повтор по уже подтверждённой — no-op 200)
+ *      400 location_required; V8-T7: пустой phone -> 400 phone_required;
+ *      повтор по уже подтверждённой — no-op 200)
  * DELETE api/trips.php?id=trip_...            — удаление (confirmed — только admin)
  *
  * Валидация RPA v1.2 (E12-1): advanceAmount — целое >= 0 (иначе 400
@@ -432,8 +440,14 @@ try {
         $location = isset($body['location']) ? (string) $body['location'] : null;
         $comment  = isset($body['comment']) ? (string) $body['comment'] : null;
         $status   = isset($body['status']) ? (string) $body['status'] : 'forecast';
-        if (!in_array($status, ['forecast', 'confirmed'], true)) {
-            sendJson(['error' => 'invalid_status'], 400);
+        // V8-T7 P2-2: командировка создаётся ТОЛЬКО прогнозом; подтверждение —
+        // отдельное действие PUT ?action=confirm (проверка места/телефона, заявки
+        // роботу). Раньше 'confirmed' в теле POST обходило и то и другое.
+        if ($status !== 'forecast') {
+            sendJson([
+                'error'   => 'invalid_status',
+                'message' => 'Командировка создаётся прогнозом; подтвердить её можно отдельным действием',
+            ], 400);
         }
         $rawParticipants = $body['participants'] ?? null;
         if (!is_array($rawParticipants) || $rawParticipants === []) {
@@ -644,6 +658,15 @@ try {
                     'message' => 'Укажите место назначения — без него командировку нельзя подтвердить',
                 ], 400);
             }
+            // V8-T7 P3-5 (решение владельца 2026-11-18): телефон сотрудника уходит
+            // роботу как employee.phone — обязателен для подтверждения (для прогноза
+            // нет). Проверка ДО транзакции, как и location.
+            if (trim((string) ($existing['phone'] ?? '')) === '') {
+                sendJson([
+                    'error'   => 'phone_required',
+                    'message' => 'Укажите телефон сотрудника — без него командировку нельзя подтвердить',
+                ], 400);
+            }
             // Гвард не нужен: до этой точки статус === forecast, а зонная
             // проверка по существующим участникам уже выполнена выше
             // (zone_forbidden). Спека §6/D2: confirm разрешён admin и
@@ -787,9 +810,28 @@ try {
         }
         $newLocation = array_key_exists('location', $body) ? (string) $body['location'] : $existing['location'];
         $newComment  = array_key_exists('comment', $body) ? (string) $body['comment'] : $existing['comment'];
-        $newStatus   = array_key_exists('status', $body) ? (string) $body['status'] : $existing['status'];
-        if (!in_array($newStatus, ['forecast', 'confirmed'], true)) {
-            sendJson(['error' => 'invalid_status'], 400);
+        // V8-T7 P2-2: статус меняется ТОЛЬКО через PUT ?action=confirm (там проверки места/телефона
+        // и заявки роботу). status в теле допустим лишь равный текущему (совместимость со
+        // старыми клиентами); иной — 400. Обратного перехода confirmed -> forecast нет.
+        $newStatus   = $existing['status'];
+        if (array_key_exists('status', $body)) {
+            $reqStatus = (string) $body['status'];
+            if (!in_array($reqStatus, ['forecast', 'confirmed'], true)) {
+                sendJson(['error' => 'invalid_status'], 400);
+            }
+            if ($reqStatus !== $existing['status']) {
+                sendJson([
+                    'error'   => 'status_change_forbidden',
+                    'message' => 'Статус командировки меняется только действием «Подтвердить»',
+                ], 400);
+            }
+        }
+        // V8-T7 P3-6: подтверждённая не остаётся без места назначения (PUT с пустым location).
+        if ($existing['status'] === 'confirmed' && array_key_exists('location', $body) && trim($newLocation) === '') {
+            sendJson([
+                'error'   => 'location_required',
+                'message' => 'Место назначения у подтверждённой командировки не может быть пустым',
+            ], 400);
         }
 
         // E12-1: RPA-поля v1.2. В PUT отсутствующее поле = «не менять».
@@ -819,6 +861,13 @@ try {
                 continue; // непустой сброс аванса в NULL не предусмотрен контрактом
             }
             $rpaUpdate[$col] = $val;
+        }
+        // V8-T7 P3-5: у подтверждённой телефон не может стать пустым (PUT с пустым phone).
+        if ($existing['status'] === 'confirmed' && array_key_exists('phone', $rpaUpdate) && trim((string) $rpaUpdate['phone']) === '') {
+            sendJson([
+                'error'   => 'phone_required',
+                'message' => 'Телефон сотрудника у подтверждённой командировки не может быть пустым',
+            ], 400);
         }
 
         // Зонная проверка нового состава.
