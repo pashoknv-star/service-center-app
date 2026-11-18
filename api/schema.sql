@@ -243,7 +243,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at  TEXT,
     updated_at  TEXT,
     closed_at   TEXT,
-    archived    INTEGER NOT NULL DEFAULT 0
+    archived    INTEGER NOT NULL DEFAULT 0,
+    links_text  TEXT   -- v14 (V9): поле «Связанные задачи» — свободный текст с токенами ((ID|название)); источник истины связей исходящей задачи
 );
 CREATE TABLE IF NOT EXISTS task_assignees (
     task_id     TEXT NOT NULL,
@@ -296,3 +297,19 @@ CREATE TABLE IF NOT EXISTS task_attachments (
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments (task_id);
+
+-- task_links (v14, V9): симметричная связь «Связанные задачи» — каноническая пара (task_a < task_b, побайтово).
+--   Строка есть, пока хотя бы в одной из двух задач в tasks.links_text остался токен ((ID|название)) на другую.
+--   Направление (исходящая/входящая) в таблице не хранится — вычисляется при чтении по токенам links_text.
+--   Строки не удаляются при close/reopen/архиве задачи (архивная = перечёркнутая ссылка у обеих сторон).
+CREATE TABLE IF NOT EXISTS task_links (
+    task_a     TEXT NOT NULL,
+    task_b     TEXT NOT NULL,
+    created_at TEXT,
+    created_by TEXT,
+    PRIMARY KEY (task_a, task_b),
+    CHECK (task_a < task_b),
+    FOREIGN KEY (task_a) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (task_b) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_links_b ON task_links (task_b);

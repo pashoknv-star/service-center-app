@@ -15,8 +15,8 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 )
-ALL_SUITES=(smoke tasks tasksn8n tasksatt tasksui tasksmx taskscal director emptasks e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 )
+ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks tasksui tasksmx taskscal director emptasks e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
 SUITE_TIMEOUT=600
 
 if [ $# -gt 0 ]; then SUITES=("$@"); else SUITES=("${ALL_SUITES[@]}"); fi
@@ -49,8 +49,8 @@ run_suite() {
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
              CNT=${p:-'-'}
              if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; fi ;;
-    tasks|tasksn8n|tasksatt)   # T1-1 / T1-4 / V7: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети; tasksatt — вложения) — на временной копии БД (SC_APP_DB), data/app.db не трогает.
-             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php; [ "$s" = tasksatt ] && php_t=api/task_files_test.php
+    tasks|tasksn8n|tasksatt|tasklinks)   # V9 (tasklinks — связанные задачи, schema v14); T1-1 / T1-4 / V7: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети; tasksatt — вложения) — на временной копии БД (SC_APP_DB), data/app.db не трогает.
+             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php; [ "$s" = tasksatt ] && php_t=api/task_files_test.php; [ "$s" = tasklinks ] && php_t=api/tasks_links_test.php
              timeout $SUITE_TIMEOUT php "$php_t" >"$log" 2>&1; rc=$?
              out=$(grep -Eo 'RESULTS: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')

@@ -1,0 +1,92 @@
+=== TASKLINKS TEST START ===
+E5-4: Очистка audit_log удалено 5556 записей старше 2026-11-11T17:51:48+00:00
+[1] M1 миграция копии dev-БД (v6) → v14: tasks.links_text (последняя колонка), task_links, индекс, CHECK пары; повтор — no-op: FAIL — schema_version: expected 14, got 13
+[2] M2 миграция v13 → v14 на копии: колонка и таблица добавлены, данные задач/людей/вложений прежние, повтор и «ложная 13» безопасны: FAIL — подготовка: копия dev-БД v6 → v14: expected "6>14", got "6>13"
+[3] P1 парсер: одиночный токен ((ID|название)); окружающий текст не мешает; ID по реальному генератору id (task_<hex>.<цифры>): FAIL — tasks_links_parse() не реализована
+[4] P2 парсер: несколько токенов — порядок сохранён; дубли по id схлопываются (первое вхождение): FAIL — tasks_links_parse() не реализована
+[5] P3 парсер: пустое (()) и «пустые» токены игнорируются; null/пустая строка → []: FAIL — tasks_links_parse() не реализована
+[6] P4 парсер: токен без названия ((ID)); название с мусором (| внутри, скобки) — разбор только по ID; перевод строки в названии → не токен: FAIL — tasks_links_parse() не реализована
+[7] P5 парсер: невалидный ID (пробелы, кириллица, спецсимволы, >64 символов) — не токен, обычный текст: FAIL — tasks_links_parse() не реализована
+PHP Warning:  Undefined array key "links_text" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 417
+[8] W1 создание задачи со ссылкой: A→B видна у обеих сторон (A: out, B: in); одна строка task_links (каноническая пара); links_text сохранён; аудит link_add: FAIL — links_text: expected "Связана с ((task_6afde5b55215e8.33478946|Задача Б)) — см.", got null
+[9] W2 встречная ссылка B→A при уже существующей A→B не создаёт вторую строку; обе стороны out; аудит link_add не добавляется: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+[10] W3 удаление токена убирает связь с обеих сторон; при встречном токене связь сохраняется (направление становится in): FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+PHP Warning:  Undefined array key "links" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 488
+[11] W4 очистка: links_text null и '' → NULL в БД, связи сняты; text без токенов — связей нет: FAIL — count(): Argument #1 ($value) must be of type Countable|array, null given
+[12] W5 самосвязь → 422 link_self (PUT); задача и связи не изменены: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+PHP Warning:  Undefined array key "error" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 514
+[13] W6 неизвестный ID → 422 link_unknown (POST и PUT); при отказе POST задача не создаётся: FAIL — POST {
+    "success": true,
+    "task": {
+        "id": "task_6afde5b5716944.67639778",
+        "title": "W6",
+        "description": null,
+        "start_at": "2031-04-05",
+        "end_at": null,
+        "priority": 2,
+        "label": null,
+        "labels": [],
+        "status": "open",
+        …(+985): expected [422,"link_unknown"], got [201,null]
+PHP Warning:  Undefined array key "error" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 529
+[14] W7 новая связь на архивную → 409 link_target_archived (POST и PUT); данные не изменены: FAIL — POST {
+    "success": true,
+    "task": {
+        "id": "task_6afde5b57947e0.49155154",
+        "title": "W7",
+        "description": null,
+        "start_at": "2031-04-05",
+        "end_at": null,
+        "priority": 2,
+        "label": null,
+        "labels": [],
+        "status": "open",
+        …(+985): expected [409,"link_target_archived"], got [201,null]
+[15] W8 существующая связь с позже удалённой (архивной) сохраняется и помечена archived у обеих сторон; PUT с тем же токеном проходит; снять токен можно: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+PHP Warning:  Undefined array key "error" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 575
+[16] W9 лимит связей: 50 различных — ок, 51 → 422 links_too_many; дубли токенов считаются один раз: FAIL — 51: {
+    "success": true,
+    "unchanged": true,
+    "task": {
+        "id": "task_6afde5b5a7c192.72360337",
+        "title": "W9 лимит",
+        "description": null,
+        "start_at": "2031-04-05: expected [422,"links_too_many"], got [200,null]
+[17] W10 дубли токенов схлопываются: одна строка, одна запись links[], одна запись аудита: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+[18] W11 VERSION_CONFLICT: устаревшая version + links_text → 409, ничего не записано; актуальная задача в ответе: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+PHP Warning:  Undefined array key "error" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 609
+[19] W12 валидация links_text: не строка → 400 invalid_links_text; длина > 5000 → 400 (как description); ровно 5000 — ок: FAIL — тип 123: expected [400,"invalid_links_text"], got [200,null]
+PHP Warning:  Undefined array key "links_text" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 623
+PHP Warning:  Undefined array key "links_text" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 625
+[20] W13 PUT без изменений links_text (тот же текст) → unchanged, версия не растёт; только links_text → версия +1, аудит task.update с changed:[links_text]: FAIL — изменён только links_text: expected [200,2], got [200,1]
+[21] W14 атомарность: PUT с валидным изменением названия и ошибочным токеном → 422, название не изменилось; задача + связи пишутся одной транзакцией: FAIL — статус: expected 422, got 200
+[22] W15 невалидный ID в токене и «пустое (())» не дают связей и ошибок: текст сохраняется как есть: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+[23] W16 вторая сторона: updated_at обновляется при добавлении/удалении связи, version — нет; своя задача — version +1: FAIL — updated_at второй стороны обновлён (add)
+PHP Warning:  Undefined array key "links" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 687
+PHP Warning:  Trying to access array offset on null in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 687
+[24] R1 форма: links_text/links/links_n есть в карточке и в строках списка; items ровно {id,title,status,archived,direction}; названия/статусы актуальные: FAIL — array_keys(): Argument #1 ($array) must be of type array, null given
+PHP Warning:  Undefined array key "links" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 711
+[25] R2 порядок links: сначала исходящие (в порядке токенов), затем входящие (по названию): FAIL — array_map(): Argument #2 ($array) must be of type array, null given
+PHP Warning:  Undefined array key "links_n" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 721
+PHP Warning:  Undefined array key "links" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 721
+PHP Warning:  Trying to access array offset on null in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 721
+PHP Warning:  Trying to access array offset on null in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 721
+[26] R3 права: supervisor/viewer читают links (?id, список), ?pick, ?related → 200; запись с links_text → 403 без изменений; аноним → 401: FAIL — supervisor ?id: expected [200,1,"task_6afde5b609e785.95265240"], got [200,null,null]
+[27] Q1 ?pick=1: {success,tasks:[{id,title,status,start_at}]}; открытые И закрытые; архивных нет; сортировка start_at DESC: FAIL — ключи: expected ["id","title","status","start_at"], got ["id","title","description","start_at","end_at","priority","label","labels","status","check_state","version","created_by","created_at","updated_at","closed_at","archived","assignees","orphan","watchers","checklist","first_day","last_day","days","conflict","conflict_days","notes","occurrences","next_…(+18)
+PHP Warning:  Undefined array key "ids" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 787
+[28] L1 ?related: цепочка 1–2–3 из любой точки — все три, исходная первой, остальные по start_at ASC; tasks[] — полные карточки в том же порядке: FAIL — ids из task_6afde5b625f735.55501315: expected ["task_6afde5b625f735.55501315","task_6afde5b62aa1d6.96156424","task_6afde5b6288248.89759205"], got null
+PHP Warning:  Undefined array key "ids" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 805
+[29] L2 ?related: цикл 1→2→3→1 — без дублей; изолированная задача — только она сама: FAIL — count(): Argument #1 ($value) must be of type Countable|array, null given
+PHP Warning:  Undefined array key "ids" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 821
+[30] L3 ?related: разрыв через архивную — не проходит через неё; архивные в список не попадают; id архивной → 409 task_archived; неизвестный → 404: FAIL — от t1: t2 не проходит, t3 недостижима: expected ["task_6afde5b6450894.70784573","task_6afde5b64cca20.12553472"], got null
+[31] L4 ?related: лимит 200 задач; исходная первой; truncated=true; ровно 200 — truncated отсутствует/false: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+[32] C1 close/reopen/DELETE (архив) не создают и не меняют task_links и links_text; version меняется только у самой задачи: FAIL — SQLSTATE[HY000]: General error: 1 no such table: task_links
+PHP Warning:  Undefined array key "links_n" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 897
+[33] C2 повторы (task_occurrences) и FR-10: PUT только links_text не трогает повторы и check_state; PUT с occurrences + links_text работает: FAIL — оба изменения: expected ["2039-01-12T10:00",0], got ["2039-01-12T10:00",null]
+[34] C3 путей копирования задач с переносом связей нет: в api/ нет дублирования задачи (copy/duplicate/clone), tasks.php не копирует links_text: PASS — ok
+PHP Warning:  Undefined array key "links" in /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/red2/api/tasks_links_test.php on line 920
+[35] V1 объём списка: у задач без связей links=[] и links_n=0 (добавка к строке — десятки байт); у связанных — links в строке: FAIL — типы
+[36] Q2 ?pick=1: лимит 2000 (вставлено 2105 открытых), самые поздние start_at первыми: FAIL — DESC: expected ["2090-10-25","2090-10-25","2090-10-25","2090-10-24","2090-10-24","2090-10-24","2090-10-23","2090-10-23","2090-10-23","2090-10-22","2090-10-22","2090-10-22","2090-10-21","2090-10-21","2090-10-21","2090-10-20","2090-10-20","2090-10-20","2090-10-20","2090-10-19","2090-10-19","2090-10-19","2090-10-19",…(+25707), got ["2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05","2031-04-05",…(+25707)
+[37] G1 нет утечки: ответы ?pick/?related не содержат телефонов/фото/путей; методы/ошибки — как у модуля: FAIL — пустой related → 404 not_found: expected 404, got 200
+=== RESULTS: 1 passed, 36 failed out of 37 ===
+DB intact: YES

@@ -103,22 +103,22 @@ $metaBefore = $pdo->query("SELECT key, value FROM meta WHERE key != 'schema_vers
 
 out('=== TASKS TEST START ===');
 
-$run('M1 миграция: схема < 9 → 13 (v10 T1-7, v11 V6-3, v12 V6.3-2, v13 V7), три таблицы созданы', function () use ($db, $pdo, $verBefore) {
+$run('M1 миграция: схема < 9 → 14 (v10 T1-7, v11 V6-3, v12 V6.3-2, v13 V7, v14 V9), три таблицы созданы', function () use ($db, $pdo, $verBefore) {
     ok($verBefore < 9, 'ожидалась исходная схема < 9, а не ' . $verBefore);
     $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('tasks','task_assignees','task_checklist')")
         ->fetchAll(PDO::FETCH_COLUMN);
     ok(count($has) === 0, 'таблицы задач уже есть до миграции');
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'schema_version');
+    eq($db->getSchemaVersion(), 14, 'schema_version');
     $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('tasks','task_assignees','task_checklist') ORDER BY name")
         ->fetchAll(PDO::FETCH_COLUMN);
     eq($has, ['task_assignees', 'task_checklist', 'tasks'], 'tables');
-    return 'v' . $verBefore . '→v13';
+    return 'v' . $verBefore . '→v14';
 });
 
 $run('M2 миграция: колонки и индексы по TZ §1', function () use ($pdo) {
     eq(tcols($pdo, 'tasks'), ['id', 'title', 'description', 'start_at', 'end_at', 'priority', 'label', 'status',
-        'check_state', 'version', 'created_by', 'created_at', 'updated_at', 'closed_at', 'archived'], 'tasks cols');
+        'check_state', 'version', 'created_by', 'created_at', 'updated_at', 'closed_at', 'archived', 'links_text'], 'tasks cols');
     eq(tcols($pdo, 'task_assignees'), ['task_id', 'employee_id', 'role', 'full_name_snapshot'], 'task_assignees cols');
     eq(tcols($pdo, 'task_checklist'), ['id', 'task_id', 'text', 'done', 'sort_order'], 'task_checklist cols');
     $idx = $pdo->query("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_task%' ORDER BY name")
@@ -176,14 +176,14 @@ $run('M3 миграция: существующие данные не трону
 
 $run('M4 миграция идемпотентна (повтор + откат версии на 8 с данными задач)', function () use ($db, $pdo) {
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'повторная миграция');
+    eq($db->getSchemaVersion(), 14, 'повторная миграция');
     $pdo->exec("INSERT INTO tasks (id, title, start_at) VALUES ('tt_keep', 'keep', '2030-01-02')");
     $pdo->exec("UPDATE meta SET value = '8' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'миграция с v8');
+    eq($db->getSchemaVersion(), 14, 'миграция с v8');
     eq((int) $pdo->query("SELECT COUNT(*) FROM tasks WHERE id = 'tt_keep'")->fetchColumn(), 1, 'строка задачи сохранена');
     $pdo->exec("DELETE FROM tasks WHERE id = 'tt_keep'");
-    return 'v13→v13, v8→v13';
+    return 'v14→v14, v8→v14';
 });
 
 // Фикстуры: сотрудники (с «секретными» phone/photo — проверка приватности ответов).
@@ -216,7 +216,7 @@ $run('M6 миграция v10→v11: g3 «В2С»/«Директор СЦ»→«
     $pdo->exec("UPDATE groups SET name = 'В2С' WHERE id = 'g3'");
     $pdo->exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'schema_version');
+    eq($db->getSchemaVersion(), 14, 'schema_version');
     eq($pdo->query("SELECT name FROM groups WHERE id = 'g3'")->fetchColumn(), 'Управление СЦ', 'g3 переименована');
     eq($pdo->query("SELECT COUNT(*) FROM groups WHERE name = 'В2С'")->fetchColumn() + 0, 0, 'старого имени не осталось');
     eq($pdo->query("SELECT id, name, sort_order FROM groups WHERE id != 'g3' ORDER BY id")->fetchAll(PDO::FETCH_ASSOC), $others, 'прочие группы не тронуты');
@@ -269,7 +269,7 @@ $run('M5 миграция v9→v10: task_assignees без FK на employees + fu
     $fkBefore = (int) $pdo->query('PRAGMA foreign_keys')->fetchColumn();
     $pdo->exec("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'schema_version');
+    eq($db->getSchemaVersion(), 14, 'schema_version');
     eq(tcols($pdo, 'task_assignees'), ['task_id', 'employee_id', 'role', 'full_name_snapshot'], 'cols');
     $fks = $pdo->query('PRAGMA foreign_key_list(task_assignees)')->fetchAll(PDO::FETCH_ASSOC);
     eq(array_map(fn($f) => [$f['table'], $f['on_delete']], $fks), [['tasks', 'CASCADE']], 'FK только на tasks');
@@ -284,7 +284,7 @@ $run('M5 миграция v9→v10: task_assignees без FK на employees + fu
     // Повторный запуск (версия снова 9) — таблица уже v10, ничего не меняется.
     $pdo->exec("UPDATE meta SET value = '9' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'schema_version после повтора');
+    eq($db->getSchemaVersion(), 14, 'schema_version после повтора');
     $again = $pdo->query('SELECT task_id, employee_id, role, full_name_snapshot FROM task_assignees ORDER BY task_id, employee_id, role')->fetchAll(PDO::FETCH_ASSOC);
     eq(count($again), 3, 'число строк после повтора');
     eq($again[0]['full_name_snapshot'], 'Миграц Первый', 'snapshot после повтора');
@@ -307,7 +307,7 @@ $run('M7 миграция v11→v12: task_occurrences (колонки, инде�
     $pdo->exec("INSERT INTO tasks (id, title, start_at) VALUES ('tt_v12', 'v12', '2030-05-01')");
     $snap = snapshotTables($pdo, ['audit_log', 'meta']);
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'schema_version');
+    eq($db->getSchemaVersion(), 14, 'schema_version');
     eq(tcols($pdo, 'task_occurrences'), ['id', 'task_id', 'start_at', 'end_at'], 'cols');
     $snapAfter = snapshotTables($pdo, ['audit_log', 'meta', 'task_occurrences']);
     eq($snapAfter, $snap, 'существующие данные побайтово равны (только добавление)');
@@ -319,7 +319,7 @@ $run('M7 миграция v11→v12: task_occurrences (колонки, инде�
     $pdo->exec("INSERT INTO task_occurrences (task_id, start_at, end_at) VALUES ('tt_v12', '2030-05-10T10:00', '2030-05-10T11:00')");
     $pdo->exec("UPDATE meta SET value = '11' WHERE key = 'schema_version'");
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'schema_version после повтора');
+    eq($db->getSchemaVersion(), 14, 'schema_version после повтора');
     eq((int) $pdo->query("SELECT COUNT(*) FROM task_occurrences WHERE task_id = 'tt_v12'")->fetchColumn(), 1, 'повтор не стёр повторы');
     // Ограничения и каскад.
     $threw = false;
@@ -1770,9 +1770,9 @@ try {
         foreach ($old as $k) {
             ok(in_array($k, $keys, true), 'поле осталось: ' . $k);
         }
-        eq(array_values(array_diff($keys, $old)), ['occurrences', 'next_at', 'attachments'], 'новые поля — только occurrences, next_at, attachments (V7)');
+        eq(array_values(array_diff($keys, $old)), ['occurrences', 'next_at', 'attachments', 'links_text', 'links', 'links_n'], 'новые поля — только occurrences, next_at, attachments (V7), links_text, links, links_n (V9)');
         eq(array_keys($t['occurrences'][0]), ['id', 'start_at', 'end_at'], 'форма повтора');
-        return count($old) . ' прежних полей + 3';
+        return count($old) . ' прежних полей + 6';
     });
 
     $run('G2 нет утечки: ошибки не раскрывают пути; OPTIONS → 204; неподдерживаемый метод → 405', function () use ($A, $T) {

@@ -32,7 +32,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 13;
+    private const SCHEMA_VERSION = 14;
 
     private static ?Database $instance = null;
 
@@ -371,6 +371,27 @@ final class Database
                 ')'
             );
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments (task_id)');
+        }
+
+        // --- v13 → v14 (V9): связанные задачи ---
+        // Только добавление: колонка tasks.links_text (под проверкой PRAGMA table_info) + таблица task_links
+        // (каноническая пара task_a < task_b, PK, FK CASCADE) + индекс по task_b. Существующие данные не
+        // затрагиваются; IF NOT EXISTS / проверка колонки — повтор — no-op (свежая БД получает то же из schema.sql).
+        if ($current < 14) {
+            $this->addColumnIfNotExists('tasks', 'links_text', 'TEXT');
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS task_links (' .
+                "    task_a     TEXT NOT NULL," .
+                "    task_b     TEXT NOT NULL," .
+                "    created_at TEXT," .
+                "    created_by TEXT," .
+                "    PRIMARY KEY (task_a, task_b)," .
+                "    CHECK (task_a < task_b)," .
+                "    FOREIGN KEY (task_a) REFERENCES tasks(id) ON DELETE CASCADE," .
+                "    FOREIGN KEY (task_b) REFERENCES tasks(id) ON DELETE CASCADE" .
+                ')'
+            );
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_links_b ON task_links (task_b)');
         }
 
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---

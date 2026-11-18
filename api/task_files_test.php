@@ -69,14 +69,14 @@ $verBefore = $db->getSchemaVersion();
 
 $run('M1 миграция → v13: таблица task_attachments (колонки, UNIQUE stored_name, FK CASCADE, индекс)', function () use ($db, $pdo, $verBefore) {
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'schema_version');
+    eq($db->getSchemaVersion(), 14, 'schema_version');
     $cols = $pdo->query('PRAGMA table_info(task_attachments)')->fetchAll(PDO::FETCH_COLUMN, 1);
     eq($cols, ['id', 'task_id', 'orig_name', 'stored_name', 'mime', 'size', 'uploaded_by', 'uploaded_at'], 'cols');
     $fk = $pdo->query('PRAGMA foreign_key_list(task_attachments)')->fetchAll(PDO::FETCH_ASSOC);
     eq(array_map(fn($f) => [$f['table'], $f['on_delete']], $fk), [['tasks', 'CASCADE']], 'FK');
     $idx = $pdo->query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='task_attachments'")->fetchAll(PDO::FETCH_COLUMN);
     ok(in_array('idx_task_attachments_task', $idx, true), 'индекс');
-    return 'v' . $verBefore . '→v13';
+    return 'v' . $verBefore . '→v14';
 });
 
 $run('M2 миграция v12 → v13 на БД с задачами: данные задач не тронуты, повтор — no-op', function () use ($db, $pdo) {
@@ -85,7 +85,7 @@ $run('M2 миграция v12 → v13 на БД с задачами: данны�
     $pdo->exec("UPDATE meta SET value = '12' WHERE key = 'schema_version'");
     $snap = md5(json_encode($pdo->query('SELECT * FROM tasks ORDER BY id')->fetchAll(PDO::FETCH_ASSOC)));
     $db->migrate();
-    eq($db->getSchemaVersion(), 13, 'v13');
+    eq($db->getSchemaVersion(), 14, 'v14 (после v13 — V9)');
     eq(md5(json_encode($pdo->query('SELECT * FROM tasks ORDER BY id')->fetchAll(PDO::FETCH_ASSOC))), $snap, 'tasks не изменились');
     $pdo->exec("UPDATE meta SET value = '12' WHERE key = 'schema_version'");
     $db->migrate();

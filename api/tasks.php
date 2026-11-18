@@ -33,6 +33,15 @@ declare(strict_types=1);
  * Все мутации → audit_log: task.create / task.update / task.close / task.reopen / task.archive.
  * V7: в ответе задачи attachments: [{id,name,ext,size,uploaded_by,uploaded_at,inline}] (запись — api/task_files.php);
  *     DELETE (архив) удаляет вложения задачи с сервера (audit task.archive.details.attachments_deleted).
+ * V9 (схема v14, логика — api/tasks_links.php): связанные задачи. Поле links_text в теле create/PUT (необязательно;
+ *     null/'' = очистить; ≤ TASKS_LINKS_TEXT_MAX) — свободный текст с токенами ((ID|название)); сервер в той же транзакции
+ *     пересобирает строки task_links (симметричная каноническая пара). Ошибки: 422 link_self / link_unknown /
+ *     links_too_many, 409 link_target_archived (только для НОВОЙ связи), 400 invalid_links_text. Аудит: task.link_add /
+ *     task.link_remove. В ответе задачи: links_text, links: [{id,title,status,archived,direction:'out'|'in'}], links_n.
+ *     GET ?pick=1 → { success, tasks: [{id,title,status,start_at}] } (все неархивные, ≤ 2000, start_at DESC);
+ *     GET ?related=<id> → { success, ids: [...исходная первой...], tasks: [полные карточки], truncated? } (компонент связности,
+ *     BFS, архивные не проходятся, ≤ 200; неизвестный id → 404 not_found, архивный → 409 task_archived).
+ *     close/reopen/DELETE связей не создают и не меняют.
  * Время — локальное +05, ISO без смещения. check_state: 'ok' | 'pending'
  * (n8n, T1-4: см. tasks_check_period_checked() — вердикт tasks-validate, при недоступности
  * PHP-fallback + 'pending'; перепроверка pending — tasks_recheck_pending() после ответа на чтение списка,
@@ -43,12 +52,14 @@ require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/tasks_rules.php';
+require_once __DIR__ . '/tasks_links.php';   // V9: связанные задачи (токены ((ID|название)), task_links)
 require_once __DIR__ . '/task_files_lib.php';   // V7: вложения задач
 
 handleOptions();
 
 const TASKS_TITLE_MAX = 200;
 const TASKS_DESC_MAX = 5000;
+const TASKS_LINKS_TEXT_MAX = 5000;   // V9: поле «Связанные задачи» (свободный текст с токенами) — тот же лимит, что у описания
 const TASKS_LABEL_MAX = 200;       // V6.2 (W-4): вся строка тегов «тег1, тег2»
 const TASKS_LABEL_TAG_MAX = 30;    // V6.2 (W-4): один тег
 const TASKS_CHECK_TEXT_MAX = 300;
@@ -267,10 +278,11 @@ function tasks_load_occurrences(PDO $pdo, array $ids): array
  *
  * @param array<string, array>|null $occMap task_id => повторы (tasks_load_occurrences); null — загрузить для этой задачи
  */
-function tasks_build(PDO $pdo, array $row, array $people, array $checks, ?array $occMap = null, ?array $attMap = null): array
+function tasks_build(PDO $pdo, array $row, array $people, array $checks, ?array $occMap = null, ?array $attMap = null, ?array $linkMap = null): array
 {
     $id = (string) $row['id'];
     $attachments = $attMap !== null ? ($attMap[$id] ?? []) : (tf_load($pdo, [$id])[$id] ?? []);   // V7
+    $links = $linkMap !== null ? ($linkMap[$id] ?? []) : (tasks_links_load($pdo, [$row])[$id] ?? []);   // V9
     $assignees = $people[$id]['assignee'] ?? [];
     $watchers = $people[$id]['watcher'] ?? [];
     $occurrences = $occMap !== null ? ($occMap[$id] ?? []) : (tasks_load_occurrences($pdo, [$id])[$id] ?? []);
@@ -333,7 +345,30 @@ function tasks_build(PDO $pdo, array $row, array $people, array $checks, ?array 
         'occurrences'   => $occurrences,                                                              // V6.3-2 (Д-1)
         'next_at'       => tasks_next_at((string) $row['start_at'], $row['end_at'], $occurrences),    // V6.3-2 (Д-1)
         'attachments'   => $attachments,                                                              // V7: вложения (метаданные)
+        'links_text'    => isset($row['links_text']) && is_string($row['links_text']) ? $row['links_text'] : null,   // V9: поле «Связанные задачи»
+        'links'         => $links,                                                                    // V9: [{id,title,status,archived,direction}]
+        'links_n'       => count($links),                                                              // V9
     ];
+}
+
+/**
+ * Собирает ответы по набору строк tasks (люди, чек-листы, повторы, вложения, связи — пачками).
+ *
+ * @param array<int, array<string, mixed>> $rows
+ * @return array<int, array<string, mixed>>
+ */
+function tasks_build_many(PDO $pdo, array $rows): array
+{
+    $ids = array_map(static fn($r) => (string) $r['id'], $rows);
+    [$people, $checks] = tasks_load_related($pdo, $ids);
+    $occMap = tasks_load_occurrences($pdo, $ids);
+    $attMap = tf_load($pdo, $ids);   // V7
+    $linkMap = tasks_links_load($pdo, $rows);   // V9: links[] пачкой (один запрос по task_links + один по tasks)
+    $tasks = [];
+    foreach ($rows as $r) {
+        $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap, $attMap, $linkMap);
+    }
+    return $tasks;
 }
 
 function tasks_fetch(PDO $pdo, string $id): ?array
@@ -910,6 +945,60 @@ try {
             sendJson(['success' => true, 'task' => $task]);
         }
 
+        // V9: окно выбора связанной задачи — все НЕархивные (открытые и закрытые), облегчённо, start_at DESC.
+        if (isset($_GET['pick']) && strToBool($_GET['pick'])) {
+            $stmt = $pdo->prepare(
+                'SELECT id, title, status, start_at FROM tasks WHERE archived = 0 ORDER BY start_at DESC, id LIMIT ' . TASKS_PICK_LIMIT
+            );
+            $stmt->execute();
+            $list = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $list[] = [
+                    'id'       => (string) $r['id'],
+                    'title'    => (string) $r['title'],
+                    'status'   => (string) $r['status'],
+                    'start_at' => (string) $r['start_at'],
+                ];
+            }
+            sendJson(['success' => true, 'tasks' => $list]);
+        }
+
+        // V9: компонент связности для фильтра «Связанные задачи» Списка: ids (исходная первой, остальные по
+        // start_at) + полные карточки в том же формате, что строки списка (UI не делает N запросов).
+        if (isset($_GET['related'])) {
+            $relId = (string) $_GET['related'];
+            $relRow = $relId !== '' ? tasks_get_row($pdo, $relId) : null;
+            if ($relRow === null) {
+                tasks_fail('not_found', 404);
+            }
+            if ((int) $relRow['archived'] === 1) {
+                tasks_fail('task_archived', 409);
+            }
+            $comp = tasks_links_component($pdo, $relId);
+            $rows = [];
+            foreach (array_chunk($comp['ids'], TASKS_LINKS_CHUNK) as $chunk) {
+                $st = $pdo->prepare('SELECT * FROM tasks WHERE id IN (' . tasks_links_in(count($chunk)) . ')');
+                $st->execute($chunk);
+                foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $rows[(string) $r['id']] = $r;
+                }
+            }
+            $ordered = [];
+            foreach ($comp['ids'] as $cid) {
+                if (isset($rows[$cid])) {
+                    $ordered[] = $rows[$cid];
+                }
+            }
+            $payload = [
+                'success' => true,
+                'ids'     => array_map(static fn($r) => (string) $r['id'], $ordered),
+                'tasks'   => tasks_build_many($pdo, $ordered),
+            ];
+            if ($comp['truncated']) {
+                $payload['truncated'] = true;
+            }
+            sendJson($payload);
+        }
         // T1-7 (D-1): открытые неархивные задачи без действующего исполнителя (без фильтра периода).
         if (isset($_GET['orphans']) && strToBool($_GET['orphans'])) {
             $stmt = $pdo->prepare(
@@ -921,13 +1010,7 @@ try {
             );
             $stmt->execute();
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            [$people, $checks] = tasks_load_related($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
-            $occMap = tasks_load_occurrences($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
-            $attMap = tf_load($pdo, array_map(static fn($r) => (string) $r['id'], $rows));   // V7
-            $tasks = [];
-            foreach ($rows as $r) {
-                $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap, $attMap);
-            }
+            $tasks = tasks_build_many($pdo, $rows);
             sendJson(['success' => true, 'count' => count($tasks), 'tasks' => $tasks]);
         }
 
@@ -1003,13 +1086,7 @@ try {
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        [$people, $checks] = tasks_load_related($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
-        $occMap = tasks_load_occurrences($pdo, array_map(static fn($r) => (string) $r['id'], $rows));
-        $attMap = tf_load($pdo, array_map(static fn($r) => (string) $r['id'], $rows));   // V7
-        $tasks = [];
-        foreach ($rows as $r) {
-            $tasks[] = tasks_build($pdo, $r, $people, $checks, $occMap, $attMap);
-        }
+        $tasks = tasks_build_many($pdo, $rows);
         $listPayload = [
             'success' => true,
             'tasks'   => $tasks,
@@ -1070,6 +1147,9 @@ try {
         $occurrences = array_key_exists('occurrences', $body)
             ? tasks_norm_occurrences($body['occurrences'], (string) $startAt, $endAt) : [];   // V6.3-2 (Д-1)
         tasks_assert_employees($pdo, array_merge($assignees, $watchers));
+        // V9: поле «Связанные задачи» — проверка токенов до транзакции (422 link_unknown / 409 link_target_archived / 422 links_too_many).
+        $linksText = array_key_exists('links_text', $body) ? tasks_norm_text($body['links_text'], TASKS_LINKS_TEXT_MAX, 'invalid_links_text') : null;
+        $linkIds = $linksText !== null ? tasks_links_validate($pdo, '', $linksText) : [];
 
         $user = current_user();
         $username = is_array($user) && !empty($user['username']) ? (string) $user['username'] : 'api';
@@ -1087,11 +1167,11 @@ try {
             $ts = now();
             $pdo->prepare(
                 'INSERT INTO tasks (id, title, description, start_at, end_at, priority, label, status,
-                                    check_state, version, created_by, created_at, updated_at, archived)
-                 VALUES (:id, :title, :desc, :s, :e, :p, :label, \'open\', :cs, 1, :by, :ts, :ts, 0)'
+                                    check_state, version, created_by, created_at, updated_at, archived, links_text)
+                 VALUES (:id, :title, :desc, :s, :e, :p, :label, \'open\', :cs, 1, :by, :ts, :ts, 0, :lt)'
             )->execute([
                 ':id' => $newId, ':title' => $title, ':desc' => $description, ':s' => $startAt, ':e' => $endAt,
-                ':p' => $priority, ':label' => $label, ':cs' => $checkState, ':by' => $username, ':ts' => $ts,
+                ':p' => $priority, ':label' => $label, ':cs' => $checkState, ':by' => $username, ':ts' => $ts, ':lt' => $linksText,
             ]);
             tasks_replace_people($pdo, $newId, $assignees, $watchers);
             tasks_sync_checklist($pdo, $newId, $checklist);
@@ -1108,6 +1188,9 @@ try {
                 $auditDetails['occurrences'] = array_column($occurrences, 'start_at');
             }
             tasks_audit($pdo, 'task.create', $newId, $auditDetails);
+            if ($linkIds !== []) {
+                tasks_links_apply($pdo, $newId, $title, null, $linkIds, $ts, $username);   // V9: строки task_links + аудит link_add — в той же транзакции
+            }
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -1451,6 +1534,18 @@ try {
     if ($occChanged) {
         $changed[] = 'occurrences';
     }
+    // V9: «Связанные задачи». Ключ links_text в теле: null/'' → очистить; строка → нормализуется как описание;
+    // токены проверяются ДО транзакции (422 link_self/link_unknown/links_too_many, 409 link_target_archived для НОВОЙ связи).
+    $oldLinksText = isset($row['links_text']) && is_string($row['links_text']) ? $row['links_text'] : null;
+    $newLinksText = $oldLinksText;
+    $linkIds = [];
+    if (array_key_exists('links_text', $body)) {
+        $newLinksText = tasks_norm_text($body['links_text'], TASKS_LINKS_TEXT_MAX, 'invalid_links_text');
+        if ($newLinksText !== $oldLinksText) {
+            $linkIds = $newLinksText !== null ? tasks_links_validate($pdo, $id, $newLinksText) : [];
+            $changed[] = 'links_text';
+        }
+    }
     if ($changed === []) {
         sendJson(['success' => true, 'unchanged' => true, 'task' => tasks_fetch($pdo, $id)]);
     }
@@ -1477,14 +1572,14 @@ try {
         $ts = now();
         $upd = $pdo->prepare(
             'UPDATE tasks SET title = :title, description = :desc, start_at = :s, end_at = :e,
-                    priority = :p, label = :label, check_state = :cs,
+                    priority = :p, label = :label, check_state = :cs, links_text = :lt,
                     version = version + 1, updated_at = :ts
              WHERE id = :id AND version = :v'
         );
         $upd->execute([
             ':title' => $new['title'], ':desc' => $new['description'], ':s' => $new['start_at'],
             ':e' => $new['end_at'], ':p' => $new['priority'], ':label' => $new['label'],
-            ':cs' => $checkState, ':ts' => $ts, ':id' => $id, ':v' => (int) $row['version'],
+            ':cs' => $checkState, ':lt' => $newLinksText, ':ts' => $ts, ':id' => $id, ':v' => (int) $row['version'],
         ]);
         if ($upd->rowCount() !== 1) {
             $pdo->rollBack();
@@ -1518,6 +1613,10 @@ try {
             $details['period_after'] = [$new['start_at'], $new['end_at']];
         }
         tasks_audit($pdo, 'task.update', $id, $details);
+        if (in_array('links_text', $changed, true)) {
+            // V9: пересборка строк task_links этой задачи (диф) + updated_at второй стороны — в той же транзакции, что и сохранение.
+            tasks_links_apply($pdo, $id, $new['title'], $oldLinksText, $linkIds, $ts, $username);
+        }
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
