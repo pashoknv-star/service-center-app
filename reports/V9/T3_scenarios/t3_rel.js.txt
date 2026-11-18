@@ -1,0 +1,25 @@
+'use strict';
+const ROOT = '/home/hermes/service-center-app';
+const L = require(ROOT + '/scripts/v6_accept_lib.js');
+const sleep = L.sleep; const q = JSON.stringify;
+(async () => {
+  const env = await L.startEnv();
+  try {
+    const admin = (await L.login(env.base, 'admin')).join('; ');
+    const api = (m, u, b) => L.http(env.base, admin, m, u, b);
+    const mk = async (title, extra) => (await api('POST', 'api/tasks.php', Object.assign({ title, start_at: '2031-06-01', assignees: ['emp_2'] }, extra || {}))).json.task;
+    const A = await mk('Альфа'); const B = await mk('Бета', { links_text: '((' + A.id + '|Альфа))' });
+    const { cdp } = await env.openBrowser(); const k = L.pageKit(cdp, env.base, process.env.TMPDIR); const ev = (x) => cdp.ev(x);
+    await k.size(1280, 900); await k.load(admin.split('; '));
+    const S = () => ev('JSON.stringify({view: Tasks.__t.S.view, rel: Tasks.__t.S.filters.rel || "", sel: Tasks.__t.S.selectedId === ' + q(A.id) + ' ? "A" : (Tasks.__t.S.selectedId === ' + q(B.id) + ' ? "B" : Tasks.__t.S.selectedId), bar: !!document.querySelector("[data-tk-relbar]"), rows: document.querySelectorAll("#tasksView tbody tr.tk-row").length, cards: document.querySelectorAll("#tasksView .tk-card").length})');
+    await ev('Tasks.open({view:"board", taskId:' + q(B.id) + '})'); await sleep(1200);
+    await k.click('#tasksView .tk-detail a.tk-lk'); await sleep(900); console.log('1 rel-список      ', await S());
+    await k.click('#tasksView tr.tk-row[data-id="' + A.id + '"] .tk-c-task b'); await sleep(900); console.log('2 клик по названию', await S());
+    await k.click('[data-tk-act="setView"][data-view="list"]'); await sleep(900); console.log('3 вкладка Список  ', await S());
+    await k.click('[data-tk-act="setView"][data-view="calendar"]'); await sleep(900); console.log('4 Календарь       ', await S());
+    await ev('Tasks.open({view:"board", taskId:' + q(B.id) + '})'); await sleep(600);
+    // карточка из календаря: чип
+    await k.click('[data-tk-act="setView"][data-view="list"]'); await sleep(900); console.log('5 Список снова    ', await S());
+    console.log('exceptions', cdp.exceptions.length);
+  } finally { env.cleanup(); process.exit(0); }
+})();

@@ -1,0 +1,37 @@
+'use strict';
+const ROOT = '/home/hermes/service-center-app';
+const L = require(ROOT + '/scripts/v6_accept_lib.js');
+const sleep = L.sleep; const q = JSON.stringify;
+(async () => {
+  const env = await L.startEnv();
+  try {
+    const admin = (await L.login(env.base, 'admin')).join('; ');
+    const { cdp } = await env.openBrowser();
+    const k = L.pageKit(cdp, env.base, process.env.TMPDIR);
+    const ev = (x) => cdp.ev(x);
+    const TA = '#tasksView [data-tk-field="linksText"]';
+    await k.size(1280, 900); await k.load(admin.split('; '));
+    await ev('Tasks.open({view:"list"})'); await sleep(1200);
+    await k.click('[data-tk-act="newTask"]'); await sleep(500);
+    await ev('document.querySelector(' + q(TA) + ').scrollIntoView({block:"center"}); (() => { const t = document.querySelector(' + q(TA) + '); t.focus(); t.value = "(())"; t.dispatchEvent(new Event("input",{bubbles:true})); t.setSelectionRange(4,4); t.dispatchEvent(new Event("input",{bubbles:true})); })()');
+    const ptF = () => ev('(() => { const t = document.querySelector(' + q(TA) + '); const cs = getComputedStyle(t); const c = document.createElement("canvas").getContext("2d"); c.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily; const w = c.measureText("((").width; const r = t.getBoundingClientRect(); return { x: r.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth) + w, y: r.top + parseFloat(cs.paddingTop) + 8 }; })()');
+    const szF = () => ev('(() => { const t = document.querySelector(' + q(TA) + '); const r = t.getBoundingClientRect(); return { x: r.right - 20, y: r.top + 12 }; })()');
+    const state = () => ev('(() => { const t = document.querySelector(' + q(TA) + '); const s = Tasks.__t.S; return { caret: t.selectionStart, lp: !!s.lp, supp: s.lpSuppress, focus: document.activeElement === t }; })()');
+    const esc = async () => { await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }); await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }); await sleep(300); };
+    let bad = 0;
+    for (let i = 0; i < 12; i++) {
+      { const p = await ptF(); await k.clickXY(p.x, p.y); }; await sleep(400);
+      let s0 = await state();
+      if (!s0.lp) { console.log('iter ' + i + ': окно не открылось на первом клике: ' + JSON.stringify(s0)); bad++; }
+      await esc();
+      { const p = await ptF(); await k.clickXY(p.x, p.y); }; await sleep(250);
+      { const p = await szF(); await k.clickXY(p.x, p.y); }; await sleep(250);
+      { const p = await ptF(); await k.clickXY(p.x, p.y); }; await sleep(500);
+      const s = await state();
+      if (!s.lp) { bad++; console.log('iter ' + i + ' FAIL ' + JSON.stringify(s)); }
+      if (s.lp) await esc();
+      { const p = await szF(); await k.clickXY(p.x, p.y); }; await sleep(250);
+    }
+    console.log('bad=' + bad + ' exceptions=' + cdp.exceptions.length);
+  } finally { env.cleanup(); process.exit(0); }
+})();

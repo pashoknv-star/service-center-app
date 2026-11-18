@@ -1,0 +1,243 @@
+// V9-T3: независимый сквозной сценарий владельца (реальный Chromium, реальные клавиши/мышь). Не часть gate.
+'use strict';
+const fs = require('fs'), path = require('path');
+const ROOT = '/home/hermes/service-center-app';
+const L = require(ROOT + '/scripts/v6_accept_lib.js');
+const sleep = L.sleep;
+const SH = process.env.SHOTS || ROOT + '/reports/V9/screens';
+const WIDTH = +(process.env.W || 1280);
+const TAG = WIDTH < 500 ? '375' : '1280';
+fs.mkdirSync(SH, { recursive: true });
+let pass = 0, fail = 0;
+const check = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (x !== undefined ? ' — ' + String(x).slice(0, 300) : '')); } };
+const q = JSON.stringify;
+
+(async () => {
+  const env = await L.startEnv();
+  try {
+    const admin = (await L.login(env.base, 'admin')).join('; ');
+    const { cdp } = await env.openBrowser();
+    const k = L.pageKit(cdp, env.base, SH);
+    const ev = (x) => cdp.ev(x);
+    const shot = (n) => k.shot('T3_' + n + '_' + TAG);
+    const api = (m, u, b) => L.http(env.base, admin, m, u, b);
+
+    async function keyChar(ch) {
+      const o = { key: ch, text: ch, unmodifiedText: ch };
+      await cdp.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyDown' }, o));
+      await cdp.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyUp' }, { key: ch }));
+    }
+    async function typeKeys(s) { for (const ch of s) { await keyChar(ch); await sleep(30); } await sleep(150); }
+    const VK = { ArrowLeft: 37, ArrowRight: 39, ArrowDown: 40, ArrowUp: 38, Enter: 13, Escape: 27, Backspace: 8, End: 35, Home: 36 };
+    async function press(key) {
+      const o = { key, code: key, windowsVirtualKeyCode: VK[key], nativeVirtualKeyCode: VK[key] };
+      await cdp.send('Input.dispatchKeyEvent', Object.assign({ type: 'rawKeyDown' }, o));
+      await cdp.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyUp' }, o));
+      await sleep(150);
+    }
+    const exists = (s) => ev('!!document.querySelector(' + q(s) + ')');
+    const text = (s) => ev('(() => { const e = document.querySelector(' + q(s) + '); return e ? e.textContent.replace(/\\s+/g," ").trim() : null; })()');
+    const S = () => ev('(() => { const s = Tasks.__t.S; return { view: s.view, sel: s.selectedId, rel: s.filters.rel || "", form: !!s.form, lp: !!s.lp }; })()');
+    const TA = '#tasksView [data-tk-field="linksText"]';
+    const taState = () => ev('(() => { const t = document.querySelector(' + q(TA) + '); return t ? { v: t.value, s: t.selectionStart, e: t.selectionEnd, focus: document.activeElement === t } : null; })()');
+    const pickOpen = () => exists('#tasksLinkPick');
+    const pickItems = () => ev('[...document.querySelectorAll("#tasksLinkPick .tk-lp-it")].map(e => e.textContent.replace(/\\s+/g," ").trim())');
+    const overflow = () => ev('(() => { const r = document.getElementById("tasksView"); return { view: r.scrollWidth - r.clientWidth, doc: document.documentElement.scrollWidth - innerWidth }; })()');
+
+    async function open(view, taskId) {
+      await ev('Tasks.open(' + q({ view: view || 'list', taskId: taskId || null }) + ')');
+      await k.waitFor('!!(Tasks.isActive() && document.querySelector("#tasksView .tk-wrap") && !Tasks.__t.S.loading)', 15000);
+      await sleep(400);
+    }
+    async function fillField(sel, val) {
+      await ev('document.querySelector(' + q(sel) + ').focus()');
+      await cdp.send('Input.insertText', { text: val });
+      await sleep(150);
+    }
+    async function pickAssignee() {
+      await ev('(() => { const s = document.querySelector("#tasksView [data-tk-field=assigneePick]"); s.value = [...s.options].filter(o => o.value)[0].value; s.dispatchEvent(new Event("change", {bubbles:true})); })()');
+      await sleep(250);
+    }
+    async function createViaUI(title) {
+      await open('list');
+      await k.click('[data-tk-act="newTask"]');
+      await k.waitFor('!!document.querySelector("#tasksView form.tk-form")', 8000);
+      await fillField('#tasksView [data-tk-field="title"]', title);
+      await pickAssignee();
+      await k.click('[data-tk-act="saveForm"]');
+      await k.waitFor('!Tasks.__t.S.form', 8000);
+      await sleep(500);
+      return ev('(() => { const t = Tasks.__t.S.tasks.find(x => x.title === ' + q(title) + '); return t ? t.id : null; })()');
+    }
+
+    await k.size(WIDTH, WIDTH < 500 ? 800 : 900, WIDTH < 500);
+    await k.load(admin.split('; '));
+
+    // ---- 1: создать задачу 1, закрыть
+    const id1 = await createViaUI('Заказ клиента №1');
+    check('задача 1 создана через форму', !!id1, id1);
+    await open('board', id1);
+    await k.click('[data-tk-act="closeTask"]');
+    await sleep(700);
+    const st1 = (await api('GET', 'api/tasks.php?id=' + encodeURIComponent(id1))).json.task;
+    check('задача 1 закрыта (status closed), links пусты', st1.status === 'closed' && st1.links.length === 0, st1.status + ' ' + st1.links.length);
+
+    // ---- 2: создать задачу 2 с полем «Связанные задачи» = (())
+    await open('list');
+    await k.click('[data-tk-act="newTask"]');
+    await k.waitFor('!!document.querySelector("#tasksView form.tk-form")', 8000);
+    await fillField('#tasksView [data-tk-field="title"]', 'Закрытие заказа №2');
+    await pickAssignee();
+    await sleep(100);
+    // порядок полей: Вложения → Связанные задачи
+    const lbls = await ev('[...document.querySelectorAll("#tasksView form.tk-form .tk-f > label")].map(l => l.textContent)');
+    const iA = lbls.indexOf('Вложения'), iL = lbls.indexOf('Связанные задачи');
+    check('в форме «Связанные задачи» сразу под «Вложения»', iA >= 0 && iL === iA + 1, lbls.join(' | '));
+    await ev('document.querySelector(' + q(TA) + ').scrollIntoView({block:"center"})');
+    await k.click(TA);
+    await typeKeys('(())');
+    check('после набора «(())» курсор после скобок — окно НЕ открыто', !(await pickOpen()), JSON.stringify(await taState()));
+    await shot('00_form_typed');
+    await press('ArrowLeft'); await press('ArrowLeft');
+    await k.waitFor('!!document.querySelector("#tasksLinkPick")', 4000);
+    check('курсор между скобками → окно открылось', await pickOpen());
+    const st = await taState();
+    check('каретка textarea между скобками (2)', st && st.s === 2 && st.v === '(())', JSON.stringify(st));
+    const act = await ev('(() => { const a = document.activeElement; return a ? (a.getAttribute("data-tk-lp-search") !== null ? "search" : a.tagName) : null; })()');
+    check('фокус — в поле поиска окна', act === 'search', act);
+    const items = await pickItems();
+    check('в окне видна закрытая задача 1 со статусом «Закрыта»', items.some((t) => /Заказ клиента №1/.test(t) && /Закрыта/.test(t)), items.join(' || '));
+    check('в окне нет самой (ещё не сохранённой) задачи 2', !items.some((t) => /Закрытие заказа №2/.test(t)));
+    await shot('01_picker');
+    await cdp.send('Input.insertText', { text: 'клиента' });
+    await sleep(300);
+    const items2 = await pickItems();
+    check('поиск «клиента» оставляет задачу 1', items2.length >= 1 && items2.every((t) => /клиента/i.test(t)), items2.join('||'));
+    await k.click('#tasksLinkPick .tk-lp-it');
+    await sleep(300);
+    const st2 = await taState();
+    check('после выбора окно закрыто', !(await pickOpen()));
+    check('«(())» заменено токеном ((ID|название))', st2 && st2.v === '((' + id1 + '|Заказ клиента №1))', JSON.stringify(st2));
+    check('фокус и каретка после токена', st2 && st2.focus && st2.s === st2.v.length && st2.e === st2.v.length, JSON.stringify(st2));
+    await shot('02_form_token');
+    await k.click('[data-tk-act="saveForm"]');
+    await k.waitFor('!Tasks.__t.S.form', 8000);
+    await sleep(600);
+    const id2 = await ev('(() => { const t = Tasks.__t.S.tasks.find(x => x.title === "Закрытие заказа №2"); return t ? t.id : null; })()');
+    check('задача 2 сохранена', !!id2);
+
+    // ---- 3: карточка задачи 2
+    await open('board', id2);
+    const cardHtml = await ev('document.querySelector("#tasksView .tk-detail").innerHTML');
+    const dIdx = cardHtml.indexOf('Описание'), lIdx = cardHtml.indexOf('Связанные задачи');
+    check('в карточке задачи 2 блок «Связанные задачи» ПОСЛЕ «Описания»', dIdx >= 0 && lIdx > dIdx);
+    const chip2 = await ev('(() => { const a = document.querySelector("#tasksView .tk-detail .tk-links a.tk-lk"); return a ? { t: a.textContent, link: a.dataset.link, id: a.dataset.id } : null; })()');
+    check('ссылка на задачу 1 — активная', chip2 && chip2.link === id1 && chip2.t === 'Заказ клиента №1', JSON.stringify(chip2));
+    await shot('03_card2');
+    // ---- карточка задачи 1: «Также связана с»
+    await open('board', id1);
+    const also = await text('#tasksView .tk-detail .tk-links-also');
+    check('в карточке задачи 1: «Также связана с: Закрытие заказа №2»', also && /Также связана с:/.test(also) && /Закрытие заказа №2/.test(also), also);
+    await shot('04_card1_also');
+
+    // ---- задача 3 (3 → 2) через API, чтобы получить цепочку 1–2–3
+    const t3 = (await api('POST', 'api/tasks.php', { title: 'Отгрузка №3', start_at: '2031-01-01', assignees: ['emp_2'], links_text: '((' + id2 + '|Закрытие заказа №2))' }));
+    check('задача 3 создана со ссылкой на 2 (API)', t3.status === 201, t3.status + JSON.stringify(t3.json).slice(0, 150));
+    const id3 = t3.json.task && t3.json.task.id;
+
+    // ---- клик по ссылке → Список с цепочкой из каждой точки
+    for (const [from, other, name] of [[id1, [id2, id3], '1'], [id2, [id1, id3], '2'], [id3, [id1, id2], '3']]) {
+      await open('board', from);
+      await ev('Tasks.reload && Tasks.reload()'); await sleep(700);
+      await open('board', from);
+      const lk = await ev('(() => { const a = document.querySelector("#tasksView .tk-detail .tk-links a.tk-lk"); return !!a; })()');
+      if (!lk) { check('из карточки ' + name + ' есть активная ссылка', false); continue; }
+      await k.click('#tasksView .tk-detail .tk-links a.tk-lk');
+      await k.waitFor('Tasks.__t.S.view === "list" && Tasks.__t.S.filters.rel', 5000);
+      await sleep(500);
+      const rows = await ev('[...document.querySelectorAll("#tasksView table.tk-table tbody tr.tk-row")].map(r => ({ id: r.getAttribute("data-id"), cls: r.className, rel: r.hasAttribute("data-tk-rel-src"), bg: getComputedStyle(r).backgroundColor }))');
+      const ids = rows.map((r) => r.id);
+      check('Список из карточки ' + name + ': все 3 задачи цепочки', ids.length === 3 && [from, ...other].every((i) => ids.includes(i)), ids.join(','));
+      check('Список из карточки ' + name + ': текущая — первой строкой', ids[0] === from, ids.join(','));
+      const bgs = new Set(rows.map((r) => r.bg));
+      check('Список из карточки ' + name + ': первая строка без выделения (фон как у остальных / классы те же)', bgs.size === 1 || rows[0].bg === rows[1].bg, JSON.stringify(rows.map((r) => [r.cls, r.bg])));
+      if (name === '2') await shot('05_list_rel');
+    }
+    const bar = await text('#tasksView [data-tk-relbar]');
+    check('плашка «Связанные задачи: …» с «×»', bar && /Связанные задачи:/.test(bar), bar);
+    await k.click('[data-tk-act="clearRel"]');
+    await sleep(700);
+    const afterClear = await ev('(() => { const s = Tasks.__t.S; return { rel: s.filters.rel || "", n: document.querySelectorAll("#tasksView table.tk-table tbody tr.tk-row").length, bar: !!document.querySelector("[data-tk-relbar]") }; })()');
+    check('«×» → обычный Список (плашки нет)', !afterClear.rel && !afterClear.bar, JSON.stringify(afterClear));
+
+    // ---- архив задачи 1 → ссылка перечёркнута в карточке 2 (и обратно)
+    await open('board', id1);
+    await k.click('[data-tk-act="archiveTask"]');
+    await sleep(900);
+    await open('board', id2);
+    const gone = await ev('(() => { const s = document.querySelector("#tasksView .tk-detail .tk-links s.tk-lk-gone"); return s ? { t: s.textContent, td: getComputedStyle(s).textDecorationLine, title: s.title, act: s.getAttribute("data-tk-act") } : null; })()');
+    check('после архива задачи 1: в карточке 2 ссылка перечёркнута (<s>, line-through), без перехода', gone && gone.td.includes('line-through') && !gone.act && gone.title === 'Задача удалена', JSON.stringify(gone));
+    await shot('06_card2_struck');
+    const goneClick = await (async () => { await k.click('#tasksView .tk-detail .tk-links s.tk-lk-gone'); await sleep(300); return S(); })();
+    check('клик по перечёркнутой ссылке не переводит в Список', goneClick.view !== 'list' && !goneClick.rel, JSON.stringify(goneClick));
+    // обратно: архивируем 3, смотрим 2; а «обратно» = архив задачи 2 → в карточке (архивной) 1? архивные карточки не открываются; проверяем через API
+    const a1 = (await api('GET', 'api/tasks.php?id=' + encodeURIComponent(id1))).json.task;
+    check('API: у архивной задачи 1 связь с 2 — archived=0 у 2 (симметрия: 1 видит 2 живой), у 2 — archived=1 у 1', a1.archived === 1 && a1.links.some((l) => l.id === id2 && l.archived === 0), JSON.stringify(a1.links));
+    // chain after archiving 1: from 2 → 2,3 only
+    await k.click('#tasksView .tk-detail .tk-links a.tk-lk, #tasksView .tk-detail .tk-links-also a.tk-lk');
+    await sleep(600);
+    const ids2 = await ev('[...document.querySelectorAll("#tasksView table.tk-table tbody tr.tk-row")].map(r => r.getAttribute("data-id"))');
+    check('после архива 1: цепочка из 2 = 2,3 (архивная не включена)', ids2.length === 2 && ids2[0] === id2 && ids2.includes(id3), ids2.join(','));
+
+    // ---- убрать токен из текста задачи 2 → связь пропала у обеих (задача 2 → 3 токена нет, у 3 есть токен на 2 → 2–3 держится у 3)
+    // чистый сценарий владельца: на задаче 2 был токен на 1 (архивирована). Для проверки «убрал токен → пропала» берём живую пару: 2 → 4
+    const t4 = (await api('POST', 'api/tasks.php', { title: 'Задача 4 без связей', start_at: '2031-02-01', assignees: ['emp_2'] })).json.task;
+    await open('list');
+    await k.click('[data-tk-act="editTask"][data-id="' + id2 + '"]');
+    await k.waitFor('!!document.querySelector(' + q(TA) + ')', 6000);
+    const cur = (await taState()).v;
+    check('форма правки задачи 2 содержит прежний токен', cur.includes(id1), cur);
+    // дописываем второй токен через (()) в конец и выбираем задачу 4
+    await k.click(TA);
+    await press('End');
+    await typeKeys(' (())');
+    await press('ArrowLeft'); await press('ArrowLeft');
+    await k.waitFor('!!document.querySelector("#tasksLinkPick")', 4000);
+    await cdp.send('Input.insertText', { text: 'без связей' });
+    await sleep(300);
+    await press('Enter');
+    await sleep(300);
+    check('Enter в окне вставил токен', /Задача 4/.test((await taState()).v), JSON.stringify(await taState()));
+    await k.click('[data-tk-act="saveForm"]');
+    await k.waitFor('!Tasks.__t.S.form', 8000); await sleep(600);
+    let g2 = (await api('GET', 'api/tasks.php?id=' + encodeURIComponent(id2))).json.task;
+    let g4 = (await api('GET', 'api/tasks.php?id=' + encodeURIComponent(t4.id))).json.task;
+    check('связь 2–4 видна у обеих сторон', g2.links.some((l) => l.id === t4.id) && g4.links.some((l) => l.id === id2), JSON.stringify([g2.links.map((l) => l.id), g4.links.map((l) => l.id)]));
+    await open('board', t4.id);
+    check('карточка 4: «Также связана с» задачу 2', /Закрытие заказа №2/.test((await text('#tasksView .tk-detail .tk-links-also')) || ''));
+    // убрать токен 4 из текста задачи 2 (оставить токен на архивную 1)
+    await open('list');
+    await k.click('[data-tk-act="editTask"][data-id="' + id2 + '"]');
+    await k.waitFor('!!document.querySelector(' + q(TA) + ')', 6000);
+    const full = (await taState()).v;
+    const cleaned = full.replace(/\s*\(\(\s*[^)]*Задача 4[^)]*\)\)/, '');
+    await ev('(() => { const t = document.querySelector(' + q(TA) + '); t.focus(); t.value = ' + q(cleaned) + '; t.dispatchEvent(new Event("input", {bubbles:true})); })()');
+    await k.click('[data-tk-act="saveForm"]');
+    await k.waitFor('!Tasks.__t.S.form', 8000); await sleep(600);
+    g2 = (await api('GET', 'api/tasks.php?id=' + encodeURIComponent(id2))).json.task;
+    g4 = (await api('GET', 'api/tasks.php?id=' + encodeURIComponent(t4.id))).json.task;
+    check('токен убран → связь 2–4 пропала у обеих', !g2.links.some((l) => l.id === t4.id) && !g4.links.some((l) => l.id === id2), JSON.stringify([g2.links.map((l) => l.id), g4.links.map((l) => l.id)]));
+    await open('board', t4.id);
+    check('в карточке 4 «Также связана с» исчезло (UI)', !(await exists('#tasksView .tk-detail .tk-links-also')));
+    await shot('07_card4_after_token_removed');
+    check('нет JS-исключений', cdp.exceptions.length === 0, cdp.exceptions.join('|'));
+    const ov = await overflow();
+    check('нет горизонтального скролла страницы', ov.doc <= 1, JSON.stringify(ov));
+  } catch (e) {
+    fail++; console.log('  FAIL  сбой сценария: ' + (e && e.stack || e));
+  } finally {
+    env.cleanup();
+    console.log('RESULT: ' + pass + ' passed, ' + fail + ' failed');
+    process.exit(0);
+  }
+})();

@@ -1,0 +1,83 @@
+'use strict';
+const ROOT = '/home/hermes/service-center-app';
+const L = require(ROOT + '/scripts/v6_accept_lib.js');
+const sleep = L.sleep; const q = JSON.stringify;
+let pass = 0, fail = 0;
+const check = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (x !== undefined ? ' — ' + String(x).slice(0, 400) : '')); } };
+(async () => {
+  const env = await L.startEnv();
+  try {
+    const admin = (await L.login(env.base, 'admin')).join('; ');
+    const api = (m, u, b) => L.http(env.base, admin, m, u, b);
+    const mk = async (title, extra) => (await api('POST', 'api/tasks.php', Object.assign({ title, start_at: '2031-06-01', assignees: ['emp_2'] }, extra || {}))).json.task;
+    const get = async (id) => (await api('GET', 'api/tasks.php?id=' + encodeURIComponent(id))).json.task;
+    const put = async (id, body) => { const t = await get(id); return api('PUT', 'api/tasks.php?id=' + encodeURIComponent(id), Object.assign({ version: t.version }, body)); };
+    const A = await mk('Альфа'), B = await mk('Бета');
+    await put(A.id, { links_text: '((' + B.id + '|Бета))' });
+    await put(B.id, { links_text: '((' + A.id + '|Альфа))' });
+    const { cdp } = await env.openBrowser();
+    const k = L.pageKit(cdp, env.base, process.env.TMPDIR);
+    const ev = (x) => cdp.ev(x);
+    const TA = '#tasksView [data-tk-field="linksText"]';
+    await k.size(1280, 900); await k.load(admin.split('; '));
+    async function open(view, id) { await ev('Tasks.open(' + q({ view, taskId: id || null }) + ')'); await k.waitFor('!!(Tasks.isActive() && document.querySelector("#tasksView .tk-wrap") && !Tasks.__t.S.loading)', 15000); await sleep(400); }
+
+    console.log('--- встречные токены ---');
+    await open('list'); await k.click('[data-tk-act="editTask"][data-id="' + A.id + '"]'); await k.waitFor('!!document.querySelector(' + q(TA) + ')', 5000);
+    await ev('(() => { const t = document.querySelector(' + q(TA) + '); t.focus(); t.value = ""; t.dispatchEvent(new Event("input",{bubbles:true})); })()');
+    await k.click('[data-tk-act="saveForm"]'); await k.waitFor('!Tasks.__t.S.form', 6000); await sleep(600);
+    const a = await get(A.id), b = await get(B.id);
+    console.log('     A.links=' + JSON.stringify(a.links.map((l) => [l.title, l.direction])) + ' A.text=' + a.links_text + ' | B.links=' + JSON.stringify(b.links.map((l) => [l.title, l.direction])));
+    await open('board', A.id);
+    const cardA = await ev('document.querySelector("#tasksView .tk-detail .tk-links") ? document.querySelector("#tasksView .tk-detail .tk-links").textContent.replace(/\\s+/g," ") : null');
+    check('встречные токены: UI не ломается — у A «Также связана с: Бета» (связь осталась как входящая)', /Также связана с:\s*Бета/.test(cardA || ''), cardA);
+    check('встречные токены: связь осталась у обеих (ожидаемо по T1 §2)', a.links.length === 1 && b.links.length === 1);
+
+    console.log('--- клик мышью между скобками ---');
+    await open('list'); await k.click('[data-tk-act="newTask"]'); await k.waitFor('!!document.querySelector("#tasksView form.tk-form")', 5000);
+    await ev('document.querySelector(' + q(TA) + ').scrollIntoView({block:"center"}); (() => { const t = document.querySelector(' + q(TA) + '); t.focus(); t.value = "(())"; t.dispatchEvent(new Event("input",{bubbles:true})); t.setSelectionRange(4,4); t.dispatchEvent(new Event("input",{bubbles:true})); })()');
+    await sleep(300);
+    check('курсор после «))» — окна нет', !(await ev('!!document.querySelector("#tasksLinkPick")')));
+    // координата между «((» и «))» через замер шрифта textarea
+    const pt = await ev('(() => { const t = document.querySelector(' + q(TA) + '); const cs = getComputedStyle(t); const c = document.createElement("canvas").getContext("2d"); c.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily; const w = c.measureText("((").width; const r = t.getBoundingClientRect(); return { x: r.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth) + w, y: r.top + parseFloat(cs.paddingTop) + 8 }; })()');
+    await k.clickXY(pt.x, pt.y);
+    await sleep(500);
+    const st = await ev('(() => { const t = document.querySelector(' + q(TA) + '); return [t.selectionStart, !!document.querySelector("#tasksLinkPick")]; })()');
+    check('клик мышью между скобками → окно открылось (каретка=' + st[0] + ')', st[0] === 2 && st[1] === true, JSON.stringify(st));
+    await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await sleep(300);
+    // клик по подложке закрывает
+    await k.clickXY(pt.x, pt.y); await sleep(300);
+    check('после Esc клик в те же скобки — окно НЕ открывается повторно (подавлено)', !(await ev('!!document.querySelector("#tasksLinkPick")')));
+    // клик вне скобок (в конец) и снова между
+    const sz = await ev('(() => { const t = document.querySelector(' + q(TA) + '); const r = t.getBoundingClientRect(); return { x: r.right - 20, y: r.top + 12 }; })()');
+    await k.clickXY(sz.x, sz.y); await sleep(250); await k.clickXY(pt.x, pt.y); await sleep(500);
+    check('после ухода кликом и возврата — окно открывается снова', await ev('!!document.querySelector("#tasksLinkPick")'));
+    // клик по подложке вне окна
+    await k.clickXY(10, 450); await sleep(300);
+    check('клик вне окна закрывает его, «(())» остаётся', !(await ev('!!document.querySelector("#tasksLinkPick")')) && (await ev('document.querySelector(' + q(TA) + ').value')) === '(())');
+    // сохранение с «(())» без выбора
+    await ev('(() => { const s = document.querySelector("#tasksView [data-tk-field=assigneePick]"); s.value = [...s.options].filter(o => o.value)[0].value; s.dispatchEvent(new Event("change", {bubbles:true})); })()');
+    await ev('(() => { const t = document.querySelector("#tasksView [data-tk-field=title]"); t.focus(); })()');
+    await cdp.send('Input.insertText', { text: 'Без выбора' }); await sleep(200);
+    await k.click('[data-tk-act="saveForm"]'); await k.waitFor('!Tasks.__t.S.form', 6000); await sleep(600);
+    const N = await ev('Tasks.__t.S.tasks.find(t => t.title === "Без выбора")');
+    check('(()) без выбора: сохраняется как обычный текст, связей нет, без ошибки', N && N.links_text === '(())' && N.links.length === 0, JSON.stringify(N && [N.links_text, N.links]));
+    await open('board', N.id);
+    const blk = await ev('document.querySelector("#tasksView .tk-detail .tk-links-text") ? document.querySelector("#tasksView .tk-detail .tk-links-text").textContent : null');
+    check('карточка показывает «(())» как текст', blk === '(())', blk);
+
+    console.log('--- rel: уход со Списка и возврат ---');
+    await open('board', B.id);
+    await k.click('#tasksView .tk-detail a.tk-lk'); await k.waitFor('Tasks.__t.S.filters.rel', 4000); await sleep(500);
+    await k.click('#tasksView tr.tk-row[data-id="' + A.id + '"]'); await sleep(700);
+    const s1 = await ev('JSON.stringify({view: Tasks.__t.S.view, rel: Tasks.__t.S.filters.rel, sel: Tasks.__t.S.selectedId, n: document.querySelectorAll("#tasksView .tk-card").length})');
+    console.log('     после клика по строке в rel-списке: ' + s1);
+    await k.click('[data-tk-act="setView"][data-view="list"]'); await sleep(800);
+    const s2 = await ev('JSON.stringify({view: Tasks.__t.S.view, rel: Tasks.__t.S.filters.rel || "", bar: !!document.querySelector("[data-tk-relbar]"), rows: document.querySelectorAll("#tasksView tbody tr.tk-row").length})');
+    console.log('     вернулись на «Список»: ' + s2);
+    check('нет JS-исключений', cdp.exceptions.length === 0, cdp.exceptions.join('|'));
+  } catch (e) { fail++; console.log('FAIL сбой: ' + (e && e.stack || e)); }
+  finally { env.cleanup(); console.log('RESULT: ' + pass + ' passed, ' + fail + ' failed'); process.exit(0); }
+})();

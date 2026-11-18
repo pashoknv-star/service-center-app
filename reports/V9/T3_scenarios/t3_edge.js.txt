@@ -1,0 +1,215 @@
+// V9-T3: граничные случаи, права, XSS (реальный Chromium + API). Не часть gate.
+'use strict';
+const fs = require('fs');
+const ROOT = '/home/hermes/service-center-app';
+const L = require(ROOT + '/scripts/v6_accept_lib.js');
+const sleep = L.sleep;
+const SH = ROOT + '/reports/V9/screens';
+let pass = 0, fail = 0;
+const check = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (x !== undefined ? ' — ' + String(x).slice(0, 400) : '')); } };
+const q = JSON.stringify;
+
+(async () => {
+  const env = await L.startEnv();
+  try {
+    const admin = (await L.login(env.base, 'admin')).join('; ');
+    const sup = (await L.login(env.base, 'supervisor_zone0')).join('; ');
+    const viewer = (await L.login(env.base, 'viewer_test')).join('; ');
+    const api = (ck, m, u, b) => L.http(env.base, ck, m, u, b);
+    const mk = async (title, extra) => {
+      const r = await api(admin, 'POST', 'api/tasks.php', Object.assign({ title, start_at: '2031-06-01', assignees: ['emp_2'] }, extra || {}));
+      if (r.status !== 201) throw new Error('mk ' + title + ' ' + r.status + JSON.stringify(r.json).slice(0, 200));
+      return r.json.task;
+    };
+    const get = async (id, ck) => (await api(ck || admin, 'GET', 'api/tasks.php?id=' + encodeURIComponent(id))).json.task;
+    const put = async (id, body) => { const t = await get(id); return api(admin, 'PUT', 'api/tasks.php?id=' + encodeURIComponent(id), Object.assign({ version: t.version }, body)); };
+    const tok = (t, n) => '((' + t.id + (n === null ? '' : '|' + (n || t.title)) + '))';
+
+    console.log('--- API: права ---');
+    const A = await mk('A'), B = await mk('B');
+    for (const [nm, ck] of [['supervisor', sup], ['viewer', viewer]]) {
+      const r = await api(ck, 'PUT', 'api/tasks.php?id=' + A.id, { version: A.version, links_text: tok(B) });
+      check(nm + ' PUT links_text → 403', r.status === 403, r.status);
+      const p = await api(ck, 'POST', 'api/tasks.php', { title: 'x', start_at: '2031-06-01', assignees: ['emp_2'], links_text: tok(B) });
+      check(nm + ' POST с links_text → 403', p.status === 403, p.status);
+      check(nm + ' читает ?pick=1', (await api(ck, 'GET', 'api/tasks.php?pick=1')).status === 200);
+      check(nm + ' читает ?related', (await api(ck, 'GET', 'api/tasks.php?related=' + A.id)).status === 200);
+    }
+    check('аноним: PUT 401', (await api(null, 'PUT', 'api/tasks.php?id=' + A.id, { version: 1, links_text: 'x' })).status === 401);
+    check('аноним: ?pick=1 → 401', (await api(null, 'GET', 'api/tasks.php?pick=1')).status === 401);
+    check('аноним: ?related → 401', (await api(null, 'GET', 'api/tasks.php?related=' + A.id)).status === 401);
+    check('аноним: GET ?id → 401', (await api(null, 'GET', 'api/tasks.php?id=' + A.id)).status === 401);
+    check('в БД связей нет после отказов', L.sql(env.tmpDb, 'select count(*) from task_links;').trim() === '0');
+
+    console.log('--- API: граничные ---');
+    let r = await put(A.id, { links_text: tok(A) });
+    check('самосвязь → 422 link_self', r.status === 422 && r.json.error === 'link_self', r.status + JSON.stringify(r.json));
+    r = await put(A.id, { links_text: tok(B) + ' и ' + tok(B) + ' ещё ' + tok(B, 'другое имя') });
+    const a1 = await get(A.id);
+    check('дубли одной ссылки → одна связь', r.status === 200 && a1.links.length === 1 && L.sql(env.tmpDb, 'select count(*) from task_links;').trim() === '1', r.status + ' ' + a1.links.length);
+    r = await put(A.id, { links_text: 'пусто: (()) и (( )) и ((|x)) — не токены' });
+    const a2 = await get(A.id);
+    check('(()) / (( )) / ((|x)) → не токены, ошибок нет, связь удалена', r.status === 200 && a2.links.length === 0, r.status + JSON.stringify(a2.links));
+    // 50 / 51
+    const many = [];
+    for (let i = 0; i < 51; i++) many.push(await mk('M' + i));
+    r = await put(A.id, { links_text: many.slice(0, 50).map((t) => tok(t)).join(' ') });
+    check('50 связей → 200', r.status === 200, r.status + JSON.stringify(r.json).slice(0, 200));
+    r = await put(A.id, { links_text: many.slice(0, 51).map((t) => tok(t)).join(' ') });
+    check('51 связь → 422 links_too_many, ничего не записано', r.status === 422 && r.json.error === 'links_too_many' && (await get(A.id)).links.length === 50, r.status + JSON.stringify(r.json).slice(0, 200));
+    r = await put(A.id, { links_text: many.slice(0, 50).map((t) => tok(t)).join(' ') + ' ' + many.slice(0, 5).map((t) => tok(t)).join(' ') });
+    check('50 различных + дубли → 200 (дубли не считаются)', r.status === 200, r.status + JSON.stringify(r.json).slice(0, 200));
+    r = await put(A.id, { links_text: '' });
+    check('очистка пустой строкой удаляет все 50', r.status === 200 && (await get(A.id)).links.length === 0);
+    // название с мусором
+    const W = await mk('Тест ((x|y)) | z))', {});
+    r = await put(A.id, { links_text: '((' + W.id + '|Тест ((x|y)) | z))' });
+    const a3 = await get(A.id);
+    check('токен с названием, содержащим ((/|/)): связь по ID создана или текст остаётся обычным без ошибки', r.status === 200, r.status + JSON.stringify(r.json).slice(0, 200));
+    console.log('     (инфо) links после «грязного» названия: ' + JSON.stringify(a3.links.map((l) => l.id === W.id)) + ' text=' + a3.links_text);
+    // archived target new link
+    const Z = await mk('Z-архив');
+    await api(admin, 'DELETE', 'api/tasks.php?id=' + Z.id, { version: Z.version });
+    r = await put(A.id, { links_text: tok(Z) });
+    check('новая связь на архивную → 409 link_target_archived', r.status === 409 && r.json.error === 'link_target_archived', r.status + JSON.stringify(r.json));
+    r = await put(A.id, { links_text: '((task_nope.1|нет))' });
+    check('неизвестный ID → 422 link_unknown', r.status === 422 && r.json.error === 'link_unknown');
+    r = await put(A.id, { links_text: 'x'.repeat(5001) });
+    check('links_text > 5000 → 400 invalid_links_text', r.status === 400 && r.json.error === 'invalid_links_text', r.status + JSON.stringify(r.json));
+    r = await put(A.id, { links_text: 123 });
+    check('links_text не строка → 400', r.status === 400, r.status);
+    // SQL injection-ish id
+    r = await put(A.id, { links_text: "((x'); DROP TABLE tasks;--|a))" });
+    check('SQL-подобный ID не токен, таблица жива', r.status === 200 && L.sql(env.tmpDb, 'select count(*) from tasks;').trim() > '0');
+    r = await api(admin, 'GET', 'api/tasks.php?related=' + encodeURIComponent("x' OR '1'='1"));
+    check('?related с кавычкой → 404, не 500', r.status === 404, r.status);
+    // 409 VERSION_CONFLICT двумя клиентами
+    const C = await mk('C');
+    const v = C.version;
+    const r1 = await api(admin, 'PUT', 'api/tasks.php?id=' + C.id, { version: v, links_text: tok(B) });
+    const r2 = await api(admin, 'PUT', 'api/tasks.php?id=' + C.id, { version: v, links_text: tok(A) });
+    check('два клиента: второй со старой version → 409 VERSION_CONFLICT, связь первого цела', r1.status === 200 && r2.status === 409 && r2.json.error === 'VERSION_CONFLICT' && (await get(C.id)).links.length === 1 && (await get(C.id)).links[0].id === B.id, r1.status + '/' + r2.status + JSON.stringify(r2.json));
+    // close/reopen
+    const before = JSON.stringify((await get(C.id)).links);
+    let ct = await get(C.id);
+    r = await api(admin, 'POST', 'api/tasks.php?id=' + C.id + '&action=close', { version: ct.version });
+    ct = await get(C.id);
+    r = await api(admin, 'POST', 'api/tasks.php?id=' + C.id + '&action=reopen', { version: ct.version });
+    const afterLinks = (await get(C.id)).links;
+    check('close/reopen не меняют связи (кроме status)', afterLinks.length === 1 && afterLinks[0].id === B.id);
+    // ответ не утекает
+    const rel = (await api(admin, 'GET', 'api/tasks.php?related=' + C.id)).json;
+    const pick = (await api(admin, 'GET', 'api/tasks.php?pick=1')).json;
+    check('?pick=1: только id,title,status,start_at', pick.tasks.every((t) => Object.keys(t).sort().join() === 'id,start_at,status,title'), JSON.stringify(pick.tasks[0]));
+    check('?pick=1 без архивных', !pick.tasks.some((t) => t.id === Z.id));
+    check('links[] — только id,title,status,archived,direction', rel.tasks[0].links.every((l) => Object.keys(l).sort().join() === 'archived,direction,id,status,title'), JSON.stringify(rel.tasks[0].links[0]));
+    // задача без времени + период
+    check('задача без времени (start_at дата) создана и видна в pick', pick.tasks.some((t) => t.id === C.id && /^\d{4}-\d\d-\d\d/.test(t.start_at)), JSON.stringify(pick.tasks.find((t) => t.id === C.id)));
+    // ON DELETE/ИНДЕКСЫ
+    check('PRAGMA integrity_check ok, foreign_key_check пуст', L.sql(env.tmpDb, 'pragma integrity_check;').trim() === 'ok' && L.sql(env.tmpDb, 'pragma foreign_key_check;').trim() === '');
+
+    console.log('--- UI: XSS, длинное название, Esc, 409, sync ---');
+    const { cdp } = await env.openBrowser();
+    const k = L.pageKit(cdp, env.base, SH);
+    const ev = (x) => cdp.ev(x);
+    const TA = '#tasksView [data-tk-field="linksText"]';
+    const VK = { ArrowLeft: 37, ArrowRight: 39, ArrowDown: 40, Enter: 13, Escape: 27, End: 35 };
+    async function press(key) {
+      const o = { key, code: key, windowsVirtualKeyCode: VK[key], nativeVirtualKeyCode: VK[key] };
+      await cdp.send('Input.dispatchKeyEvent', Object.assign({ type: 'rawKeyDown' }, o));
+      await cdp.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyUp' }, o));
+      await sleep(150);
+    }
+    async function toEnd() { await ev('(() => { const t = document.querySelector(' + q(TA) + '); t.focus(); t.setSelectionRange(t.value.length, t.value.length); })()'); await sleep(150); }
+    async function typeKeys(s) { for (const ch of s) { await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch }); await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch }); await sleep(25); } await sleep(150); }
+    const exists = (s) => ev('!!document.querySelector(' + q(s) + ')');
+    const taState = () => ev('(() => { const t = document.querySelector(' + q(TA) + '); return t ? { v: t.value, s: t.selectionStart, e: t.selectionEnd, f: document.activeElement === t } : null; })()');
+    async function open(view, id) { await ev('Tasks.open(' + q({ view, taskId: id || null }) + ')'); await k.waitFor('!!(Tasks.isActive() && document.querySelector("#tasksView .tk-wrap") && !Tasks.__t.S.loading)', 15000); await sleep(400); }
+    async function edit(id) { await open('list'); await k.click('[data-tk-act="editTask"][data-id="' + id + '"]'); await k.waitFor('!!document.querySelector(' + q(TA) + ')', 6000); await sleep(200); }
+    await k.size(1280, 900); await k.load(admin.split('; '));
+
+    const XT = '<script>window.__x=1</script><img src=x onerror="window.__x=2">"\'&amp;';
+    const X = await mk(XT);
+    const LONG = 'Очень длинное название задачи ' + 'слово '.repeat(20);
+    const LG = await mk(LONG);
+    const Y = await mk('Задача Y');
+    // links_text с HTML в свободном тексте
+    r = await put(Y.id, { links_text: 'до <script>window.__x=3</script> "кав\' ' + tok(X, 'снимок') + ' <b>после</b> ' + tok(LG) });
+    check('PUT links_text с HTML/кавычками → 200', r.status === 200, r.status + JSON.stringify(r.json).slice(0, 200));
+    await open('board', Y.id);
+    let chk = await ev('(() => ({ x: window.__x, scripts: document.querySelectorAll("#tasksView script").length, imgs: document.querySelectorAll("#tasksView img").length, bold: document.querySelectorAll("#tasksView .tk-links b").length, txt: document.querySelector("#tasksView .tk-links-text").textContent }))()');
+    check('XSS: карточка — ничего не исполнено, нет script/img/b из текста', chk.x === undefined && chk.scripts === 0 && chk.imgs === 0 && chk.bold === 0, JSON.stringify(chk));
+    check('XSS: текст отображён буквально (<script>… виден как текст)', /<script>window\.__x=3<\/script>/.test(chk.txt) && /<b>после<\/b>/.test(chk.txt), chk.txt);
+    const chipTitles = await ev('[...document.querySelectorAll("#tasksView .tk-links a.tk-lk")].map(a => a.textContent)');
+    check('XSS: название X в чипе — как текст', chipTitles.some((t) => t === XT), JSON.stringify(chipTitles));
+    await k.shotEl('#tasksView .tk-detail', 'T3_08_xss_card_1280');
+    // форма правки: textarea содержит текст буквально
+    await edit(Y.id);
+    const st = await taState();
+    check('XSS: textarea правки содержит исходный текст буквально', st && st.v.includes('<script>window.__x=3</script>'), JSON.stringify(st).slice(0, 200));
+    // открыть окно и найти XSS-задачу
+    await k.click(TA); await toEnd(); await typeKeys(' (())'); await press('ArrowLeft'); await press('ArrowLeft');
+    await k.waitFor('!!document.querySelector("#tasksLinkPick")', 4000);
+    let pk = await ev('(() => ({ x: window.__x, imgs: document.querySelectorAll("#tasksLinkPick img, #tasksLinkPick script").length, items: [...document.querySelectorAll("#tasksLinkPick .tk-lp-title")].map(e => e.textContent) }))()');
+    check('XSS: окно выбора — ничего не исполнено, название как текст', pk.x === undefined && pk.imgs === 0 && pk.items.includes(XT), JSON.stringify(pk).slice(0, 300));
+    await k.shotEl('#tasksLinkPick .tk-lp-modal', 'T3_09_picker_xss_long_1280');
+    // Esc → (()) остаётся, повторно не открывается
+    await press('Escape');
+    check('Esc закрыл окно', !(await exists('#tasksLinkPick')));
+    let s2 = await taState();
+    check('после Esc «(())» осталось, каретка между скобками, фокус в textarea', s2.v.endsWith(' (())') && s2.f && s2.s === s2.v.length - 2, JSON.stringify(s2).slice(-80));
+    await press('ArrowLeft'); await press('ArrowRight');   // движение внутри — выйти из скобок? ArrowLeft: курсор уходит за «((», ArrowRight — возвращается между
+    await sleep(300);
+    // ArrowLeft уводит курсор из «между» (позиция перед «((... »? нет — после ←: между «(» и «(», → возвращает между «((» и «))» ... это «покинул и вернулся»
+    console.log('     (инфо) после ←→ окно открыто: ' + (await exists('#tasksLinkPick')));
+    if (await exists('#tasksLinkPick')) await press('Escape');
+    await toEnd(); await press('ArrowLeft'); await press('ArrowLeft');
+    await sleep(300);
+    check('после ухода за скобки и возврата окно открывается снова', await exists('#tasksLinkPick'));
+    // выбор длинной
+    await cdp.send('Input.insertText', { text: 'очень длинное' }); await sleep(250);
+    await press('Enter'); await sleep(300);
+    const st3 = await taState();
+    const toks = [...st3.v.matchAll(new RegExp('\\(\\(' + LG.id.replace(/\./g, '\\.') + '\\|([^)]*)\\)\\)', 'g'))];
+    const m = toks.length ? toks[toks.length - 1] : null;
+    check('длинное название в токене ≤ 80 символов, без скобок/«|»', m && m[1].length <= 80 && m[1].length > 40 && toks.length === 2, m ? toks.length + ' токенов; ' + m[1].length + ' «' + m[1] + '»' : st3.v.slice(-200));
+    console.log('     (инфо) формVersion=' + (await ev('Tasks.__t.S.form && Tasks.__t.S.form.version')) + ' serverVersion=' + (await get(Y.id)).version);
+    // второй клиент меняет задачу Y → 409 при сохранении формы
+    const yNow = await get(Y.id);
+    await api(admin, 'PUT', 'api/tasks.php?id=' + Y.id, { version: yNow.version, description: 'правка другим клиентом' });
+    console.log('     (инфо) после правки другим клиентом serverVersion=' + (await get(Y.id)).version + ' formVersion=' + (await ev('Tasks.__t.S.form && Tasks.__t.S.form.version')));
+    await k.click('[data-tk-act="saveForm"]');
+    await sleep(900);
+    { const yy = await get(Y.id); console.log('     (инфо) после сохранения формы: serverVersion=' + yy.version + ' desc=«' + yy.description + '» links=' + yy.links.length + ' text=' + String(yy.links_text).slice(-60)); }
+    const conf = await ev('(() => { const s = Tasks.__t.S; return { form: !!s.form, err: s.form ? s.form.error : null, text: (document.querySelector(' + q(TA) + ') || {}).value }; })()');
+    check('409: серверные данные не тронуты (версия 3, описание другого клиента, 2 связи), форма закрыта, показана свежая карточка (существующее поведение всех полей)', !conf.form && (await get(Y.id)).version === 3 && (await get(Y.id)).links.length === 2, JSON.stringify(conf).slice(0, 300));
+    console.log('     (инфо) сообщение при 409: ' + conf.err);
+    await k.shot('T3_10_409_1280');
+    // sync при открытой форме
+    await edit(Y.id);
+    await k.click(TA); await toEnd(); await typeKeys(' набираю текст ');
+    const before2 = await taState();
+    await ev('Tasks.onRemoteChange && Tasks.onRemoteChange(); Tasks.reload && Tasks.reload(); true');
+    await sleep(900);
+    const after2 = await taState();
+    check('sync/reload при открытой форме: текст и каретка не сброшены', after2 && before2 && after2.v === before2.v && after2.s === before2.s, JSON.stringify([before2, after2]).slice(0, 300));
+    await k.click('[data-tk-act="cancelForm"]');
+    // viewer / supervisor в UI
+    for (const [nm, ck] of [['supervisor', sup], ['viewer', viewer]]) {
+      await k.load(ck.split('; '));
+      await open('board', Y.id);
+      const info = await ev('(() => ({ chips: document.querySelectorAll("#tasksView .tk-detail a.tk-lk").length, newBtn: !!document.querySelector("[data-tk-act=newTask]"), edit: !!document.querySelector("#tasksView [data-tk-act=editTask]") }))()');
+      check(nm + ': видит ссылки-чипы, нет «Новая задача»/«Править»', info.chips >= 1 && !info.newBtn && !info.edit, JSON.stringify(info));
+      await k.click('#tasksView .tk-detail a.tk-lk');
+      await k.waitFor('Tasks.__t.S.filters.rel', 4000); await sleep(400);
+      check(nm + ': клик по ссылке → Список связанных', (await ev('Tasks.__t.S.view')) === 'list' && !!(await ev('Tasks.__t.S.filters.rel')));
+    }
+    check('нет JS-исключений', cdp.exceptions.length === 0, cdp.exceptions.join('|'));
+  } catch (e) {
+    fail++; console.log('  FAIL  сбой: ' + (e && e.stack || e));
+  } finally {
+    env.cleanup();
+    console.log('RESULT: ' + pass + ' passed, ' + fail + ' failed');
+    process.exit(0);
+  }
+})();
