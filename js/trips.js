@@ -675,84 +675,122 @@
         color: var(--text);
       }
       
-      /* Trip panel form */
+      /* Trip panel form — V8-T4: вид как у формы «Новая задача» (js/tasks.js: .tk-form/.tk-f/.tk-actions/.tk-btn).
+         Одна колонка, значения повторяют стили задачи; правила — только внутри #tripFormPanel
+         (старая модалка и draft-диалог используют те же имена классов и не затрагиваются). */
       #tripFormPanel {
-        padding: 20px;
+        box-sizing: content-box;
+        max-width: 640px;
+        padding: 12px 16px;
         background: white;
-        border-radius: 8px;
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        min-height: 0;
+        color: var(--text);
+        font-size: 13px;
       }
-      /* Err2 fix: двухколоночный лейаут — Название/Место/Комментарий/Статус
-         слева, участники (ФИО + даты + кнопки) справа. Кнопки действий
-         прижаты к низу и всегда видны внутри панели. */
-      .trip-form-columns {
-        display: flex;
-        gap: 20px;
-        flex: 1 1 auto;
-        min-height: 0;
-        align-items: stretch;
+      @media (max-width: 760px) {
+        #tripFormPanel { padding: 8px; }
       }
-      .trip-form-left {
-        flex: 0 0 34%;
-        min-width: 220px;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
+      #tripFormPanel .trip-form-title {
+        margin: 1.33em 0;
+        font-size: inherit;
+        font-weight: bold;
       }
-      .trip-form-right {
-        flex: 1 1 auto;
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        overflow-y: auto;
-        max-height: 100%;
+      #tripFormPanel .trip-form-title .trip-status-label {
+        margin-left: 8px;
+        font-weight: normal;
+        font-size: 11px;
       }
-      .trip-panel-actions {
-        position: sticky;
-        bottom: 0;
-        background: white;
-        padding-top: 10px;
-        margin-top: auto;
-        border-top: 1px solid var(--divider);
-        z-index: 2;
+      #tripFormPanel .trip-form-row {
+        display: block;
+        margin: 10px 0;
       }
-      
-      .trip-panel-header {
+      #tripFormPanel .trip-form-row > .trip-form-label {
+        display: block;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: normal;
+        text-transform: uppercase;
+        margin-bottom: 3px;
+      }
+      #tripFormPanel .trip-form-input {
+        padding: 4px 6px;
+        border: 1px solid var(--divider);
+        border-radius: 6px;
+        font: inherit;
+        color: var(--text);
+        background: #fff;
+      }
+      #tripFormPanel input.trip-form-input[type=text],
+      #tripFormPanel input.trip-form-input[type=tel],
+      #tripFormPanel input.trip-form-input[type=number],
+      #tripFormPanel textarea.trip-form-input {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      #tripFormPanel .trip-transport-column + .trip-transport-column {
+        margin-top: 6px;
+      }
+      #tripFormPanel .trip-check {
         display: flex;
-        justify-content: space-between;
         align-items: center;
-        margin-bottom: 20px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid var(--divider);
+        gap: 6px;
+        margin-bottom: 4px;
+        color: var(--text);
+        font-size: 13px;
+        text-transform: none;
       }
-      
-      .trip-panel-close {
-        background: none;
-        border: none;
-        font-size: 1.5em;
-        cursor: pointer;
+      #tripFormPanel .trip-participant-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
         padding: 0;
-        width: 30px;
-        height: 30px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 4px;
+        border: 0;
+        margin-bottom: 6px;
       }
-      
-      .trip-panel-close:hover {
-        background: var(--hover-bg);
+      #tripFormPanel .trip-participant-name {
+        flex: 1 1 100%;
+        min-width: 0;
       }
-      
-      .trip-panel-actions {
+      #tripFormPanel .trip-participant-date {
+        width: auto;
+        flex: 1 1 110px;
+        min-width: 0;
+      }
+      #tripFormPanel .trip-participant-row .trip-btn {
+        padding: 4px 8px;
+      }
+      #tripFormPanel .trip-btn {
+        border: 1px solid var(--divider);
+        background: #fff;
+        border-radius: 8px;
+        padding: 6px 12px;
+        cursor: pointer;
+        color: var(--text);
+        font: inherit;
+      }
+      #tripFormPanel .trip-btn:hover { background: rgba(119, 0, 255, 0.06); }
+      #tripFormPanel .trip-btn:disabled { opacity: 0.5; cursor: default; }
+      #tripFormPanel .trip-btn-primary { background: var(--rt-blue); border-color: var(--rt-blue); color: #fff; }
+      #tripFormPanel .trip-btn-primary:hover { background: #0077b3; }
+      #tripFormPanel .trip-btn-confirm { background: #1565C0; border-color: #1565C0; color: #fff; }
+      #tripFormPanel .trip-btn-confirm:hover { background: #0d47a1; }
+      #tripFormPanel .trip-btn-danger { background: #fff; color: var(--sick-red); border-color: var(--sick-red); }
+      #tripFormPanel .trip-btn-danger:hover { background: rgba(244, 67, 54, 0.08); }
+      #tripFormPanel .trip-form-msg:empty,
+      #tripFormPanel .trip-form-msg > span:empty { display: none; }
+      #tripFormPanel .trip-form-error { margin: 4px 0; }
+      #tripFormPanel .trip-panel-actions {
         display: flex;
-        gap: 10px;
-        justify-content: flex-end;
-        margin-top: 20px;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      #tripFormPanel .trip-form-note { margin: 8px 0; }
+      /* форма длиннее окна — прокрутка внутри панели (как у #tasksView) */
+      #tripsListView:has(#tripFormPanel) {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
       }
       
       .trip-close {
@@ -1222,13 +1260,9 @@
     
     tripsListView.innerHTML = `
       <div id="tripFormPanel">
-        <div class="trip-panel-header">
-          <h2>${isEdit ? 'Редактирование командировки' : 'Новая командировка'}${isEdit ? ' <span class="trip-status-label trip-status-label-' + trip.status + '" id="tripStatusBadge">' + tripStatusLabel(trip.status) + '</span>' : ''}</h2>
-          <button class="trip-panel-close" onclick="window.Trips.closeTripForm()">×</button>
-        </div>
+        <h4 class="trip-form-title">${isEdit ? 'Редактирование командировки' : 'Новая командировка'}${isEdit ? ' <span class="trip-status-label trip-status-label-' + trip.status + '" id="tripStatusBadge">' + tripStatusLabel(trip.status) + '</span>' : ''}</h4>
         ${readOnlyNote ? '<div class="trip-form-note" id="tripReadOnlyNote">' + readOnlyNote + '</div>' : ''}
-        <div class="trip-form-columns">
-          <div class="trip-form-left">
+        <div class="trip-form-fields">
             <div class="trip-form-row">
               <label class="trip-form-label">Название</label>
               <input type="text" class="trip-form-input" id="tripTitle" value="${trip ? escapeHtml(trip.title) : ''}" ${isViewer ? 'disabled' : ''}>
@@ -1240,6 +1274,15 @@
             <div class="trip-form-row">
               <label class="trip-form-label">Комментарий</label>
               <textarea class="trip-form-input" id="tripComment" rows="2" ${isViewer ? 'disabled' : ''}>${trip ? escapeHtml(trip.comment || '') : ''}</textarea>
+            </div>
+            <div class="trip-form-row">
+              ${trip && trip.participants && trip.participants.length > 0 ? '<label class="trip-form-label">Участники</label>' : ''}
+              <div id="tripParticipants">
+                ${trip && trip.participants ? trip.participants.map(function(p, i) {
+                  return renderParticipantRow(p, i, isViewer);
+                }).join('') : ''}
+              </div>
+              <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()" ${isViewer ? 'disabled' : ''}>+ Добавить сотрудника</button>
             </div>
             <div class="trip-form-row">
               <label class="trip-form-label">Место отправления</label>
@@ -1272,9 +1315,9 @@
               <label class="trip-form-label">Транспорт (билеты)</label>
               <div class="trip-transport-columns">
                 <div class="trip-transport-column">
-                  <label style="display:flex; align-items:center; margin-bottom:5px;">
+                  <label class="trip-check">
                     <input type="checkbox" id="transportOutRequired" ${outRequired ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportOut')">
-                    <span style="margin-left:8px;">Выезд нужен билет</span>
+                    <span>Выезд нужен билет</span>
                   </label>
                   <select class="trip-form-input" id="transportOutMode" ${isViewer || !outRequired ? 'disabled' : ''}>
                     <option value="">Выберите способ</option>
@@ -1283,9 +1326,9 @@
                   </select>
                 </div>
                 <div class="trip-transport-column">
-                  <label style="display:flex; align-items:center; margin-bottom:5px;">
+                  <label class="trip-check">
                     <input type="checkbox" id="transportBackRequired" ${backRequired ? 'checked' : ''} ${isViewer ? 'disabled' : ''} onchange="window.Trips.toggleTransportSelect('transportBack')">
-                    <span style="margin-left:8px;">Возврат нужен билет</span>
+                    <span>Возврат нужен билет</span>
                   </label>
                   <select class="trip-form-input" id="transportBackMode" ${isViewer || !backRequired ? 'disabled' : ''}>
                     <option value="">Выберите способ</option>
@@ -1295,29 +1338,17 @@
                 </div>
               </div>
             </div>
-          </div>
-          <div class="trip-form-right">
-            <div class="trip-form-row">
-              ${trip && trip.participants && trip.participants.length > 0 ? '<label class="trip-form-label">Участники</label>' : ''}
-              <div id="tripParticipants">
-                ${trip && trip.participants ? trip.participants.map(function(p, i) {
-                  return renderParticipantRow(p, i, isViewer);
-                }).join('') : ''}
-              </div>
-              <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.startEmployeePick()" ${isViewer ? 'disabled' : ''}>+ Добавить сотрудника</button>
-            </div>
-          </div>
         </div>
         <div class="trip-form-msg"><span id="tripConfirmMsg"></span></div>
         <div class="trip-panel-actions">
-            <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отменить</button>
             ${/* V8-T2: статус меняется только кнопками. Прогноз/новая: «На подтверждение» (сохранить прогноз) и
                   «Подтвердить» (сохранить и подтвердить; не показывается тем, кому сервер откажет). Подтверждённая:
-                  только «Сохранить» (статус и заявки не трогаются). Только чтение: заблокированная «Сохранить». */ ''}
+                  только «Сохранить» (статус и заявки не трогаются). Только чтение: заблокированная «Сохранить».
+                  V8-T4: порядок кнопок как у задачи — главные слева, «Отмена» следом. */ ''}
             <button type="button" id="tripSaveBtn" class="trip-btn trip-btn-primary" onclick="window.Trips.saveTrip('${trip && trip.id ? trip.id : 'null'}')" ${isViewer ? 'disabled' : ''}>${isViewer || isConfirmedTrip ? 'Сохранить' : 'На подтверждение'}</button>
             ${canConfirmBtn ? `<button type="button" id="tripConfirmBtn" class="trip-btn trip-btn-confirm" onclick="window.Trips.saveAndConfirmTrip('${trip && trip.id ? trip.id : 'null'}')">Подтвердить</button>` : ''}
+            <button type="button" class="trip-btn trip-btn-secondary" onclick="window.Trips.closeTripForm()">Отмена</button>
             ${/* Err6 fix: "Удалить" только при редактировании (trip.id); из матрицы приходит псевдо-trip без id */ trip && trip.id && user && canDeleteTrip(trip, user) ? `<button type="button" class="trip-btn trip-btn-danger" onclick="window.Trips.handleDeleteTripClick('${trip.id}')">Удалить</button>` : ''}
-          </div>
         </div>
       </div>
     `;
