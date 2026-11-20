@@ -1,0 +1,149 @@
+=== TRANSPORTDB TEST START ===
+E5-4: Очистка audit_log удалено 5556 записей старше 2026-11-13T21:41:51+00:00
+[1] M1 миграция копии dev-БД (v6) → v15: meta.schema_version = 15, все 9 таблиц транспорта; повторный migrate — no-op: FAIL — schema_version: expected 15, got 14
+[2] M2 v14 → v15 на копии: прежние данные на месте, объекты созданы, повтор и «ложная 14» безопасны: FAIL — подготовка: копия dev-БД v6 → v15: expected "6>15", got "6>14"
+[3] M3 DDL блока v15 в db.php (applyIncrementalMigrations) эквивалентен schema.sql: те же таблицы, индексы, триггеры и CHECK: FAIL — подготовка: expected "6>15", got "6>14"
+[4] M4 свежая пустая БД: migrate() создаёт полную схему v15 (таблицы, триггеры журнала, индексы): FAIL — свежая БД: expected "0>15", got "0>14"
+[5] S1 столбцы transport_bases (имена и порядок по контракту): FAIL — transport_bases cols: expected ["id","name","sort_order","created_at","updated_at"], got []
+[6] S1 столбцы vehicles (имена и порядок по контракту): FAIL — vehicles cols: expected ["id","name","plate","base_id","status","default_driver_id","sort_order","version","created_at","updated_at"], got []
+[7] S1 столбцы transport_driver_pool (имена и порядок по контракту): FAIL — transport_driver_pool cols: expected ["employee_id","added_by","added_at"], got []
+[8] S1 столбцы transport_requests (имена и порядок по контракту): FAIL — transport_requests cols: expected ["id","display_no","title","subscriber","address","comment","status","source","external_id","version","created_by","created_by_name","created_at","updated_at"], got []
+[9] S1 столбцы transport_assignments (имена и порядок по контракту): FAIL — transport_assignments cols: expected ["id","request_id","vehicle_id","driver_id","driver_name_snap","start_at","duration_min","end_at","override_json","version","created_by","created_at","updated_at"], got []
+[10] S1 столбцы assignment_crew (имена и порядок по контракту): FAIL — assignment_crew cols: expected ["assignment_id","employee_id","name_snap"], got []
+[11] S1 столбцы assignment_stops (имена и порядок по контракту): FAIL — assignment_stops cols: expected ["assignment_id","ord","kind","place","lat","lon","stay_min","leg_km","leg_min_map","leg_min"], got []
+[12] S1 столбцы geo_cache (имена и порядок по контракту): FAIL — geo_cache cols: expected ["key","kind","payload_json","fetched_at"], got []
+[13] S1 столбцы transport_journal (имена и порядок по контракту): FAIL — transport_journal cols: expected ["id","ts","actor","role","action","entity_type","entity_id","before_json","after_json","warnings_json"], got []
+[14] S2 индексы по (vehicle_id,start_at,end_at) и (driver_id,start_at,end_at) на transport_assignments: FAIL — нет индекса (vehicle_id,start_at,end_at): []
+[15] S3 индексы журнала: по ts и по (entity_type, entity_id): FAIL — нет индекса по ts: []
+[16] S4 индексы: vehicles(base_id), assignment_crew(employee_id), transport_requests(status), assignments(request_id): FAIL — нет индекса с первым столбцом base_id у vehicles
+[17] SETUP фикстуры ограничений (база, ТС, заявка): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[18] C1 CHECK шага 15: duration_min — кратно 15, > 0, ≤ 10080 (7 суток): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_assignments
+[19] C2 CHECK шага 15 у остановок: stay_min и leg_min (и leg_min_map) — кратны 15 и ≥ 0: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_assignments
+[20] C3 CHECK перечислений и координат: статусы ТС/заявки, kind остановки, lat/lon: FAIL — ожидалась ошибка «constraint», получена: SQLSTATE[HY000]: General error: 1 no such table: vehicles — INSERT INTO vehicles (id, name, plate, base_id, status) VALUES ('chk_v2', 'x', 'Х002ХХ01', 'chk_b', 'broken')
+[21] C4 ограничения целостности: UNIQUE имя базы и госномер, FK vehicles→база, assignments→ТС/заявка, PK (assignment_id, ord), NOT NULL: FAIL — ожидалась ошибка «unique», получена: SQLSTATE[HY000]: General error: 1 no such table: transport_bases — INSERT INTO transport_bases (id, name) VALUES ('chk_b_dup', 'Проверочная база')
+[22] C5 каскад: удаление назначения удаляет бригаду и остановки; база с ТС не удаляется (RESTRICT): FAIL — SQLSTATE[HY000]: General error: 1 no such table: assignment_crew
+[23] C6 удаление сотрудника не стирает транспортные данные (нет FK на employees: пул, бригада, водитель, ТС): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_driver_pool
+[24] SETUP старая запись журнала: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[25] J1 журнал: UPDATE запрещён триггером (RAISE ABORT), запись не меняется: FAIL — ожидалась ошибка «append-only», получена: SQLSTATE[HY000]: General error: 1 no such table: transport_journal — UPDATE transport_journal SET actor = 'hacker' WHERE id = 0
+[26] J2 журнал: DELETE запрещён триггером (в т.ч. массовый и «по давности»), записи на месте: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[27] J3 журнал: INSERT разрешён, id монотонный (AUTOINCREMENT), повторная вставка не перетирает старую запись: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[28] J4 audit_cleanup() (helpers.php) удаляет старые audit_log, но НЕ трогает transport_journal (даже «состаренный» до 2020 г.): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[29] J5 ротация в db.php (cleanupAuditLog при migrate) тоже не трогает журнал; повторное применение v15 безопасно: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[30] L1 transport_check_step: кратность 15 (0/15/30/45/60/…), не кратные и отрицательные — нет: FAIL — transport_check_step() не реализована
+[31] L2 transport_now_local: формат YYYY-MM-DDTHH:MM, часовой пояс +05 (не UTC и не системный): FAIL — transport_now_local() не реализована
+[32] L3 transport_role / transport_user_id по строке users (admin / supervisor / viewer); без пользователя — пусто: FAIL — transport_role() не реализована
+[33] L4 transport_can_move_vehicle: admin и viewer — да; supervisor_zone0/zone1 и аноним — нет: FAIL — transport_can_move_vehicle() не реализована
+[34] L5 TRANSPORT_EDIT_DELEGATION: ровно supervisor_zone0 → [supervisor_zone1], прочих записей нет: FAIL — константа не определена
+[35] L6 transport_can_edit_request: admin — любые заявки (в т.ч. чужие и без автора): FAIL — transport_can_edit_request() не реализована
+[36] L7 transport_can_edit_request: supervisor_zone0 — свои и заявки supervisor_zone1; чужие (admin, viewer, прочие) — нет: FAIL — transport_can_edit_request() не реализована
+[37] L8 transport_can_edit_request: supervisor_zone1 — только свои; обратного права нет (zone0 и admin — чужие): FAIL — transport_can_edit_request() не реализована
+[38] L9 transport_can_edit_request: viewer — никогда (даже собственная заявка), аноним — нет: FAIL — transport_can_edit_request() не реализована
+[39] L10 «свой» = users.id автора, делегирование — по ЛОГИНУ автора (поиск в users): id ≠ логин не ломает правило: FAIL — transport_can_edit_request() не реализована
+[40] L11 transport_allowed_drivers: группа «Транспорт» (по названию) ∪ пул; дубль схлопнут с приоритетом group; только employee_id/name/source: FAIL — transport_allowed_drivers() не реализована
+[41] L12 transport_allowed_drivers ищет группу по НАЗВАНИЮ, а не по id g6 (регистр и пробелы не важны): FAIL — transport_allowed_drivers() не реализована
+[42] L13 transport_journal_write: запись внутри транзакции вызывающего; откат транзакции откатывает и запись; warnings_json — JSON: FAIL — transport_journal_write() не реализована
+[43] G1 GET без сессии → 401 unauthorized: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 401, got 404
+[44] G2 GET: admin читает справочники (200; bases/vehicles/drivers): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p {…(+266): expected 200, got 404
+[45] G2 GET: supervisor_zone0 читает справочники (200; bases/vehicles/drivers): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p {…(+266): expected 200, got 404
+[46] G2 GET: supervisor_zone1 читает справочники (200; bases/vehicles/drivers): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p {…(+266): expected 200, got 404
+[47] G2 GET: viewer_test читает справочники (200; bases/vehicles/drivers): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p {…(+266): expected 200, got 404
+[48] G3 GET: drivers — только employee_id/name/source, без телефона и фото; группа и пул, дубль один раз: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_driver_pool
+[49] G4 GET: недопустимый метод → 405; неизвестная сущность/действие → 400; битый JSON → 400 invalid_json: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 400, got 404
+[50] B1 POST ?entity=base: admin создаёт базу (201 {success, base}), запись в журнале base.create (before NULL): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[51] B2 POST base без sort_order: следующий по порядку (max+1); имя обрезается и схлопывает пробелы: FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p {…(+278): expected 201, got 404
+[52] B3 POST base: пустое/пробельное/отсутствующее/нестроковое/слишком длинное имя → 422 invalid_name, ничего не пишется: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[53] B4 POST base: дубль имени (точный, без учёта регистра по-кириллице, с лишними пробелами) → 422 duplicate_name: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[54] B5 POST base: некорректный sort_order → 422 invalid_sort_order: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[55] B6 PUT ?entity=base&id=: переименование и порядок → 200, журнал base.update (before/after только изменённые поля): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[56] B7 PUT base: без изменений — 200 и нет записи в журнале; смена регистра собственного имени допустима: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[57] B8 PUT base: дубль чужого имени → 422 duplicate_name; неизвестная база → 404; нет id → 422 id_required; плохое имя → 422: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[58] P1 POST ?entity=pool: admin добавляет совместителя (201), журнал driver_pool.add; в GET drivers источник «pool»: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[59] P2 POST pool: неизвестный/пустой/отсутствующий/нестроковый employee_id → 422 unknown_employee: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[60] P3 POST pool: повторное добавление → 422 already_in_pool (без новой записи и без журнала): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[61] P4 пул: сотрудник группы «Транспорт» тоже можно внести в пул, но в drivers он один раз (group); DELETE убирает из пула, журнал driver_pool.remove: FAIL — добавление члена группы: <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; ma…(+296): expected 201, got 404
+[62] P5 DELETE pool: не из пула → 404 not_found; без id → 422 id_required; ничего не пишется: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[63] P6 drivers: сотрудник из пула, удалённый из employees, в списке не показывается (и GET не падает); запись пула можно убрать: FAIL — добавлен: <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, …(+281): expected 201, got 404
+[64] V1 POST ?entity=vehicle: создание ТС (201), госномер нормализуется (верхний регистр, без пробелов), version 1, status in_service, журнал vehicle.create: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+PHP Warning:  Undefined array key "b2" in /home/hermes/wt/v10-t1/api/transport_db_test.php on line 1072
+[65] V2 POST vehicle: status=repair, водитель из пула, явный sort_order; без sort_order — max+1: FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p {…(+281): expected 201, got 404
+[66] V3 POST vehicle: нет/пустое имя или госномер, госномер >20 символов → 422 invalid_name / invalid_plate: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[67] V4 POST vehicle: неизвестная/отсутствующая база → 422 unknown_base; неверный status → 422 invalid_status: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[68] V5 POST vehicle: default_driver_id только допустимый водитель (группа «Транспорт» ∪ пул): прочие сотрудники и неизвестные id → 422 driver_not_allowed: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[69] V6 POST vehicle: дубль госномера (точный, другой регистр, с пробелами) → 422 duplicate_plate: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[70] V7 PUT vehicle: без version → 422 version_required; нечисловая version → 422 invalid_version: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[71] V8 PUT vehicle: изменение полей → 200, version+1, журнал vehicle.update (только изменённые поля), прочее не тронуто: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[72] V9 PUT vehicle: смена base_id этим путём запрещена → 422 use_move (ТС не меняется); та же база игнорируется: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[73] V10 PUT vehicle: устаревшая version → 409 VERSION_CONFLICT с current_version и актуальным ТС; ТС и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+PHP Warning:  Undefined array key "v1" in /home/hermes/wt/v10-t1/api/transport_db_test.php on line 1181
+[74] V11 PUT vehicle: госномер — дубль чужого → 422 duplicate_plate; собственный (в т.ч. другим регистром) допустим и нормализуется: FAIL — rawurlencode(): Argument #1 ($string) must be of type string, null given
+PHP Warning:  Undefined array key "v1" in /home/hermes/wt/v10-t1/api/transport_db_test.php on line 1197
+[75] V12 PUT vehicle: водитель — допустимый или null (очистка), иначе 422 driver_not_allowed; неверный status → 422 invalid_status; неизвестное ТС → 404: FAIL — rawurlencode(): Argument #1 ($string) must be of type string, null given
+[76] V13 PUT vehicle: пустой набор изменений — 200, version не растёт, журнала нет: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[77] P7 DELETE pool: сотрудник — default_driver_id ТС → 409 driver_in_use (из пула не убирается, журнала нет); после снятия с ТС удаляется: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[78] R1 права: аноним — POST base → 401 unauthorized, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[79] R1 права: аноним — PUT base → 401 unauthorized, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[80] R1 права: аноним — POST vehicle → 401 unauthorized, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[81] R1 права: аноним — PUT vehicle → 401 unauthorized, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[82] R1 права: аноним — POST pool → 401 unauthorized, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[83] R1 права: аноним — DELETE pool → 401 unauthorized, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[84] R1 права: supervisor_zone0 — POST base → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[85] R1 права: supervisor_zone0 — PUT base → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[86] R1 права: supervisor_zone0 — POST vehicle → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[87] R1 права: supervisor_zone0 — PUT vehicle → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[88] R1 права: supervisor_zone0 — POST pool → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[89] R1 права: supervisor_zone0 — DELETE pool → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[90] R1 права: supervisor_zone1 — POST base → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[91] R1 права: supervisor_zone1 — PUT base → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[92] R1 права: supervisor_zone1 — POST vehicle → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[93] R1 права: supervisor_zone1 — PUT vehicle → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[94] R1 права: supervisor_zone1 — POST pool → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[95] R1 права: supervisor_zone1 — DELETE pool → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[96] R1 права: viewer_test — POST base → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[97] R1 права: viewer_test — PUT base → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[98] R1 права: viewer_test — POST vehicle → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[99] R1 права: viewer_test — PUT vehicle → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[100] R1 права: viewer_test — POST pool → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[101] R1 права: viewer_test — DELETE pool → 403 forbidden, состояние БД и журнал не меняются: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[102] R2 права: аноним — action=move → 401 unauthorized, ТС не перенесено, журнала нет: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[103] R2 права: supervisor_zone0 — action=move → 403 forbidden, ТС не перенесено, журнала нет: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[104] R2 права: supervisor_zone1 — action=move → 403 forbidden, ТС не перенесено, журнала нет: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[105] M1 viewer_test переносит ТС: 200 {success, vehicle}, base_id и version+1 в БД, журнал vehicle.move с before/after {base_id}, actor/role viewer: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[106] M2 admin тоже переносит ТС (обратно): 200, журнал vehicle.move от admin; GET показывает новую базу: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[107] M3 move: неизвестная или отсутствующая база → 422 unknown_base; та же база → 422 same_base; без version → 422 version_required: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+[108] M4 move: устаревшая версия → 409 VERSION_CONFLICT (current_version, vehicle); неизвестное ТС → 404; без id → 422 id_required: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+PHP Warning:  Undefined array key "v3" in /home/hermes/wt/v10-t1/api/transport_db_test.php on line 1337
+[109] M5 два переноса подряд с одной и той же версией: второй — 409 (оптимистичная блокировка), перенос только один: FAIL — rawurlencode(): Argument #1 ($string) must be of type string, null given
+[110] M6 перенос постоянный и не меняет уже созданные назначения (заявка, назначение, бригада, остановки — без изменений): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_requests
+[111] J6 журнал: все действия контракта встречаются (base.create/update, vehicle.create/update/move, driver_pool.add/remove); у всех ts в +05 и actor: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[112] J7 журнал: UPDATE/DELETE записи, созданной через API, невозможны (триггер), набор записей не меняется: FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_journal
+[113] J8 атомарность: если запись журнала не удалась — мутация откатывается целиком (500, ТС/база/пул не изменены): FAIL — SQLSTATE[HY000]: General error: 1 no such table: main.transport_journal
+[114] J9 утечки и устойчивость: ответы не содержат путей/SQL; id/параметры со спецсимволами не ломают API (инъекции безвредны): FAIL — SQLSTATE[HY000]: General error: 1 no such table: transport_bases
+=== RESULTS: 0 passed, 114 failed out of 114 ===
+DB intact: YES
