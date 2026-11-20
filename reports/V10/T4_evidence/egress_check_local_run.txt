@@ -1,0 +1,18 @@
+time_utc=2026-11-20T21:44:32+00:00
+sapi=cli php=8.3.6
+ext_curl=yes ext_openssl=yes
+curl=8.5.0 ssl=OpenSSL/3.0.13
+allow_url_fopen=true disable_functions=(пусто)
+default_socket_timeout=60 max_execution_time=0
+
+== nominatim /status
+dns(nominatim.openstreetmap.org)=151.101.193.91
+curl: HTTP 200, 2 байт, 365 мс
+fopen: HTTP 200, 2 байт, 135 мс
+
+== osrm route (координаты Урай→Междуреченский)
+dns(routing.openstreetmap.de)=5.148.170.168
+curl: HTTP 200, 616 байт, 282 мс
+fopen: HTTP 200, 616 байт, 549 мс
+
+Готово. Удалите файл _egress_check.php.

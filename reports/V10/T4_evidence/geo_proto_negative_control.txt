@@ -1,0 +1,6 @@
+FAIL: search: ровно разрешённые ключи query ["format","q","countrycodes","limit","accept-language","addressdetails","viewbox","comment"]
+FAIL: search: в исходящем запросе нет «Ленина» 
+FAIL: search: в исходящем запросе нет «Заявка» 
+FAIL: search: в исходящем запросе нет «ул.» 
+info: файлы api/ с исходящим HTTP на текущем коммите: ["tasks_rules.php"]
+RESULT: 76 passed, 4 failed

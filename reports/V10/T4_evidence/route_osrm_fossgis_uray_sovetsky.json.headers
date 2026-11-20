@@ -1,0 +1,10 @@
+HTTP/2 200 
+server: nginx
+date: Fri, 20 Nov 2026 21:35:40 GMT
+content-type: application/json; charset=UTF-8
+content-length: 613
+access-control-allow-origin: *
+access-control-allow-methods: GET
+access-control-allow-headers: X-Requested-With, Content-Type
+content-disposition: inline; filename="response.json"
+
