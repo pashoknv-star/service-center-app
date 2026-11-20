@@ -1,0 +1,202 @@
+# V10-T2 — самопроверка сьюта transport на одноразовом ПРОТОТИПЕ реализации (вне репозитория, не поставляется, не является образцом для T5)
+# Цель: убедиться, что тесты корректны (нет опечаток/ошибок харнеса) и ловят нарушения контракта. Прототип: схема v15 + 3 эндпоинта, ~600 строк PHP в каталоге scratch воркера.
+# Часть 1: эталонный прототип — все проверки зелёные.
+
+E5-4: Очистка audit_log удалено 5556 записей старше 2026-11-13T21:51:32+00:00
+=== TRANSPORT TEST START (ожидаемо красный до V10-T5) ===
+[1] H1 харнес: временный php -S отвечает, аноним на существующем api/tasks.php → 401 (сервер и изоляция работают): PASS — сервер жив
+[2] H2 харнес: четыре учётки логинятся с отдельными cookie-банками, роли admin/supervisor/supervisor/viewer: PASS — ok
+[3] H3 предусловие T1: схема v15 — meta.schema_version ≥ 15 и все таблицы модуля существуют: PASS — v15
+[4] H4 фикстуры T1 по контракту: базы и ТС создаются через api/transport_vehicles.php, GET отдаёт bases/vehicles/drivers: PASS — tv_6b00c0e5a87e83.12782251
+[5] P1 аноним: GET списка заявок → 401 unauthorized: PASS — ok
+[6] P2 аноним: GET заявки по id → 401 (а не 404: проверка авторизации раньше поиска): PASS — ok
+[7] P3 аноним: POST заявки → 401, заявка не создаётся: PASS — ok
+[8] P4 аноним: PUT заявки и PUT ?action=status → 401: PASS — ok
+[9] P5 аноним: назначения POST / dry_run / PUT / DELETE → 401, ничего не пишется: PASS — ok
+[10] P6 чтение: список заявок доступен всем четырём ролям (200, success), чужая заявка admin видна: PASS — ok
+[11] P7-admin чужие заявки читаются всеми: заявка автора admin — GET ?id= у admin/zone0/zone1/viewer = 200, поля на месте: PASS — ok
+[12] P7-z0 чужие заявки читаются всеми: заявка автора z0 — GET ?id= у admin/zone0/zone1/viewer = 200, поля на месте: PASS — ok
+[13] P7-z1 чужие заявки читаются всеми: заявка автора z1 — GET ?id= у admin/zone0/zone1/viewer = 200, поля на месте: PASS — ok
+[14] P8-admin создание заявки: admin → 201, created_by = его users.id, статус new: PASS — tr_6b00c0e5e30400.11552154
+[15] P8-z0 создание заявки: supervisor_zone0 → 201, created_by = его users.id, статус new: PASS — tr_6b00c0e5e53b74.31435611
+[16] P8-z1 создание заявки: supervisor_zone1 → 201, created_by = его users.id, статус new: PASS — tr_6b00c0e5e71ec2.13147394
+[17] P8-view создание заявки: viewer → 403 forbidden, в БД ничего не появляется (и журнал не растёт): PASS — ok
+[18] P9 матрица: admin правит заявку автора admin → разрешено (PUT/статус/назначения): PASS — ok
+[19] P9 матрица: admin правит заявку автора z0 → разрешено (PUT/статус/назначения): PASS — ok
+[20] P9 матрица: admin правит заявку автора z1 → разрешено (PUT/статус/назначения): PASS — ok
+[21] P9 матрица: z0 правит заявку автора admin → 403 на PUT/статус/POST/PUT/DELETE назначения, ничего не меняется: PASS — ok
+[22] P9 матрица: z0 правит заявку автора z0 → разрешено (PUT/статус/назначения): PASS — ok
+[23] P9 матрица: z0 правит заявку автора z1 → разрешено (PUT/статус/назначения): PASS — ok
+[24] P9 матрица: z1 правит заявку автора admin → 403 на PUT/статус/POST/PUT/DELETE назначения, ничего не меняется: PASS — ok
+[25] P9 матрица: z1 правит заявку автора z0 → 403 на PUT/статус/POST/PUT/DELETE назначения, ничего не меняется: PASS — ok
+[26] P9 матрица: z1 правит заявку автора z1 → разрешено (PUT/статус/назначения): PASS — ok
+[27] P9 матрица: view правит заявку автора admin → 403 на PUT/статус/POST/PUT/DELETE назначения, ничего не меняется: PASS — ok
+[28] P9 матрица: view правит заявку автора z0 → 403 на PUT/статус/POST/PUT/DELETE назначения, ничего не меняется: PASS — ok
+[29] P9 матрица: view правит заявку автора z1 → 403 на PUT/статус/POST/PUT/DELETE назначения, ничего не меняется: PASS — ok
+[30] P10-admin can_edit в GET ?id=: заявка автора admin — admin/zone0/zone1/viewer = [true,false,false,false]: PASS — ok
+[31] P10-z0 can_edit в GET ?id=: заявка автора z0 — admin/zone0/zone1/viewer = [true,true,false,false]: PASS — ok
+[32] P10-z1 can_edit в GET ?id=: заявка автора z1 — admin/zone0/zone1/viewer = [true,true,true,false]: PASS — ok
+[33] P11 can_edit в элементах списка GET (from/to по дню назначения): значения совпадают с таблицей прав для всех ролей: PASS — ok
+[34] P12 viewer: dry_run назначения → 403 (проверка записи раньше предупреждений), ничего не пишется: PASS — ok
+[35] P13-z0 справочники: z0 → 403 на POST base/vehicle/pool, PUT vehicle, DELETE pool; БД не меняется: PASS — ok
+[36] P13-z1 справочники: z1 → 403 на POST base/vehicle/pool, PUT vehicle, DELETE pool; БД не меняется: PASS — ok
+[37] P13-view справочники: view → 403 на POST base/vehicle/pool, PUT vehicle, DELETE pool; БД не меняется: PASS — ok
+[38] P13-anon справочники: аноним → 401 на GET/POST/PUT/DELETE и action=move: PASS — ok
+[39] P14-admin перенос ТС: admin → 200, база сменилась навсегда (GET и БД), версия выросла; назначение на ТС не изменилось: PASS — ok
+[40] P14-view перенос ТС: view → 200, база сменилась навсегда (GET и БД), версия выросла; назначение на ТС не изменилось: PASS — ok
+[41] P14-z0 перенос ТС: supervisor (z0) → 403, база не меняется: PASS — ok
+[42] P14-z1 перенос ТС: supervisor (z1) → 403, база не меняется: PASS — ok
+[43] R1 создание: минимальное тело {title} → 201; статус new, версия ≥ 1, id «tr_…», пустые необязательные поля, нет назначений, can_edit=true: PASS — tr_6b00c0e916d281.22651514
+[44] R2 создание: все поля (subscriber/address/comment/source) сохраняются и читаются GET ?id=: PASS — ok
+[45] R3 создание: title обязателен — пустое / пробелы / отсутствует → 422, заявка не создаётся: PASS — ok
+[46] R4 created_by: берётся из сессии, а не из тела (подмена created_by/status/id в POST игнорируется или отклоняется): PASS — ok
+[47] R5 display_no: у каждой заявки непустой и уникальный, правка заявки его не меняет: PASS — ["ТР-00034","ТР-00035","ТР-00036"]
+[48] R6 правка PUT: поля заявки меняются, версия растёт, created_by/display_no/id неизменны, GET показывает новое: PASS — v1→2
+[49] R7 PUT без version → 422 version_required, заявка не меняется: PASS — ok
+[50] R8 VERSION_CONFLICT: PUT с устаревшей версией → 409, в теле current_version, данные не меняются: PASS — ok
+[51] R9 VERSION_CONFLICT на смене статуса: устаревшая версия → 409, статус не меняется: PASS — ok
+[52] R10 PUT не меняет created_by / display_no / status через тело (подмена игнорируется или 422): PASS — HTTP 200
+[53] R11 несуществующая заявка: GET / PUT / status → 404 not_found: PASS — ok
+[54] R12 DELETE заявки не поддержан: admin → 405, заявка осталась (отмена — статусом cancelled): PASS — ok
+[55] R13 DELETE заявки → 405 и для автора-supervisor (даже своей), заявка осталась: PASS — ok
+[56] R14 отмена статусом: new → cancelled (200), версия выросла, заявка читается и не удалена: PASS — ok
+[57] R15 возврат: cancelled → new (200): PASS — ok
+[58] R16 цепочка переходов с назначением: assigned → in_progress → done → new (возврат done → new): PASS — ok
+[59] R17 invalid_transition: вручную new → assigned нельзя (только автоматически при появлении назначения) → 422, статус не меняется: PASS — ok
+[60] R18 invalid_transition: из cancelled нельзя в in_progress и в done (только возврат в new) → 422: PASS — ok
+[61] R19 неизвестный статус и отсутствие status → 422, статус не меняется: PASS — ok
+[62] R20 список: фильтр status — new и cancelled разделяются, без from/to: PASS — ok
+[63] R21 список: from/to по дню назначения — заявка с назначением в диапазоне есть, вне диапазона нет; в элементе assignments: PASS — ok
+[64] A1 создание → 201 {success, assignment}: id «ta_…», поля, end_at = start + duration, версия, маршрут из 2 точек: PASS — ta_6b00c0e9e12796.32680908
+[65] A2 автоматически new → assigned при появлении первого назначения; назначение видно во вложенных assignments заявки: PASS — ok
+[66] A3 end_at: 09:00 + 15 / 60 / 90 / 480 минут = 09:15 / 10:00 / 10:30 / 17:00: PASS — ok
+[67] A4 переход через полночь: 22:30 + 120 мин → end_at 00:30 следующего дня; 22:00 + 120 → ровно 00:00 следующего дня: PASS — ok
+[68] A5 длительность до 7 суток: 1440 мин → +1 день; 10080 мин (максимум) принимается → +7 суток: PASS — ok
+[69] A6 PUT пересчитывает end_at при смене длительности; версия растёт; запись в БД обновлена: PASS — ok
+[70] A7 PUT пересчитывает end_at при смене начала (в т.ч. перенос через полночь): PASS — ok
+[71] A8 PUT без version → 422 version_required; устаревшая версия → 409 VERSION_CONFLICT с current_version; данные не меняются: PASS — ok
+[72] A9 PUT меняет ТС, водителя, бригаду и маршрут; GET заявки показывает новое, прежние строки маршрута/бригады заменены: PASS — ok
+[73] A10 маршрут сохраняется целиком: координаты, leg_km, стоянки и время в пути читаются обратно: PASS — ta_6b00c0ea8b8940.67209197
+[74] A11 мультиТС: несколько назначений одной заявки на разные ТС/водителей в одно время — 201 без предупреждений, статус остаётся assigned: PASS — ok
+[75] A12 удаление: у заявки два назначения — удаление одного оставляет assigned, удаление последнего возвращает new: PASS — ok
+[76] A13 удаление назначения убирает его строки бригады и маршрута (assignment_crew / assignment_stops) и саму запись: PASS — ok
+[77] A14 несуществующее назначение: PUT и DELETE → 404 not_found; несуществующая заявка при POST → 404 not_found: PASS — ok
+[78] A15 request_closed: назначение на done и на cancelled заявку → 422, ничего не создаётся; dry_run — тоже 422: PASS — ok
+[79] A16 после возврата cancelled → new назначение снова создаётся (заявка не «закрыта») и ставит assigned: PASS — ok
+[80] A17 неизвестное ТС → 422 unknown_vehicle; неизвестный сотрудник в бригаде → 422 unknown_employee; ничего не пишется: PASS — ok
+[81] D1 допустимый водитель: сотрудник группы «Транспорт» принимается (201): PASS — ok
+[82] D2 допустимый водитель: совместитель из пула (transport_driver_pool), не состоящий в группе «Транспорт», принимается: PASS — ok
+[83] D3 driver_not_allowed: сотрудник вне группы «Транспорт» и вне пула → 422, назначение не создаётся (и dry_run тоже 422): PASS — ok
+[84] D4 неизвестный driver_id → 422 (driver_not_allowed или unknown_employee): PASS — ok
+[85] D5 удаление из пула: прежнее назначение остаётся, новое с этим водителем → 422 driver_not_allowed: PASS — ok
+[86] D6 допустимость вычисляется на момент запроса: водитель переведён из группы «Транспорт» в другую группу → 422 driver_not_allowed: PASS — ok
+[87] D7 driver_in_crew: водитель в составе бригады → 422 (POST, dry_run и PUT), ничего не пишется: PASS — ok
+[88] D8 бригада — любые сотрудники (разные группы, в т.ч. водитель группы «Транспорт» как рядовой член), состав читается обратно: PASS — 6 чел.
+[89] D9 пустая бригада допустима (только водитель): PASS — ok
+[90] D10 PUT: смена водителя на недопустимого → 422 driver_not_allowed, назначение не меняется: PASS — ok
+[91] D11 согласованность GET drivers (T1) и приёмки в назначении: из списка — принимается, не из списка — 422: PASS — ok
+[92] S1 start_at кратно 15 минутам: :00/:15/:30/:45 принимаются: PASS — ok
+[93] S2 invalid_start: минуты не кратны 15 (09:10, 09:05, 09:59) → 422, назначение не создаётся: PASS — ok
+[94] S3 invalid_start: неверный формат — «abc», только дата, пустая строка, null, число → 422: PASS — ok
+[95] S4 invalid_start: несуществующие дата/время (30 февраля, 25:00, 24:15, месяц 13) → 422: PASS — ok
+[96] S5 длительность 15/30/45/60 принимается: end_at = start + длительность: PASS — ok
+[97] S6 invalid_duration: 10 / 20 / 44 (не кратно 15) → 422, ничего не пишется: PASS — ok
+[98] S7 invalid_duration: 0, отрицательная, дробная, null, отсутствует → 422: PASS — ok
+[99] S8 invalid_duration: больше 7 суток (10095 — кратно 15, но > 10080) → 422: PASS — ok
+[100] S9 invalid_step: stay_min 10 / 20 / 44 в точке маршрута → 422: PASS — ok
+[101] S10 invalid_step: leg_min 10 / 20 / 44 → 422: PASS — ok
+[102] S11 invalid_step: отрицательные и нечисловые stay_min/leg_min (−15, 7.5, «х») → 422: PASS — ok
+[103] S12 stay_min и leg_min: 15 / 30 / 45 / 60 принимаются и читаются обратно (0 — в маршруте по умолчанию route()): PASS — ok
+[104] S13 PUT: invalid_start / invalid_duration / invalid_step → 422, назначение не меняется: PASS — ok
+[105] S14 ошибка шага во второй точке откатывает всё: нет назначения, строк маршрута/бригады, смены статуса и записи журнала: PASS — ok
+[106] S15 dry_run проверяет те же правила: invalid_start / invalid_duration / invalid_step → 422 без confirm_token: PASS — ok
+[107] W1 без предупреждений: dry_run → 200 {success, warnings: []}; обычный POST без токена → 201: PASS — ok
+[108] W2 vehicle_overlap: то же ТС, пересекающийся интервал, другие водитель/бригада → ровно [vehicle_overlap], severity=warning, message непуст, выдан confirm_token: PASS — ok
+[109] W3 граничное касание — НЕ пересечение: новое назначение начинается в момент конца прежнего и заканчивается в момент начала прежнего → без предупреждений: PASS — ok
+[110] W4 пересечение на минимальный шаг (15 мин) с обеих сторон, вложенность, охват и точное совпадение — vehicle_overlap: PASS — ok
+[111] W5 пересечение через полночь: прежнее 23:00 + 120 (до 01:00) и новое в 00:30 следующего дня → vehicle_overlap; новое в 01:00 — касание, без предупреждения: PASS — ok
+[112] W6 driver_overlap: тот же водитель на другом ТС в пересекающееся время → ровно [driver_overlap]; касание — без предупреждения: PASS — ok
+[113] W7 crew_overlap: сотрудник бригады занят в другой бригаде в пересекающееся время → ровно [crew_overlap]; касание — без предупреждения: PASS — ok
+[114] W8 все три пересечения сразу: [crew_overlap, driver_overlap, vehicle_overlap] в одном наборе: PASS — ok
+[115] W9 разные ТС, водители и бригады в одно время — пересечения нет (параллельная работа допустима): PASS — ok
+[116] W10 правка PUT не конфликтует сама с собой: продление собственного назначения без других назначений — без предупреждений, без токена: PASS — ok
+[117] W11 PUT в пересечение: без токена 409 confirmation_required (ничего не меняется); dry_run даёт токен; с токеном — 200: PASS — ok
+[118] W12 после удаления конфликтующего назначения пересечения нет: PASS — ok
+PHP Warning:  Undefined variable $label» in /home/hermes/.hermes/profiles/sd_worker_02/cache/scratch/proto/api/transport_test.php on line 1527
+[119] W13-vacation driver_absent: водитель в статусе « (schedule_entries.status='vacation') в день назначения → ровно [driver_absent]: PASS — ok
+PHP Warning:  Undefined variable $label» in /home/hermes/.hermes/profiles/sd_worker_02/cache/scratch/proto/api/transport_test.php on line 1536
+[120] W14-vacation crew_absent: член бригады в статусе « в день назначения → ровно [crew_absent]: PASS — ok
+PHP Warning:  Undefined variable $label» in /home/hermes/.hermes/profiles/sd_worker_02/cache/scratch/proto/api/transport_test.php on line 1527
+[121] W13-sick driver_absent: водитель в статусе « (schedule_entries.status='sick') в день назначения → ровно [driver_absent]: PASS — ok
+PHP Warning:  Undefined variable $label» in /home/hermes/.hermes/profiles/sd_worker_02/cache/scratch/proto/api/transport_test.php on line 1536
+[122] W14-sick crew_absent: член бригады в статусе « в день назначения → ровно [crew_absent]: PASS — ok
+[123] W15 driver_absent / crew_absent: командировка (trips + trip_participants) покрывает день назначения → предупреждение; границы периода включительно: PASS — ok
+[124] W16 отсутствие в другой день не мешает: отпуск за день до и за день после (назначение в пределах одного дня) → без предупреждений; командировка закончилась накануне: PASS — ok
+[125] W17 назначение через полночь затрагивает оба дня: отпуск только на следующий день → driver_absent; отпуск через день после — нет: PASS — ok
+[126] W18 набор из четырёх кодов: водитель болен, член бригады в отпуске, ТС в ремонте и занято → [crew_absent, driver_absent, vehicle_in_repair, vehicle_overlap]: PASS — ok
+[127] W19 vehicle_in_repair: ТС со status=repair → ровно [vehicle_in_repair]; in_service — без предупреждений; после возврата в работу предупреждение исчезает: PASS — ok
+[128] W20 route_sum_mismatch: сумма stay_min+leg_min маршрута меньше / больше duration_min → [route_sum_mismatch]; равна → нет: PASS — ok
+[129] W21 route_sum_mismatch считает все точки: стоянки промежуточных остановок и выезда входят в сумму: PASS — ok
+[130] W22 dry_run ничего не пишет: ни назначения, ни строк бригады/маршрута, ни смены статуса, ни записи журнала (с предупреждениями и без): PASS — ok
+[131] W23 без токена при предупреждениях: 409 confirmation_required с актуальным списком warnings; ничего не создаётся, статус new, журнал не растёт: PASS — ok
+[132] W24 с верным токеном (из dry_run этого же набора) → 201; предупреждения не блокируют: назначение создано, статус assigned: PASS — ok
+[133] W25 токен другого набора предупреждений (выдан для driver_overlap, предъявлен при vehicle_overlap) → 409 confirmation_required, запись не происходит: PASS — ok
+[134] W26 токен «шире/уже» набора: токен для [vehicle_overlap] не годится для [vehicle_overlap, route_sum_mismatch] и наоборот → 409: PASS — ok
+[135] W27 мусорный/пустой/нестроковый confirm_token → 409 confirmation_required, запись не происходит: PASS — ok
+[136] W28 несколько предупреждений сразу не блокируют: все четыре подтверждаются одним токеном (ремонт + пересечение ТС + водитель в отпуске + маршрут): PASS — ok
+[137] W29 право на подтверждение — как на правку заявки: supervisor_zone1 получает токен и создаёт назначение на свою заявку, на чужую — 403 даже с токеном: PASS — ok
+[138] J1 создание заявки пишет ровно одну запись журнала: before_json NULL, after_json — заявка, actor/role/ts/entity_type заполнены, роль supervisor: PASS — request.create
+[139] J2 правка заявки: запись с before_json (старое название) и after_json (новое); роль admin: PASS — request.update
+[140] J3 смена статуса: запись с before.status = new и after.status = cancelled: PASS — request.status
+[141] J4 создание назначения: ровно одна запись по entity_id назначения; before NULL; after содержит vehicle_id/driver_id/start_at/duration_min; сущность отличается от заявки: PASS — assignment.create
+[142] J5 правка назначения: запись с before.duration_min = 60 и after.duration_min = 90: PASS — ok
+[143] J6 удаление назначения: запись с before_json (удалённое) и after_json NULL, хотя сама запись удалена из transport_assignments: PASS — assignment.delete
+[144] J7 предупреждения попадают в журнал: у подтверждённого назначения warnings_json содержит коды набора; у назначения без предупреждений — пусто: PASS — ok
+[145] J8 журнал не засоряется отказами: VERSION_CONFLICT, confirmation_required, dry_run, 422, 403, 404 и чтение не добавляют записей: PASS — ok
+[146] J9 откат мутации откатывает запись журнала и наоборот (одна транзакция): сбой вставки в журнал отменяет создание заявки: PASS — ok
+[147] J10 сбой журнала при создании назначения откатывает всё: нет назначения, строк бригады/маршрута, смены статуса new → assigned: PASS — ok
+[148] J11 сбой журнала при удалении последнего назначения откатывает и удаление, и возврат статуса в new: PASS — ok
+[149] J12 журнал append-only: UPDATE и DELETE записи → ошибка триггера (transport_journal is append-only), строка не меняется: PASS — ok
+E5-4: audit_cleanup удалено 1 записей старше 2026-11-13T21:51:47+00:00
+[150] J13 очистка audit_log (audit_cleanup, 7 дней) журнал транспорта не трогает: старая запись остаётся: PASS — ok
+[151] J14 actor/role по ролям: правка supervisor_zone0 заявки zone1 — запись с role=supervisor и актором zone0 (а не автором заявки): PASS — ok
+[152] C1 гонка за ТС: два параллельных POST на пересекающиеся интервалы одного ТС без токена — ровно один 201 и один 409 confirmation_required [vehicle_overlap] (5 раундов): PASS — 5 раундов
+[153] C2 гонка за водителя: параллельные POST на пересекающиеся интервалы одного водителя (разные ТС) — один 201, один 409 [driver_overlap] (5 раундов): PASS — 5 раундов
+[154] C3 три параллельных запроса на одно ТС и общее время: ровно один 201, остальные 409; пересечение не проходит молча: PASS — 3 раунда
+[155] C4 гонка PUT одной версии заявки из двух сессий: ровно один 200 и один 409 VERSION_CONFLICT; итог — запись победителя (5 раундов): PASS — 5 раундов
+[156] C5 гонка PUT одной версии назначения: ровно один 200 и один 409 VERSION_CONFLICT: PASS — ok
+[157] C6 параллельное создание заявок из четырёх сессий (2 раунда): все 201, display_no уникальны, у всех свой created_by: PASS — ok
+=== RESULTS: 157 passed, 0 failed out of 157 ===
+DB intact: YES
+
+# Часть 2: мутанты прототипа (одна намеренная ошибка в каждом) — сьют обязан краснеть.
+
+## мутант reverse: делегирование наоборот (zone1 правит заявки zone0, zone0 не правит zone1)
+[23] P9 матрица: z0 правит заявку автора z1 → разрешено (PUT/статус/назначения): FAIL — PUT: ожидался HTTP 200; HTTP 403 {"error":"forbidden"}
+[25] P9 матрица: z1 правит заявку автора z0 → 403 на PUT/статус/POST/PUT/DELETE назначения, ничего не меняется: FAIL — put: ожидался HTTP 403 "forbidden"; HTTP 200 {"success":true,"request"
+[31] P10-z0 can_edit в GET ?id=: заявка автора z0 — admin/zone0/zone1/viewer = [true,true,false,false]: FAIL — can_edit для z1: expected false, got true
+[32] P10-z1 can_edit в GET ?id=: заявка автора z1 — admin/zone0/zone1/viewer = [true,true,true,false]: FAIL — can_edit для z0: expected true, got false
+[33] P11 can_edit в элементах списка GET (from/to по дню назначения): значения совпадают с таблицей прав для всех ролей: FAIL — z0 → заявка z1: expected true, got false
+[137] W29 право на подтверждение — как на правку заявки: supervisor_zone1 получает токен и создаёт назначение на свою заявку, на чужую — 403 даже с токеном: 
+[151] J14 actor/role по ролям: правка supervisor_zone0 заявки zone1 — запись с role=supervisor и актором zone0 (а не автором заявки): FAIL — PUT zone0: ожидался HTTP 200; HTTP 403 {"error":"forbidde
+=== RESULTS: 150 passed, 7 failed out of 157 ===
+
+## мутант touch: касание интервалов считается пересечением (<=, >=)
+[109] W3 граничное касание — НЕ пересечение: новое назначение начинается в момент конца прежнего и заканчивается в момент начала прежнего → без 
+[111] W5 пересечение через полночь: прежнее 23:00 + 120 (до 01:00) и новое в 00:30 следующего дня → vehicle_overlap; новое в 01:00 — касание, без предупреждения: FAIL — к�
+[112] W6 driver_overlap: тот же водитель на другом ТС в пересекающееся время → ровно [driver_overlap]; касание — без предупреждения: FAIL — пересечение: expected ["driver_
+[114] W8 все три пересечения сразу: [crew_overlap, driver_overlap, vehicle_overlap] в одном наборе: FAIL — коды: expected ["crew_overlap","driver_overlap","vehicle_overlap"], got ["crew_overlap","vehicle_overlap"]
+[133] W25 токен другого набора предупреждений (выдан для driver_overlap, предъявлен при vehicle_overlap) → 409 confirmation_required, запись не происходит: FAIL — нет confirm_token �
+[153] C2 гонка за водителя: параллельные POST на пересекающиеся интервалы одного водителя (разные ТС) — один 201, один 409 [driver_overlap] (5 раундов): FAIL — рау�
+=== RESULTS: 151 passed, 6 failed out of 157 ===
+
+## мутант nolock: нет BEGIN IMMEDIATE: проверка пересечений и запись не атомарны и не в одной транзакции
+[146] J9 откат мутации откатывает запись журнала и наоборот (одна транзакция): сбой вставки в журнал отменяет создание заявки: FAIL — заявка не долж
+[147] J10 сбой журнала при создании назначения откатывает всё: нет назначения, строк бригады/маршрута, смены статуса new → assigned: FAIL — таблицы: expected [
+[148] J11 сбой журнала при удалении последнего назначения откатывает и удаление, и возврат статуса в new: FAIL — назначение и статус сохранены: expected ["
+[152] C1 гонка за ТС: два параллельных POST на пересекающиеся интервалы одного ТС без токена — ровно один 201 и один 409 confirmation_required [vehicle_overlap] (5 раундов
+[153] C2 гонка за водителя: параллельные POST на пересекающиеся интервалы одного водителя (разные ТС) — один 201, один 409 [driver_overlap] (5 раундов): FAIL — рау�
+[154] C3 три параллельных запроса на одно ТС и общее время: ровно один 201, остальные 409; пересечение не проходит молча: FAIL — раунд 1: статусы HTTP 201 {"succ
+[156] C5 гонка PUT одной версии назначения: ровно один 200 и один 409 VERSION_CONFLICT: FAIL — статусы; HTTP 200 {"success":true,"assignment":{"id":"ta_6b00c0a63314a0.23677391","request_id":"tr_6b00c0a62b7ad3.63
+[157] C6 параллельное создание заявок из четырёх сессий (2 раунда): все 201, display_no уникальны, у всех свой created_by: FAIL — уникальность display_no ["\u0422\u0420-00197","\
+=== RESULTS: 149 passed, 8 failed out of 157 ===
