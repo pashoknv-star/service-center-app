@@ -437,7 +437,7 @@ CREATE TABLE IF NOT EXISTS geo_cache (
     fetched_at   TEXT NOT NULL
 );
 
--- transport_journal: журнал изменений модуля. APPEND-ONLY: UPDATE и DELETE запрещены триггерами; очистка audit_log
+-- transport_journal: журнал изменений модуля. APPEND-ONLY: UPDATE, DELETE и REPLACE существующего id запрещены триггерами (V10-T1b); очистка audit_log
 --   (api/helpers.php audit_cleanup, api/db.php cleanupAuditLog — 7 дней) эту таблицу не затрагивает. Запись — в той же
 --   транзакции, что и изменение (api/transport_lib.php transport_journal_write). ts — локальное время +05 с секундами.
 CREATE TABLE IF NOT EXISTS transport_journal (
@@ -459,6 +459,16 @@ BEGIN
     SELECT RAISE(ABORT, 'transport_journal is append-only');
 END;
 CREATE TRIGGER IF NOT EXISTS trg_transport_journal_no_delete BEFORE DELETE ON transport_journal
+BEGIN
+    SELECT RAISE(ABORT, 'transport_journal is append-only');
+END;
+-- V10-T1b: REPLACE / INSERT OR REPLACE с существующим id удаляет старую строку без вызова BEFORE DELETE (recursive_triggers=OFF)
+--   и переписывает запись мимо двух триггеров выше. BEFORE INSERT с проверкой «такой id уже есть» закрывает обход (в т.ч. OR IGNORE
+--   и ON CONFLICT DO UPDATE — вставка завершается ошибкой). NEW.id > 0: у вставки без id в BEFORE INSERT NEW.id = -1, поэтому
+--   без этого условия строка с id = -1 блокировала бы все штатные вставки; id журнала (AUTOINCREMENT) всегда > 0.
+--   DDL дословно совпадает с константой Database::TRANSPORT_JOURNAL_NO_REPLACE_SQL (api/db.php); сьют transportdb (M3, M5).
+CREATE TRIGGER IF NOT EXISTS trg_transport_journal_no_replace BEFORE INSERT ON transport_journal
+WHEN NEW.id > 0 AND EXISTS (SELECT 1 FROM transport_journal WHERE id = NEW.id)
 BEGIN
     SELECT RAISE(ABORT, 'transport_journal is append-only');
 END;

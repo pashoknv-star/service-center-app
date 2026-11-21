@@ -1,0 +1,38 @@
+# V10-T1b: КРАСНЫЙ прогон до фикса (тесты добавлены, схема/db.php ещё без триггера trg_transport_journal_no_replace)
+# Команда: bash scripts/verify_all.sh transportdb  (коммит основы 624aa0b + новые тесты в api/transport_db_test.php)
+
+verify_all: 624aa0b 2026-11-21 07:29:49 suites: transportdb
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+transportdb FAIL    112    112     4s  rc=1 failed=5
+clean    PASS
+
+GATE: FAIL (1). Логи: /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/verify_all.ouzZMN
+--- transportdb (хвост)
+[105] R2 права: аноним — action=move → 401 unauthorized, ТС не перенесено, журнала нет: PASS — ok
+[106] R2 права: supervisor_zone0 — action=move → 403 forbidden, ТС не перенесено, журнала нет: PASS — ok
+[107] R2 права: supervisor_zone1 — action=move → 403 forbidden, ТС не перенесено, журнала нет: PASS — ok
+[108] M1 viewer_test переносит ТС: 200 {success, vehicle}, base_id и version+1 в БД, журнал vehicle.move с before/after {base_id}, actor/role viewer: PASS — v5
+[109] M2 admin тоже переносит ТС (обратно): 200, журнал vehicle.move от admin; GET показывает новую базу: PASS — ok
+[110] M3 move: неизвестная или отсутствующая база → 422 unknown_base; та же база → 422 same_base; без version → 422 version_required: PASS — ok
+[111] M4 move: устаревшая версия → 409 VERSION_CONFLICT (current_version, vehicle); неизвестное ТС → 404; без id → 422 id_required: PASS — ok
+[112] M5 два переноса подряд с одной и той же версией: второй — 409 (оптимистичная блокировка), перенос только один: PASS — ok
+[113] M6 перенос постоянный и не меняет уже созданные назначения (заявка, назначение, бригада, остановки — без изменений): PASS — ok
+[114] J6 журнал: все действия контракта встречаются (base.create/update, vehicle.create/update/move, driver_pool.add/remove); у всех ts в +05 и actor: PASS — base.create, base.update, driver_pool.add, driver_pool.remove, vehicle.create, vehicle.move, vehicle.update
+[115] J7 журнал: UPDATE/DELETE записи, созданной через API, невозможны (триггер), набор записей не меняется: PASS — id 132
+[116] J8 атомарность: если запись журнала не удалась — мутация откатывается целиком (500, ТС/база/пул не изменены): PASS — ok
+[117] J9 утечки и устойчивость: ответы не содержат путей/SQL; id/параметры со спецсимволами не ломают API (инъекции безвредны): PASS — ok
+=== RESULTS: 112 passed, 5 failed out of 117 ===
+DB intact: YES
+exit=1
+
+# --- FAIL-строки полного лога /home/hermes/.hermes/profiles/sd_worker_01/cache/scratch/verify_all.ouzZMN/transportdb.log ---
+[4] M4 свежая пустая БД: migrate() создаёт полную схему v15 (таблицы, триггеры журнала, индексы): FAIL — три триггера журнала: trg_transport_journal_no_delete,trg_transport_journal_no_update: expected ["trg_transport_journal_no_delete","trg_transport_journal_no_replace","trg_transport_journal_no_update"], got ["trg_transport_journal_no_delete","trg_transport_journal_no_update"]
+[25] J3 журнал: INSERT разрешён, id монотонный (AUTOINCREMENT), повторная вставка не перетирает старую запись: FAIL — ожидалась ошибка «append-only», получена: SQLSTATE[23000]: Integrity constraint violation: 19 UNIQUE constraint failed: transport_journal.id — INSERT INTO transport_journal (id, ts, actor, role, action, entity_type, entity_id) VALUES (1, 'x', 'x', 'x', 'x', 'x', 'x')
+[28] JR1 журнал: INSERT OR REPLACE и REPLACE INTO с существующим id → ошибка append-only, запись не перезаписана: FAIL — обход неизменяемости журнала: «INSERT OR REPLACE» ПРОШЁЛ без ошибки, actor стал «HACK_or_replace»; INSERT OR REPLACE: запись журнала изменена; «REPLACE» ПРОШЁЛ без ошибки, actor стал «HACK_replace»; REPLACE: запись журнала изменена: expected [], got ["«INSERT OR REPLACE» ПРОШЁЛ без ошибки, actor стал «HACK_or_replace»","INSERT OR REPLACE: запись журнала изменена","«REPLACE» ПРОШЁЛ без ошибки, actor стал «HACK_replace»","REPLACE: запись журнала изменена"]
+[31] JR4 журнал: запись с id ≤ 0 не «отравляет» журнал — вставка без id после неё работает (условие NEW.id > 0 в триггере); записи с id > 0 защищены: FAIL — ожидалась ошибка, но запрос прошёл: INSERT OR REPLACE INTO transport_journal (id, ts, actor) VALUES (1, 't', 'HACK')
+[32] M5 БД, уже мигрированная до v15 без триггера trg_transport_journal_no_replace (dev-копия): migrate() создаёт его, данные журнала целы, повтор — no-op: FAIL — эталон содержит триггер trg_transport_journal_no_replace
+
+# --- RESULTS-строка полного лога ---
+=== RESULTS: 112 passed, 5 failed out of 117 ===
+DB intact: YES

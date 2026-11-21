@@ -37,6 +37,18 @@ final class Database
     /** Текущая целевая версия схемы. */
     private const SCHEMA_VERSION = 15;
 
+    /**
+     * V10-T1b: третий триггер append-only журнала «Транспорта» (закрывает REPLACE / INSERT OR REPLACE с существующим id).
+     * Дословная копия из schema.sql (там — комментарий-обоснование); сьют transportdb (M3, M5) сверяет по sqlite_master.
+     */
+    private const TRANSPORT_JOURNAL_NO_REPLACE_SQL = <<<'SQL'
+CREATE TRIGGER IF NOT EXISTS trg_transport_journal_no_replace BEFORE INSERT ON transport_journal
+WHEN NEW.id > 0 AND EXISTS (SELECT 1 FROM transport_journal WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'transport_journal is append-only');
+END;
+SQL;
+
     private static ?Database $instance = null;
 
     private PDO $pdo;
@@ -107,6 +119,7 @@ final class Database
         $current = $this->getSchemaVersion();
 
         if ($current >= self::SCHEMA_VERSION) {
+            $this->ensureTransportJournalNoReplaceTrigger(); // V10-T1b: v15-БД без третьего триггера журнала
             return true; // уже актуально
         }
 
@@ -399,7 +412,7 @@ final class Database
 
         // --- v14 → v15 (V10-T1): модуль «Транспорт» ---
         // Только добавление: 9 таблиц (transport_bases, vehicles, transport_driver_pool, transport_requests,
-        // transport_assignments, assignment_crew, assignment_stops, geo_cache, transport_journal), индексы и два триггера
+        // transport_assignments, assignment_crew, assignment_stops, geo_cache, transport_journal), индексы и три триггера
         // append-only журнала. Существующие данные не затрагиваются; IF NOT EXISTS — повтор — no-op.
         if ($current < 15) {
             $this->createTransportSchemaV15();
@@ -543,6 +556,31 @@ BEGIN
 END;
 SQL
         );
+        // V10-T1b: третий триггер журнала (общий путь для миграции 14→15 и «подтягивания» БД, уже стоящих на v15).
+        $this->pdo->exec(self::TRANSPORT_JOURNAL_NO_REPLACE_SQL);
+    }
+
+    /**
+     * V10-T1b: БД, уже мигрированные до v15 до этого фикса (dev-копии), не проходят блок «current < 15», а версию схемы
+     * поднимать нельзя (v15 на проде не выкатывалась) — поэтому при актуальной версии проверяем наличие триггера
+     * trg_transport_journal_no_replace и создаём его, если таблица журнала есть, а триггера нет. На каждый запрос — один
+     * SELECT по sqlite_master (чтение; запись — только при отсутствии триггера). Ошибки (БД только для чтения, блокировка) не
+     * прерывают запрос: защита будет добавлена при следующем вызове. Повторный вызов — no-op.
+     */
+    private function ensureTransportJournalNoReplaceTrigger(): void
+    {
+        try {
+            $stmt = $this->pdo->query(
+                "SELECT type, name FROM sqlite_master WHERE (type = 'table' AND name = 'transport_journal') "
+                . "OR (type = 'trigger' AND name = 'trg_transport_journal_no_replace')"
+            );
+            $found = $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN, 0) : [];
+            if (in_array('table', $found, true) && !in_array('trigger', $found, true)) {
+                $this->pdo->exec(self::TRANSPORT_JOURNAL_NO_REPLACE_SQL);
+            }
+        } catch (PDOException $e) {
+            error_log('transport_journal no_replace trigger: ' . $e->getMessage());
+        }
     }
 
     /**
