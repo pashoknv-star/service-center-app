@@ -1,0 +1,100 @@
+# V10-T7: прогоны gate (bash scripts/verify_all.sh), 2026-11-21
+# ПРОГОН 1 — коммит abee7b5 (реализация; сьют transportgeo 429): GATE: PASS (24 suites), tripsform 131/131 с первого раза
+
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+smoke    PASS     84     84     9s  
+tasks    PASS     66     66    13s  
+tasksn8n PASS     27     27    27s  
+tasksatt PASS     24     24     9s  
+tasklinks PASS     37     37    15s  
+transportdb PASS    117    117     9s  
+transportgeo PASS    429    429    17s  
+tasksui  PASS    334    334    40s  
+tasksmx  PASS     79     79     8s  
+taskscal PASS    220    220     9s  
+director PASS    101    101    20s  
+emptasks PASS     34     34     3s  
+tasklinksui PASS    211    211   154s  
+e51      PASS     23     23     0s  
+e52      PASS     41     41     0s  
+hygiene  PASS     19     19     0s  
+trips    PASS      7      7     4s  
+tripsform PASS    131    131    69s  
+tripsstatus PASS    147    147    74s  
+syntax   PASS      -      -     0s  
+phplint  PASS     44      -     4s  
+pii      PASS      -      -     0s  
+refs     PASS     28     28    32s  удалено 0, со ссылками 0, исключений 0
+tasklink PASS     43     43     9s  коммитов 1, с кодом 1, нарушений 0
+clean    PASS
+
+GATE: PASS (24 suites)
+rc=0
+
+################################################################################
+# ПРОГОН 2 — коммит 4a175a4 (итоговый код; transportgeo 430): 23 из 24 сьютов PASS; tripsform FAIL 112/131 (16 падений в сценарии «п.2 выбор дат» — JS-исключение страницы в реальном Chromium)
+# Тот же результат (112/131, те же 16 проверок) в прогоне 3 ниже; параллельно на хосте шли браузерные тесты других воркеров (load average 3.3–3.8).
+
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+smoke    PASS     84     84     5s  
+tasks    PASS     66     66     9s  
+tasksn8n PASS     27     27    27s  
+tasksatt PASS     24     24     8s  
+tasklinks PASS     37     37     7s  
+transportdb PASS    117    117     8s  
+transportgeo PASS    430    430    15s  
+tasksui  PASS    334    334    35s  
+tasksmx  PASS     79     79    12s  
+taskscal PASS    220    220     8s  
+director PASS    101    101    22s  
+emptasks PASS     34     34     5s  
+tasklinksui PASS    211    211   137s  
+e51      PASS     23     23     0s  
+e52      PASS     41     41     1s  
+hygiene  PASS     19     19     0s  
+trips    PASS      7      7     3s  
+tripsform FAIL    112    131   104s  rc=1 failed=16
+tripsstatus PASS    147    147    86s  
+syntax   PASS      -      -     0s  
+phplint  PASS     44      -     9s  
+pii      PASS      -      -     0s  
+refs     PASS     28     28    36s  удалено 0, со ссылками 0, исключений 0
+tasklink PASS     43     43    10s  коммитов 2, с кодом 2, нарушений 0
+
+################################################################################
+# ПРОГОН 3 — коммит 4a175a4, повторный полный gate
+
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+smoke    PASS     84     84     4s  
+tasks    PASS     66     66     5s  
+tasksn8n PASS     27     27    26s  
+tasksatt PASS     24     24     6s  
+tasklinks PASS     37     37     6s  
+transportdb PASS    117    117     5s  
+transportgeo PASS    430    430    14s  
+tasksui  PASS    334    334    25s  
+tasksmx  PASS     79     79     6s  
+taskscal PASS    220    220     7s  
+director PASS    101    101    13s  
+emptasks PASS     34     34     3s  
+tasklinksui PASS    211    211   120s  
+e51      PASS     23     23     0s  
+e52      PASS     41     41     0s  
+hygiene  PASS     19     19     0s  
+trips    PASS      7      7     4s  
+tripsform FAIL    112    131   106s  rc=1 failed=16
+tripsstatus PASS    147    147    81s  
+syntax   PASS      -      -     0s  
+phplint  PASS     44      -     6s  
+pii      PASS      -      -     0s  
+refs     PASS     28     28    35s  удалено 0, со ссылками 0, исключений 0
+tasklink PASS     43     43     8s  коммитов 2, с кодом 2, нарушений 0
+
+################################################################################
+# Отдельные перезапуски tripsform на 4a175a4 (bash scripts/verify_all.sh tripsform):
+  tripsform_rerun: tripsform FAIL    115    131    90s  rc=1 failed=13
+  tripsform_rerun2: tripsform FAIL    128    131    77s  rc=1 failed=3
+  tripsform_rerun3_1: tripsform PASS    131    131    66s  
