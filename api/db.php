@@ -18,6 +18,9 @@ declare(strict_types=1);
  * (relay-механизм: poll GET / callback POST в api/trip_relay.php).
  * Схема v9 (T1-1): блок «Задачи» — tasks, task_assignees, task_checklist
  * (api/tasks.php, правила — api/tasks_rules.php).
+ * Схема v15 (V10-T1): модуль «Транспорт» — transport_bases, vehicles, transport_driver_pool,
+ * transport_requests, transport_assignments, assignment_crew, assignment_stops, geo_cache,
+ * transport_journal (append-only; очистка audit_log его не затрагивает).
  */
 
 final class Database
@@ -32,7 +35,7 @@ final class Database
     private const SCHEMA_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'schema.sql';
 
     /** Текущая целевая версия схемы. */
-    private const SCHEMA_VERSION = 14;
+    private const SCHEMA_VERSION = 15;
 
     private static ?Database $instance = null;
 
@@ -394,6 +397,14 @@ final class Database
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_task_links_b ON task_links (task_b)');
         }
 
+        // --- v14 → v15 (V10-T1): модуль «Транспорт» ---
+        // Только добавление: 9 таблиц (transport_bases, vehicles, transport_driver_pool, transport_requests,
+        // transport_assignments, assignment_crew, assignment_stops, geo_cache, transport_journal), индексы и два триггера
+        // append-only журнала. Существующие данные не затрагиваются; IF NOT EXISTS — повтор — no-op.
+        if ($current < 15) {
+            $this->createTransportSchemaV15();
+        }
+
         // --- Legacy-конверсия 'trip'-entries → Trip-объекты (идемпотентна) ---
         // Происходит при миграции (в т.ч. когда схема уже v6), защищена
         // meta-флагом 'trips_legacy_migrated' — повторный запуск дублей не даёт.
@@ -402,6 +413,136 @@ final class Database
         // E5-4: периодическая очистка журнала аудита (сохраняет прежнее
         // поведение для БД, пришедших с версии >= 5).
         $this->cleanupAuditLog();
+    }
+
+    /**
+     * v14 → v15 (V10-T1): модуль «Транспорт» — таблицы, индексы и триггеры журнала (только добавление, IF NOT EXISTS).
+     *
+     * Текст DDL — копия раздела «Модуль «Транспорт»» из schema.sql (там же комментарии и обоснования); сьют transportdb
+     * (api/transport_db_test.php, кейс M3) сверяет обе копии построчно по sqlite_master, расхождение = FAIL.
+     * Данные существующих таблиц не затрагиваются; повторный вызов — no-op.
+     */
+    private function createTransportSchemaV15(): void
+    {
+        $this->pdo->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS transport_bases (
+    id         TEXT PRIMARY KEY NOT NULL,
+    name       TEXT NOT NULL UNIQUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS vehicles (
+    id                TEXT PRIMARY KEY NOT NULL,
+    name              TEXT NOT NULL,
+    plate             TEXT NOT NULL UNIQUE,
+    base_id           TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'in_service' CHECK (status IN ('in_service','repair')),
+    default_driver_id TEXT,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    version           INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT,
+    updated_at        TEXT,
+    FOREIGN KEY (base_id) REFERENCES transport_bases(id)
+);
+CREATE INDEX IF NOT EXISTS idx_vehicles_base ON vehicles (base_id);
+CREATE TABLE IF NOT EXISTS transport_driver_pool (
+    employee_id TEXT PRIMARY KEY NOT NULL,
+    added_by    TEXT,
+    added_at    TEXT
+);
+CREATE TABLE IF NOT EXISTS transport_requests (
+    id              TEXT PRIMARY KEY NOT NULL,
+    display_no      INTEGER,
+    title           TEXT NOT NULL,
+    subscriber      TEXT,
+    address         TEXT,
+    comment         TEXT,
+    status          TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','assigned','in_progress','done','cancelled')),
+    source          TEXT,
+    external_id     TEXT,
+    version         INTEGER NOT NULL DEFAULT 1,
+    created_by      TEXT,
+    created_by_name TEXT,
+    created_at      TEXT,
+    updated_at      TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transport_requests_display_no ON transport_requests (display_no);
+CREATE INDEX IF NOT EXISTS idx_transport_requests_status ON transport_requests (status);
+CREATE INDEX IF NOT EXISTS idx_transport_requests_created_by ON transport_requests (created_by);
+CREATE INDEX IF NOT EXISTS idx_transport_requests_external ON transport_requests (external_id);
+CREATE TABLE IF NOT EXISTS transport_assignments (
+    id               TEXT PRIMARY KEY NOT NULL,
+    request_id       TEXT NOT NULL,
+    vehicle_id       TEXT NOT NULL,
+    driver_id        TEXT NOT NULL,
+    driver_name_snap TEXT,
+    start_at         TEXT NOT NULL,
+    duration_min     INTEGER NOT NULL CHECK (duration_min > 0 AND duration_min <= 10080 AND duration_min % 15 = 0),
+    end_at           TEXT NOT NULL,
+    override_json    TEXT,
+    version          INTEGER NOT NULL DEFAULT 1,
+    created_by       TEXT,
+    created_at       TEXT,
+    updated_at       TEXT,
+    FOREIGN KEY (request_id) REFERENCES transport_requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+);
+CREATE INDEX IF NOT EXISTS idx_transport_assignments_vehicle ON transport_assignments (vehicle_id, start_at, end_at);
+CREATE INDEX IF NOT EXISTS idx_transport_assignments_driver ON transport_assignments (driver_id, start_at, end_at);
+CREATE INDEX IF NOT EXISTS idx_transport_assignments_request ON transport_assignments (request_id);
+CREATE TABLE IF NOT EXISTS assignment_crew (
+    assignment_id TEXT NOT NULL,
+    employee_id   TEXT NOT NULL,
+    name_snap     TEXT,
+    PRIMARY KEY (assignment_id, employee_id),
+    FOREIGN KEY (assignment_id) REFERENCES transport_assignments(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_assignment_crew_employee ON assignment_crew (employee_id);
+CREATE TABLE IF NOT EXISTS assignment_stops (
+    assignment_id TEXT NOT NULL,
+    ord           INTEGER NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('departure','intermediate','arrival')),
+    place         TEXT NOT NULL,
+    lat           REAL CHECK (lat IS NULL OR (lat >= -90 AND lat <= 90)),
+    lon           REAL CHECK (lon IS NULL OR (lon >= -180 AND lon <= 180)),
+    stay_min      INTEGER NOT NULL DEFAULT 0 CHECK (stay_min >= 0 AND stay_min % 15 = 0),
+    leg_km        REAL,
+    leg_min_map   INTEGER CHECK (leg_min_map IS NULL OR (leg_min_map >= 0 AND leg_min_map % 15 = 0)),
+    leg_min       INTEGER NOT NULL DEFAULT 0 CHECK (leg_min >= 0 AND leg_min % 15 = 0),
+    PRIMARY KEY (assignment_id, ord),
+    FOREIGN KEY (assignment_id) REFERENCES transport_assignments(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS geo_cache (
+    key          TEXT PRIMARY KEY NOT NULL,
+    kind         TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    fetched_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS transport_journal (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT,
+    actor         TEXT,
+    role          TEXT,
+    action        TEXT,
+    entity_type   TEXT,
+    entity_id     TEXT,
+    before_json   TEXT,
+    after_json    TEXT,
+    warnings_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transport_journal_ts ON transport_journal (ts);
+CREATE INDEX IF NOT EXISTS idx_transport_journal_entity ON transport_journal (entity_type, entity_id);
+CREATE TRIGGER IF NOT EXISTS trg_transport_journal_no_update BEFORE UPDATE ON transport_journal
+BEGIN
+    SELECT RAISE(ABORT, 'transport_journal is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_transport_journal_no_delete BEFORE DELETE ON transport_journal
+BEGIN
+    SELECT RAISE(ABORT, 'transport_journal is append-only');
+END;
+SQL
+        );
     }
 
     /**

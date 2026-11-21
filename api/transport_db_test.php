@@ -1198,7 +1198,7 @@ try {
         $s = $state();
         $err($api('admin', 'PUT', $u, ['version' => 3, 'default_driver_id' => 'tdb_c1']), 422, 'driver_not_allowed');
         $err($api('admin', 'PUT', $u, ['version' => 3, 'status' => 'gone']), 422, 'invalid_status');
-        $err($api('admin', 'PUT', '?entity=vehicle&id=tv_нет', ['version' => 1, 'name' => 'Х']), 404, 'not_found');
+        $err($api('admin', 'PUT', '?entity=vehicle&id=' . rawurlencode('tv_нет'), ['version' => 1, 'name' => 'Х']), 404, 'not_found');
         $err($api('admin', 'PUT', '?entity=vehicle', ['version' => 1, 'name' => 'Х']), 422, 'id_required');
         eq($state(), $s, 'не изменилось');
         $j = $jMax();
@@ -1327,7 +1327,7 @@ try {
         eq($r['json']['current_version'], $cur, 'current_version');
         eq($r['json']['vehicle']['id'], $ids['v1'], 'vehicle');
         eq($r['json']['vehicle']['base_id'], $ids['b1'], 'актуальная база');
-        $err($api('view', 'POST', '?action=move&id=tv_нет', ['base_id' => $ids['b2'], 'version' => 1]), 404, 'not_found');
+        $err($api('view', 'POST', '?action=move&id=' . rawurlencode('tv_нет'), ['base_id' => $ids['b2'], 'version' => 1]), 404, 'not_found');
         $err($api('view', 'POST', '?action=move', ['base_id' => $ids['b2'], 'version' => 1]), 422, 'id_required');
         eq($state(), $s, 'не изменилось');
         return 'ok';

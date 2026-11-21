@@ -6,6 +6,9 @@
 --         trips, trip_participants, trip_requests,
 --         tasks, task_assignees, task_checklist
 --           Блок «Задачи» (schema v9, T1-1; v10, T1-7: task_assignees без FK на employees)
+--         transport_bases, vehicles, transport_driver_pool, transport_requests, transport_assignments,
+--         assignment_crew, assignment_stops, geo_cache, transport_journal
+--           Модуль «Транспорт» (schema v15, V10-T1; раздел в конце файла)
 -- Features: E5-4 automatic audit_log cleanup (>7 days)
 --           Business trips (trips + trip_participants, schema v6)
 --           RPA v1.2 (HelpMe) fields on trips (schema v7, E12-1)
@@ -313,3 +316,149 @@ CREATE TABLE IF NOT EXISTS task_links (
     FOREIGN KEY (task_b) REFERENCES tasks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_task_links_b ON task_links (task_b);
+
+-- ============================================================================
+-- Модуль «Транспорт» (schema v15, V10-T1). Только добавление (IF NOT EXISTS), порядок объявления — по FK.
+-- Время — наивная локальная строка 'YYYY-MM-DDTHH:MM' (+05); длительности и стоянки кратны 15 минутам.
+-- Ссылки на сотрудников (employee_id / driver_id / default_driver_id) — TEXT без FK на employees: удаление или
+-- повторный импорт сотрудников (api/import.php, save.php) не должны стирать справочник/историю транспорта
+-- (как task_assignees с v10); имя на момент действия — *_snap.
+-- ============================================================================
+
+-- transport_bases: базы ТС (заменяют «населённый пункт нахождения»); названия вносит admin через API.
+CREATE TABLE IF NOT EXISTS transport_bases (
+    id         TEXT PRIMARY KEY NOT NULL,
+    name       TEXT NOT NULL UNIQUE,   -- регистронезависимая уникальность по-кириллице — проверка в API (SQLite NOCASE понимает только ASCII)
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+);
+
+-- vehicles: транспортные средства. base_id меняется ТОЛЬКО действием move (постоянный перенос, журнал vehicle.move).
+--   plate хранится нормализованным (верхний регистр, без пробелов). version — оптимистичная блокировка (409 VERSION_CONFLICT).
+CREATE TABLE IF NOT EXISTS vehicles (
+    id                TEXT PRIMARY KEY NOT NULL,
+    name              TEXT NOT NULL,
+    plate             TEXT NOT NULL UNIQUE,
+    base_id           TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'in_service' CHECK (status IN ('in_service','repair')),
+    default_driver_id TEXT,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    version           INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT,
+    updated_at        TEXT,
+    FOREIGN KEY (base_id) REFERENCES transport_bases(id)
+);
+CREATE INDEX IF NOT EXISTS idx_vehicles_base ON vehicles (base_id);
+
+-- transport_driver_pool: сотрудники-совместители, имеющие право управлять ТС (вместе с группой «Транспорт» — допустимые водители).
+CREATE TABLE IF NOT EXISTS transport_driver_pool (
+    employee_id TEXT PRIMARY KEY NOT NULL,
+    added_by    TEXT,
+    added_at    TEXT
+);
+
+-- transport_requests: заявки на транспорт (API — фаза V10-B). created_by — users.id автора. display_no — сквозной номер.
+CREATE TABLE IF NOT EXISTS transport_requests (
+    id              TEXT PRIMARY KEY NOT NULL,
+    display_no      INTEGER,
+    title           TEXT NOT NULL,
+    subscriber      TEXT,
+    address         TEXT,
+    comment         TEXT,
+    status          TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','assigned','in_progress','done','cancelled')),
+    source          TEXT,
+    external_id     TEXT,
+    version         INTEGER NOT NULL DEFAULT 1,
+    created_by      TEXT,
+    created_by_name TEXT,
+    created_at      TEXT,
+    updated_at      TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transport_requests_display_no ON transport_requests (display_no);
+CREATE INDEX IF NOT EXISTS idx_transport_requests_status ON transport_requests (status);
+CREATE INDEX IF NOT EXISTS idx_transport_requests_created_by ON transport_requests (created_by);
+CREATE INDEX IF NOT EXISTS idx_transport_requests_external ON transport_requests (external_id);
+
+-- transport_assignments: назначение ТС и водителя на заявку. end_at = start_at + duration_min (считает сервер).
+--   override_json — подтверждённые предупреждения (не блокируют). driver_name_snap — ФИО водителя на момент назначения.
+CREATE TABLE IF NOT EXISTS transport_assignments (
+    id               TEXT PRIMARY KEY NOT NULL,
+    request_id       TEXT NOT NULL,
+    vehicle_id       TEXT NOT NULL,
+    driver_id        TEXT NOT NULL,
+    driver_name_snap TEXT,
+    start_at         TEXT NOT NULL,
+    duration_min     INTEGER NOT NULL CHECK (duration_min > 0 AND duration_min <= 10080 AND duration_min % 15 = 0),
+    end_at           TEXT NOT NULL,
+    override_json    TEXT,
+    version          INTEGER NOT NULL DEFAULT 1,
+    created_by       TEXT,
+    created_at       TEXT,
+    updated_at       TEXT,
+    FOREIGN KEY (request_id) REFERENCES transport_requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+);
+CREATE INDEX IF NOT EXISTS idx_transport_assignments_vehicle ON transport_assignments (vehicle_id, start_at, end_at);
+CREATE INDEX IF NOT EXISTS idx_transport_assignments_driver ON transport_assignments (driver_id, start_at, end_at);
+CREATE INDEX IF NOT EXISTS idx_transport_assignments_request ON transport_assignments (request_id);
+
+-- assignment_crew: бригада назначения (любые сотрудники; водитель в бригаду не входит — проверяет API).
+CREATE TABLE IF NOT EXISTS assignment_crew (
+    assignment_id TEXT NOT NULL,
+    employee_id   TEXT NOT NULL,
+    name_snap     TEXT,
+    PRIMARY KEY (assignment_id, employee_id),
+    FOREIGN KEY (assignment_id) REFERENCES transport_assignments(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_assignment_crew_employee ON assignment_crew (employee_id);
+
+-- assignment_stops: маршрут назначения. stay_min / leg_min / leg_min_map кратны 15 (leg_min_map — предложение карты, leg_min — принятое).
+CREATE TABLE IF NOT EXISTS assignment_stops (
+    assignment_id TEXT NOT NULL,
+    ord           INTEGER NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('departure','intermediate','arrival')),
+    place         TEXT NOT NULL,
+    lat           REAL CHECK (lat IS NULL OR (lat >= -90 AND lat <= 90)),
+    lon           REAL CHECK (lon IS NULL OR (lon >= -180 AND lon <= 180)),
+    stay_min      INTEGER NOT NULL DEFAULT 0 CHECK (stay_min >= 0 AND stay_min % 15 = 0),
+    leg_km        REAL,
+    leg_min_map   INTEGER CHECK (leg_min_map IS NULL OR (leg_min_map >= 0 AND leg_min_map % 15 = 0)),
+    leg_min       INTEGER NOT NULL DEFAULT 0 CHECK (leg_min >= 0 AND leg_min % 15 = 0),
+    PRIMARY KEY (assignment_id, ord),
+    FOREIGN KEY (assignment_id) REFERENCES transport_assignments(id) ON DELETE CASCADE
+);
+
+-- geo_cache: кэш ответов картографических сервисов (api/transport_geo.php — фаза V10-B).
+CREATE TABLE IF NOT EXISTS geo_cache (
+    key          TEXT PRIMARY KEY NOT NULL,
+    kind         TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    fetched_at   TEXT NOT NULL
+);
+
+-- transport_journal: журнал изменений модуля. APPEND-ONLY: UPDATE и DELETE запрещены триггерами; очистка audit_log
+--   (api/helpers.php audit_cleanup, api/db.php cleanupAuditLog — 7 дней) эту таблицу не затрагивает. Запись — в той же
+--   транзакции, что и изменение (api/transport_lib.php transport_journal_write). ts — локальное время +05 с секундами.
+CREATE TABLE IF NOT EXISTS transport_journal (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT,
+    actor         TEXT,
+    role          TEXT,
+    action        TEXT,
+    entity_type   TEXT,
+    entity_id     TEXT,
+    before_json   TEXT,
+    after_json    TEXT,
+    warnings_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_transport_journal_ts ON transport_journal (ts);
+CREATE INDEX IF NOT EXISTS idx_transport_journal_entity ON transport_journal (entity_type, entity_id);
+CREATE TRIGGER IF NOT EXISTS trg_transport_journal_no_update BEFORE UPDATE ON transport_journal
+BEGIN
+    SELECT RAISE(ABORT, 'transport_journal is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_transport_journal_no_delete BEFORE DELETE ON transport_journal
+BEGIN
+    SELECT RAISE(ABORT, 'transport_journal is append-only');
+END;
