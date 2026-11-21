@@ -1,0 +1,2 @@
+info: файлы api/ с исходящим HTTP на текущем коммите: ["tasks_rules.php"]
+RESULT: 80 passed, 0 failed
