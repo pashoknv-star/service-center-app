@@ -13,6 +13,10 @@
 
 Спеки: `reports/V10/specs/` (00_COMMON, CONTRACT, T1..T4). Main при старте: 30af063.
 
+## Состояние на 2026-11-21 (после приёмки)
+
+T1, T2, T3, T4 приняты и влиты в main (aa729a5, 8af5b34, a53560e, f28c91d); патчи AGENTS.md применены (ad3f729); worktree v10-t1..t4 удалены. Найден дефект: журнал обходится через `INSERT OR REPLACE` — карточка **V10-T1b `t_b66bd648`** (sd_worker_01, worktree `/home/hermes/wt/v10-t1b`, ветка `v10-t1b-journal-fix`). Остаток фазы A: принять T1b → полный гейт на main (tripsform флейкает под нагрузкой — перепроверять отдельно) → push main → ПОЛНАЯ ОСТАНОВКА до «Старт». Деплой НЕ запрошен (владелец 2026-11-21: «предложения приняты» = сначала фикс, гейт, push, стоп).
+
 ## Шаги при перезапуске
 
 1. `hermes kanban list | grep V10`, `git -C ~/service-center-app log --oneline -5`, `git worktree list`, для каждого worktree `git -C <wt> status -sb` и `git -C <wt> log --oneline main..HEAD`.
