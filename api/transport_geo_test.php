@@ -699,11 +699,11 @@ try {
             $r = $act === 'search' ? search('Кондинское') : ($act === 'reverse' ? reverse(60.1, 64.8) : route(60.1, 64.8, uniq(), 65.9));
             $dt = microtime(true) - $t0;
             $j = $r['json'];
-            chk("H: $act при «$mode» → 200 degraded, reason=$reason", $r['status'] === 200 && ($j ?? null) === ['success' => true, 'degraded' => true, 'reason' => $reason], 'HTTP ' . $r['status'] . ' ' . jenc($j));
+            chk("H: $act при «{$mode}» → 200 degraded, reason=$reason", $r['status'] === 200 && ($j ?? null) === ['success' => true, 'degraded' => true, 'reason' => $reason], 'HTTP ' . $r['status'] . ' ' . jenc($j));
             if ($mode === 'slow') {
                 chk("H: $act таймаут укладывается в 1.5 с (timeout_ms=500)", $dt < 1.5, sprintf('%.2f c', $dt));
             }
-            chk("H: $act при «$mode» — сбой не попал в кэш", cacheRows() === 0);
+            chk("H: $act при «{$mode}» — сбой не попал в кэш", cacheRows() === 0);
         }
         rs(['nominatim_url' => Ctx::$fake . '/redirect']);
         search('Кондинское');
@@ -1041,6 +1041,14 @@ try {
         if (is_resource($mutProc)) { proc_terminate($mutProc); proc_close($mutProc); $mutProc = false; }
         @unlink($mutDir . '/transport_geo.php');
         @rmdir($mutDir);
+    });
+
+    // =====================================================================
+    // Z. Гигиена: в журнале сервера нет PHP-предупреждений и ошибок
+    // =====================================================================
+    section('Z. Журнал сервера прокси', function () {
+        $log = serverLogText();
+        chk('Z: в журнале сервера нет PHP Warning/Notice/Deprecated/Fatal (ни в обработчике, ни в мутанте)', !preg_match('/PHP (Warning|Notice|Deprecated|Fatal error|Parse error)/', $log), (string) (preg_match('/PHP (Warning|Notice|Deprecated|Fatal error|Parse error)[^\n]*/', $log, $m) ? $m[0] : ''));
     });
 } finally {
     foreach ([$fakeProc, $appProc] as $p) { if (is_resource($p)) { proc_terminate($p); proc_close($p); } }
