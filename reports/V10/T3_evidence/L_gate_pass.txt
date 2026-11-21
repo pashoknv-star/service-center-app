@@ -1,0 +1,30 @@
+ 05:49:38 up 11 days,  7:21,  0 user,  load average: 1.22, 1.59, 2.26
+verify_all: 7de6e7c 2026-11-21 05:49:38 suites: smoke tasks tasksn8n tasksatt tasklinks tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+smoke    PASS     84     84     2s  
+tasks    PASS     66     66     3s  
+tasksn8n PASS     27     27    26s  
+tasksatt PASS     24     24     6s  
+tasklinks PASS     37     37     4s  
+tasksui  PASS    334    334    22s  
+tasksmx  PASS     79     79     5s  
+taskscal PASS    220    220     5s  
+director PASS    101    101     9s  
+emptasks PASS     34     34     2s  
+tasklinksui PASS    211    211   109s  
+e51      PASS     23     23     0s  
+e52      PASS     41     41     0s  
+hygiene  PASS     19     19     0s  
+trips    PASS      7      7     3s  
+tripsform PASS    131    131    56s  
+tripsstatus PASS    147    147    69s  
+syntax   PASS      -      -     0s  
+phplint  PASS     38      -     3s  
+pii      PASS      -      -     0s  
+refs     PASS     28     28    18s  удалено 0, со ссылками 0, исключений 0
+tasklink PASS     43     43     5s  коммитов 3, с кодом 1, нарушений 0
+clean    PASS
+
+GATE: PASS (22 suites)
+exit=0
