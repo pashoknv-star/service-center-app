@@ -110,10 +110,10 @@ $verBefore = $db->getSchemaVersion();
 
 out('=== TASKLINKS TEST START ===');
 
-$run('M1 миграция копии dev-БД (v6) → v14: tasks.links_text (последняя колонка), task_links, индекс, CHECK пары; повтор — no-op', function () use ($db, $pdo, $verBefore) {
+$run('M1 миграция копии dev-БД (v6) → v15 (v14 — связи, v15 — транспорт): tasks.links_text (последняя колонка), task_links, индекс, CHECK пары; повтор — no-op', function () use ($db, $pdo, $verBefore) {
     ok($verBefore < 9, 'ожидалась исходная схема < 9, а не ' . $verBefore);
     $db->migrate();
-    eq($db->getSchemaVersion(), 14, 'schema_version');
+    eq($db->getSchemaVersion(), 15, 'schema_version');
     $cols = tcols($pdo, 'tasks');
     eq($cols, ['id', 'title', 'description', 'start_at', 'end_at', 'priority', 'label', 'status',
         'check_state', 'version', 'created_by', 'created_at', 'updated_at', 'closed_at', 'archived', 'links_text'], 'tasks cols');
@@ -141,7 +141,7 @@ $run('M1 миграция копии dev-БД (v6) → v14: tasks.links_text (п
     $db->migrate();
     eq(snapshotTables($pdo, ['audit_log', 'meta']), $snap, 'повторный migrate не меняет данные');
     eq($pdo->query('PRAGMA integrity_check')->fetchColumn(), 'ok', 'integrity_check');
-    return 'v' . $verBefore . '→v14';
+    return 'v' . $verBefore . '→v15';
 });
 
 $run('M2 миграция v13 → v14 на копии: колонка и таблица добавлены, данные задач/людей/вложений прежние, повтор и «ложная 13» безопасны', function () use ($tmpDir) {
@@ -159,7 +159,7 @@ $run('M2 миграция v13 → v14 на копии: колонка и таб�
     $migrate = function (string $mode) use ($script, $v13): string {
         return trim((string) shell_exec('SC_APP_DB=' . escapeshellarg($v13) . ' php ' . escapeshellarg($script) . ' ' . $mode . ' 2>/dev/null'));
     };
-    eq($migrate('prep'), '6>14', 'подготовка: копия dev-БД v6 → v14');
+    eq($migrate('prep'), '6>15', 'подготовка: копия dev-БД v6 → v15');
     $p13 = new PDO('sqlite:' . $v13, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
     $p13->exec('PRAGMA journal_mode = DELETE');
     $p13->exec("INSERT INTO employees (id, full_name, location, sort_order) VALUES ('m2_e', 'Миграц Е', 'QA', 0)");
@@ -180,19 +180,19 @@ $run('M2 миграция v13 → v14 на копии: колонка и таб�
     unset($p13);
 
     try {
-        eq($migrate('first'), '13>14', 'первая миграция 13→14 (вывод процесса)');
+        eq($migrate('first'), '13>15', 'первая миграция 13→15 (v14 + v15) (вывод процесса)');
         $q = new PDO('sqlite:' . $v13, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
         ok(in_array('links_text', tcols($q, 'tasks'), true), 'links_text добавлена');
         eq(tcols($q, 'task_links'), ['task_a', 'task_b', 'created_at', 'created_by'], 'task_links');
         eq($q->query("SELECT $oldCols FROM tasks ORDER BY id")->fetchAll(), $tasksBefore, 'прежние колонки задач не изменились');
         eq($q->query('SELECT links_text FROM tasks WHERE id = \'m2_t1\'')->fetchColumn(), null, 'links_text у старых задач NULL');
         eq(snapshotTables($q, ['audit_log', 'meta', 'tasks', 'task_links']), $snapBefore, 'прочие таблицы без изменений (кроме новой task_links)');
-        eq($q->query("SELECT value FROM meta WHERE key = 'schema_version'")->fetchColumn(), '14', 'meta.schema_version');
+        eq($q->query("SELECT value FROM meta WHERE key = 'schema_version'")->fetchColumn(), '15', 'meta.schema_version');
         // Повтор на v14 — no-op; «ложная 13» при уже существующих колонке/таблице — без ошибок и потерь.
         $snapV14 = snapshotTables($q, ['audit_log', 'meta']);
         unset($q);
-        eq($migrate('again'), '14>14', 'повтор на v14');
-        eq($migrate('again13'), '13>14', 'повторное применение с версии 13 (колонка и таблица уже есть)');
+        eq($migrate('again'), '15>15', 'повтор на v15');
+        eq($migrate('again13'), '13>15', 'повторное применение с версии 13 (колонка и таблица уже есть)');
         $q = new PDO('sqlite:' . $v13, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
         eq(snapshotTables($q, ['audit_log', 'meta']), $snapV14, 'повторы ничего не ломают и не меняют');
         eq($q->query('PRAGMA integrity_check')->fetchColumn(), 'ok', 'integrity_check');

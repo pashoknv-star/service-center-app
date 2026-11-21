@@ -76,7 +76,7 @@ const codeFiles = [];
 const self = path.relative(ROOT, __filename);
 const leftovers = codeFiles.filter((f) => f !== self && f !== 'api/tasks_test.php' && f !== 'api/db.php' && f !== 'scripts/v6_director_data.sql' && oldName.test(read(f)));
 check('«В2С» не осталось в коде/api/js/scripts (' + codeFiles.length + ' файлов; тесты миграции и SQL-скрипт упоминают старое имя намеренно)', leftovers.length === 0, leftovers.join(', '));
-check('миграция v11 переименовывает только g3 с именем «В2С» или «Директор СЦ» (v12 — V6.3-2, повторы задач; v13 — V7, вложения; v14 — V9, связанные задачи)', /UPDATE groups SET name = 'Управление СЦ' WHERE id = 'g3' AND name IN \('В2С', 'Директор СЦ'\)/.test(read('api/db.php')) && /SCHEMA_VERSION = 14/.test(read('api/db.php')));
+check('миграция v11 переименовывает только g3 с именем «В2С» или «Директор СЦ» (v12 — V6.3-2, повторы задач; v13 — V7, вложения; v14 — V9, связанные задачи; v15 — V10, транспорт)', /UPDATE groups SET name = 'Управление СЦ' WHERE id = 'g3' AND name IN \('В2С', 'Директор СЦ'\)/.test(read('api/db.php')) && /SCHEMA_VERSION = 15/.test(read('api/db.php')));
 const oldDir = ['Директор', 'СЦ'].join(' ');   // прежнее имя зоны 3 (склейка — чтобы сьют не находил его в самом себе)
 const leftovers2 = codeFiles.filter((f) => !['api/tasks_test.php', 'api/db.php', 'scripts/v6_accept_data.sh', self].includes(f) && read(f).includes(oldDir));
 check('прежнее имя зоны «' + oldDir + '» нигде не осталось в коде/api/js/scripts (кроме миграции v11 и её тестов)', leftovers2.length === 0, leftovers2.join(', '));
@@ -284,7 +284,7 @@ if (hasSqlite) {
   const base = path.join(tmp, 'base.db');
   fs.copyFileSync(path.join(ROOT, 'data/app.db'), base);
   const mig = (db) => cp.execFileSync('php', ['-r', 'require "' + ROOT + '/api/db.php"; $d = Database::getInstance(); $d->migrate(); echo $d->getSchemaVersion();'], { env: { ...process.env, SC_APP_DB: db }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  check('миграция копии dev-БД → schema_version 14 (v12 V6.3-2, v13 V7, v14 V9)', mig(base) === '14');
+  check('миграция копии dev-БД → schema_version 15 (v12 V6.3-2, v13 V7, v14 V9, v15 V10-T1)', mig(base) === '15');
 
   // Вымышленные данные: «Костецкий» (история во ВСЕХ очищаемых таблицах) + контрольный «Другой Сотрудник» (его данные не трогаются).
   function seed(db, opts) {
@@ -407,12 +407,12 @@ if (hasSqlite) {
     mig(dbM);
     const rowsAfter = rc(dbM);
     check('миграция v10→v11 (g3 «' + oldName + '»): число строк во всех ' + tables.length + ' таблицах не изменилось', JSON.stringify(rowsBefore) === JSON.stringify(rowsAfter), JSON.stringify([rowsBefore, rowsAfter]));
-    check('миграция v10→v11 (g3 «' + oldName + '»): g3 = «Управление СЦ», прочие группы не тронуты, schema_version 14', q(dbM, "SELECT name FROM groups WHERE id = 'g3'") === 'Управление СЦ' && q(dbM, "SELECT id || ':' || name FROM groups WHERE id != 'g3' ORDER BY id") === gBefore && q(dbM, "SELECT value FROM meta WHERE key = 'schema_version'") === '14');
+    check('миграция v10→v11 (g3 «' + oldName + '»): g3 = «Управление СЦ», прочие группы не тронуты, schema_version 15', q(dbM, "SELECT name FROM groups WHERE id = 'g3'") === 'Управление СЦ' && q(dbM, "SELECT id || ':' || name FROM groups WHERE id != 'g3' ORDER BY id") === gBefore && q(dbM, "SELECT value FROM meta WHERE key = 'schema_version'") === '15');
     check('миграция v10→v11 (g3 «' + oldName + '»): integrity_check ok, foreign_key_check пуст', q(dbM, 'PRAGMA integrity_check') === 'ok' && q(dbM, 'PRAGMA foreign_key_check') === '');
     const dM = dump(dbM);
     sh(dbM, "UPDATE meta SET value = '10' WHERE key = 'schema_version';");
     mig(dbM);
-    sh(dbM, "UPDATE meta SET value = '14' WHERE key = 'schema_version';");
+    sh(dbM, "UPDATE meta SET value = '15' WHERE key = 'schema_version';");
     check('миграция (g3 «' + oldName + '»): повтор — no-op (БД идентична)', dump(dbM) === dM);
     return dbM;
   };
