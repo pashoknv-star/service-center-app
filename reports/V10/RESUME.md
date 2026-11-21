@@ -28,6 +28,10 @@
 
 Приёмка T5: сьют `transport` зелёный (157) БЕЗ правки api/transport_test.php; координатор переносит `transport` из OPT_SUITES в ALL_SUITES. T8 стартует после принятия T6 (при слиянии T6 — обновить ветку v10-t8-ui: `git -C /home/hermes/wt/v10-t8 merge main`). После приёмки всех четырёх — полный гейт на main, push, ПОЛНАЯ ОСТАНОВКА до «Старт» на фазу C. Открыто для владельца до деплоя: реальный e-mail для User-Agent геопрокси (заглушка OWNER_EMAIL_TO_BE_SET), проверка исходящего HTTP на Hostland (SPIKE_MAP §7).
 
+## Фаза B закрыта (2026-11-21 18:40)
+
+T5, T6, T7, T8 приняты и влиты; полный гейт на main (0c75511) — `GATE: PASS (27 suites)`, tripsform 131/131; main запушен. Проба журнала на schema.sql main: REPLACE/REPLACE INTO/OR IGNORE/upsert/UPDATE/DELETE — отказ. ПОЛНАЯ ОСТАНОВКА до «Старт» на фазу C (T9–T12). Деплой НЕ запрошен. Открыто для владельца до деплоя: e-mail для User-Agent геопрокси (OWNER_EMAIL_TO_BE_SET), проверка исходящего HTTP на Hostland, согласие с условиями OSM/Nominatim/OSRM.
+
 ## Шаги при перезапуске
 
 1. `hermes kanban list | grep V10`, `git -C ~/service-center-app log --oneline -5`, `git worktree list`, для каждого worktree `git -C <wt> status -sb` и `git -C <wt> log --oneline main..HEAD`.
