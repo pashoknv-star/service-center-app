@@ -1,0 +1,38 @@
+# V10-T7: мутационная проверка сьюта transportgeo (430 проверок) — каждая мутация реализации должна дать красный прогон
+# Скрипт: reports/V10/T7_mutation_check.sh (sed-мутации api/transport_geo.php с восстановлением оригинала; запускался на коммите 4a175a4)
+MUTANT session: === RESULTS: 428 passed, 2 failed out of 430 ===
+FAIL: L: второй запрос той же сессии, пришедший во время исходящего вызова, не ждёт его — A=3.
+FAIL: L: статически: в обработчике есть оператор session_write_close() (поведение доказано выше)
+MUTANT follow: === RESULTS: 426 passed, 4 failed out of 430 ===
+FAIL: H: search при «redirect» → 200 degraded, reason=http_302 — HTTP 200 {"success":true,"degraded":false,"cached":false,"items":[{"name":"Урай","
+FAIL: H: search при «redirect» — сбой не попал в кэш
+FAIL: H: редирект 302 не выполнялся (в журнале фейка один запрос) — запросов 2
+MUTANT nocache: === RESULTS: 413 passed, 17 failed out of 430 ===
+FAIL: C: повтор (другой регистр) — из кэша, наружу не ходили — {"success":true,"degraded":false,"cached":false,"items
+FAIL: C: запись в geo_cache: kind=search, fetched_at ≈ сейчас — false
+FAIL: C: в кэш попал уже отфильтрованный ответ (без улиц и osm_id)
+MUTANT floor: === RESULTS: 369 passed, 61 failed out of 430 ===
+FAIL: F: ответ {success, degraded:false, cached:false, route:{km, sec, min_map}} — {"success":true,"degraded":false,"cached":false,"route":{"km":124.3,"s
+FAIL: G PHP: 0.5 → 15 (0.5 с -> 1 с -> 15) — получено 0
+FAIL: G PHP == JS: 0.5 — php=0 js=15
+MUTANT precision: === RESULTS: 427 passed, 3 failed out of 430 ===
+FAIL: E: ключи query — фиксированный набор из 6 — ["#0 \/reverse: значения query вне белого списка \"format=
+FAIL: E: координаты округлены до 3 знаков (60.129, 64.804), zoom=14 — {"format":"jsonv2","lat":"60.129000","lon":"64.804","zoom":"1
+FAIL: E: числовые строки и отрицательные координаты допустимы — {"format":"jsonv2","lat":"-33.500000","lon":"15
+MUTANT nobreaker: === RESULTS: 424 passed, 6 failed out of 430 ===
+FAIL: J: после 3 сбоев — degraded/circuit_open без обращения наружу — {"success":true,"degraded":true,"reason":"http_500"} n=4
+FAIL: J: breaker — на сервис: обратный геокод Nominatim тоже закрыт
+FAIL: J: другой сервис (OSRM) breaker Nominatim не касается — {"success":true,"degraded":false,"cached":false,"route":{"km":124.3,"sec":
+MUTANT norate: === RESULTS: 424 passed, 6 failed out of 430 ===
+FAIL: I: первый ушёл наружу, второй сразу — degraded/rate_limited — {"success":true,"degraded":false,"cached":false,"items":[{"na
+FAIL: I: обратный геокод — тот же сервис Nominatim, тоже rate_limited — {"success":true,"degraded":false,"cached":false,"place"
+FAIL: I: лимит по сервисам независим — маршрут (OSRM) проходит сразу — {"success":true,"degraded":false,"cached"
+MUTANT viewer: === RESULTS: 425 passed, 5 failed out of 430 ===
+FAIL: A: viewer search → 403 forbidden — HTTP 200 {
+FAIL: A: viewer reverse → 403 forbidden — HTTP 200 {
+FAIL: A: viewer route → 403 forbidden — HTTP 200 {
+MUTANT cookie: === RESULTS: 419 passed, 11 failed out of 430 ===
+FAIL: B: query — ровно 7 ключей белого списка, значения-константы — ["#0 \/search: заголовок cookie"]
+FAIL: B: заголовок cookie не пересылается
+FAIL: B: Photon/ORS/Valhalla при штатной работе Nominatim не вызываются — запросов 4
+restored
