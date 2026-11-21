@@ -16,8 +16,8 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 [tasklinksui]=211 [transportdb]=117 [transport]=157 )
-ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks transportdb transport tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 [tasklinksui]=211 [transportdb]=117 [transportboard]=77 [transport]=157 )
+ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks transportdb transport transportboard tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
 # Сьюты вне общего gate: запускаются ТОЛЬКО явно (bash scripts/verify_all.sh <имя>) и в «пустой» прогон не входят.
 #   (сейчас пусто: transport перенесён в ALL_SUITES при приёмке V10-T5). Образец записи — transport (V10-T2), был красным до V10-T5: тесты API заявок/назначений написаны до реализации
 #   (api/transport_requests.php, api/transport_assignments.php) и требуют схему v15 (V10-T1). BASELINE[transport] — число
@@ -55,8 +55,8 @@ run_suite() {
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
              CNT=${p:-'-'}
              if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; fi ;;
-    tasks|tasksn8n|tasksatt|tasklinks|transportdb|transport)   # V10-T1 (transportdb — схема v15 «Транспорт», ТС, базы, пул, перенос, журнал; api/transport_db_test.php); V9 (tasklinks — связанные задачи, schema v14); T1-1 / T1-4 / V7: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети; tasksatt — вложения) — на временной копии БД (SC_APP_DB), data/app.db не трогает. V10-T2: transport — API заявок/назначений «Транспорта» (php -S с 4 обработчиками на копии БД; ожидаемо красный до V10-T5, только явным запуском).
-             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php; [ "$s" = tasksatt ] && php_t=api/task_files_test.php; [ "$s" = tasklinks ] && php_t=api/tasks_links_test.php; [ "$s" = transportdb ] && php_t=api/transport_db_test.php; [ "$s" = transport ] && php_t=api/transport_test.php
+    tasks|tasksn8n|tasksatt|tasklinks|transportdb|transportboard|transport)   # V10-T6 (transportboard — API доски и чтения журнала; api/transport_board_test.php); V10-T1 (transportdb — схема v15 «Транспорт», ТС, базы, пул, перенос, журнал; api/transport_db_test.php); V9 (tasklinks — связанные задачи, schema v14); T1-1 / T1-4 / V7: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети; tasksatt — вложения) — на временной копии БД (SC_APP_DB), data/app.db не трогает. V10-T2: transport — API заявок/назначений «Транспорта» (php -S с 4 обработчиками на копии БД; ожидаемо красный до V10-T5, только явным запуском).
+             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php; [ "$s" = tasksatt ] && php_t=api/task_files_test.php; [ "$s" = tasklinks ] && php_t=api/tasks_links_test.php; [ "$s" = transportdb ] && php_t=api/transport_db_test.php; [ "$s" = transportboard ] && php_t=api/transport_board_test.php; [ "$s" = transport ] && php_t=api/transport_test.php
              timeout $SUITE_TIMEOUT php "$php_t" >"$log" 2>&1; rc=$?
              out=$(grep -Eo 'RESULTS: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
