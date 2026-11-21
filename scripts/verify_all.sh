@@ -16,8 +16,8 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 [tasklinksui]=211 [transportdb]=117 [transportboard]=77 [transport]=157 [transportgeo]=430 )
-ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks transportdb transport transportboard transportgeo tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 [tasklinksui]=211 [transportdb]=117 [transportboard]=77 [transport]=157 [transportgeo]=430 [transportboardui]=134 )
+ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks transportdb transport transportboard transportgeo tasksui tasksmx taskscal director emptasks tasklinksui transportboardui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
 # Сьюты вне общего gate: запускаются ТОЛЬКО явно (bash scripts/verify_all.sh <имя>) и в «пустой» прогон не входят.
 #   (сейчас пусто: transport перенесён в ALL_SUITES при приёмке V10-T5). Образец записи — transport (V10-T2), был красным до V10-T5: тесты API заявок/назначений написаны до реализации
 #   (api/transport_requests.php, api/transport_assignments.php) и требуют схему v15 (V10-T1). BASELINE[transport] — число
@@ -62,8 +62,8 @@ run_suite() {
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
              CNT=${p:-'-'}
              if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; [ "$s" = transport ] && NOTE="$NOTE (ожидаемо красный до V10-T5; причины — в логе)"; fi ;;
-    e51|e52|hygiene|tasksui|tasksmx|taskscal|director|tripsform|emptasks|tripsstatus|tasklinksui)
-             local js; case $s in e51) js=scripts/test_e51_pick_geometry.js;; e52) js=scripts/test_e52_pick_semantics.js;; hygiene) js=scripts/test_r4_hygiene.js;; tasksui) js=scripts/test_tasks_frontend.js;; tasksmx) js=scripts/test_tasks_matrix.js;; taskscal) js=scripts/test_tasks_calendar.js;; director) js=scripts/test_v6_director.js;; tripsform) js=scripts/test_trips_v8_form.js;; emptasks) js=scripts/test_emp_tasks_btn.js;; tripsstatus) js=scripts/test_trips_v8_status.js;; tasklinksui) js=scripts/test_tasks_links_ui.js;; esac
+    e51|e52|hygiene|tasksui|tasksmx|taskscal|director|tripsform|emptasks|tripsstatus|tasklinksui|transportboardui)
+             local js; case $s in e51) js=scripts/test_e51_pick_geometry.js;; e52) js=scripts/test_e52_pick_semantics.js;; hygiene) js=scripts/test_r4_hygiene.js;; tasksui) js=scripts/test_tasks_frontend.js;; tasksmx) js=scripts/test_tasks_matrix.js;; taskscal) js=scripts/test_tasks_calendar.js;; director) js=scripts/test_v6_director.js;; tripsform) js=scripts/test_trips_v8_form.js;; emptasks) js=scripts/test_emp_tasks_btn.js;; tripsstatus) js=scripts/test_trips_v8_status.js;; tasklinksui) js=scripts/test_tasks_links_ui.js;; transportboardui) js=scripts/test_transport_board_ui.js;; esac
              timeout $SUITE_TIMEOUT node "$js" >"$log" 2>&1; rc=$?
              out=$(grep -Eo 'RESULT: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')

@@ -1,0 +1,36 @@
+--- вкладка «Транспорт» ---
+  FAIL  window.Transport определён
+  FAIL  скрипт js/transport.js подключён относительным путём (без внешних URL)
+  FAIL  кнопка вкладки #tabTransport в панели, подпись «Транспорт»
+  PASS  контейнер #transportView скрыт до открытия
+  FAIL  Сценарий «вкладка» выполнен без сбоя теста — Error: нет элемента #tabTransport |     at k.click (/home/hermes/wt/v10-t8/scripts/v6_accept_lib.js:113:83) |     at async /home/hermes/wt/v10-t8/scripts/test_transport_board_ui.js:152:7
+  FAIL  supervisor: вкладка «Транспорт» есть и доска открывается
+  FAIL  viewer: вкладка «Транспорт» есть и доска открывается
+--- доска «День» ---
+  FAIL  Сценарий «день» выполнен без сбоя теста — Error: page exception: {"exceptionId":1,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"28","stackTrace":{"callFrames":[{"functionName":"","scriptId":"28","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"ReferenceError","description":"ReferenceError: Transport is not defined\n    at <anonymous>:1:1","objectId":"-47496039749564009
+--- доска «Неделя» ---
+  FAIL  Сценарий «неделя» выполнен без сбоя теста — Error: нет элемента #transportView [data-tp-act="viewWeek"] |     at k.click (/home/hermes/wt/v10-t8/scripts/v6_accept_lib.js:113:83) |     at async /home/hermes/wt/v10-t8/scripts/test_transport_board_ui.js:232:7
+--- источник данных ---
+  FAIL  к API транспорта доска обращалась только к transport_board.php (до переноса) — []
+  FAIL  период ≤ 31 дня: неделя запрашивается одним запросом пн–вс
+--- перенос ТС (admin, перетаскивание) ---
+  FAIL  Сценарий «перенос admin» выполнен без сбоя теста — Error: page exception: {"exceptionId":2,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"28","stackTrace":{"callFrames":[{"functionName":"","scriptId":"28","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"ReferenceError","description":"ReferenceError: Transport is not defined\n    at <anonymous>:1:1","objectId":"-47496039749564009
+--- перенос ТС (viewer, меню; конфликт версий) ---
+  FAIL  Сценарий «перенос viewer» выполнен без сбоя теста — Error: page exception: {"exceptionId":3,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"28","stackTrace":{"callFrames":[{"functionName":"","scriptId":"28","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"ReferenceError","description":"ReferenceError: Transport is not defined\n    at <anonymous>:1:1","objectId":"-47496039749564009
+--- supervisor ---
+  FAIL  Сценарий «supervisor» выполнен без сбоя теста — Error: page exception: {"exceptionId":4,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"28","stackTrace":{"callFrames":[{"functionName":"","scriptId":"28","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"ReferenceError","description":"ReferenceError: Transport is not defined\n    at <anonymous>:1:1","objectId":"-47496039749564009
+--- Transport.openForm (точка расширения T9) ---
+  FAIL  Сценарий «openForm» выполнен без сбоя теста — Error: page exception: {"exceptionId":5,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"28","stackTrace":{"callFrames":[{"functionName":"","scriptId":"28","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"ReferenceError","description":"ReferenceError: Transport is not defined\n    at <anonymous>:1:1","objectId":"-47496039749564009
+--- поллинг ---
+  FAIL  Сценарий «поллинг» выполнен без сбоя теста — Error: page exception: {"exceptionId":6,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"28","stackTrace":{"callFrames":[{"functionName":"","scriptId":"28","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"ReferenceError","description":"ReferenceError: Transport is not defined\n    at <anonymous>:1:1","objectId":"-47496039749564009
+--- вёрстка 375 / 1280 ---
+  FAIL  Сценарий «вёрстка» выполнен без сбоя теста — Error: page exception: {"exceptionId":7,"text":"Uncaught","lineNumber":0,"columnNumber":0,"scriptId":"28","stackTrace":{"callFrames":[{"functionName":"","scriptId":"28","url":"","lineNumber":0,"columnNumber":0}]},"exception":{"type":"object","subtype":"error","className":"ReferenceError","description":"ReferenceError: Transport is not defined\n    at <anonymous>:1:1","objectId":"-47496039749564009
+  PASS  нет необработанных исключений JS за весь прогон
+  PASS  нет диалогов alert/confirm (всё через собственные окна)
+  PASS  data/app.db не изменена (sha1 до = после)
+
+RESULT: 4 passed, 16 failed
+
+real	0m21.099s
+user	0m1.953s
+sys	0m0.427s
