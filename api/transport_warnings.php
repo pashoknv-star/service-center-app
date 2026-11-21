@@ -22,7 +22,7 @@ declare(strict_types=1);
  * Отсутствия (коды — из исходников, не из памяти):
  *   schedule_entries.status IN ('vacation','sick','trip') — api/save.php:499 (allowedStatuses supervisor: trip/day_off; vacation/sick
  *     пишет только admin), index.html:2544-2570 (VACATION_TYPES / TYPE_CSS / TYPE_TO_STATUS: vacation, sick, trip, dayoff→day_off),
- *     api/db.php:693 (legacy-статус 'trip' в schedule_entries), api/trips.php:56-57 ('sick' и legacy 'trip' не блокируют командировки);
+ *     api/db.php:693 (legacy-статус 'trip' в schedule_entries), api/trips.php:56-58 ('sick' и legacy 'trip' не блокируют командировки);
  *     'day_off' (отгул) отсутствием не считается: в контракте только «отпуск/болезнь/командировка»;
  *   trips + trip_participants (api/schema.sql:160-194): период участника start_date..end_date включительно, любой статус
  *     командировки ('forecast' | 'confirmed').
