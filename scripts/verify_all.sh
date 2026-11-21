@@ -17,12 +17,12 @@ cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
 declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 [tasklinksui]=211 [transportdb]=117 [transport]=157 )
-ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks transportdb tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
+ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks transportdb transport tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
 # Сьюты вне общего gate: запускаются ТОЛЬКО явно (bash scripts/verify_all.sh <имя>) и в «пустой» прогон не входят.
-#   transport (V10-T2) — ОЖИДАЕМО КРАСНЫЙ ДО V10-T5: тесты API заявок/назначений написаны до реализации
+#   (сейчас пусто: transport перенесён в ALL_SUITES при приёмке V10-T5). Образец записи — transport (V10-T2), был красным до V10-T5: тесты API заявок/назначений написаны до реализации
 #   (api/transport_requests.php, api/transport_assignments.php) и требуют схему v15 (V10-T1). BASELINE[transport] — число
 #   проверок в зелёном состоянии (после T5). Координатор переносит transport в ALL_SUITES при приёмке T5.
-OPT_SUITES=(transport)
+OPT_SUITES=()
 SUITE_TIMEOUT=600
 
 if [ $# -gt 0 ]; then SUITES=("$@"); else SUITES=("${ALL_SUITES[@]}"); fi
