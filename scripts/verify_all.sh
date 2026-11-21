@@ -3,6 +3,7 @@
 #
 #   bash scripts/verify_all.sh            # все сьюты (перед закрытием фазы и перед деплоем)
 #   bash scripts/verify_all.sh e51 e52    # только перечисленные (во время итераций)
+#   bash scripts/verify_all.sh transport  # V10-T2: сьют вне общего gate (ожидаемо красный до V10-T5)
 #
 # Exit 0 — только если ВСЕ выбранные сьюты зелёные, число тестов не меньше эталона
 # и после прогона в рабочем дереве не появилось новых изменений и артефактов.
@@ -15,13 +16,18 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 ROOT=$(pwd)
 
-declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 [tasklinksui]=211 [transportdb]=112 )
+declare -A BASELINE=( [smoke]=84 [e51]=23 [e52]=41 [hygiene]=19 [trips]=7 [tasks]=66 [tasksui]=334 [tasksmx]=79 [tasksn8n]=27 [taskscal]=220 [director]=101 [tasksatt]=24 [refs]=28 [tasklink]=43 [tripsform]=131 [emptasks]=34 [tripsstatus]=147 [tasklinks]=37 [tasklinksui]=211 [transportdb]=112 [transport]=157 )
 ALL_SUITES=(smoke tasks tasksn8n tasksatt tasklinks transportdb tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink)
+# Сьюты вне общего gate: запускаются ТОЛЬКО явно (bash scripts/verify_all.sh <имя>) и в «пустой» прогон не входят.
+#   transport (V10-T2) — ОЖИДАЕМО КРАСНЫЙ ДО V10-T5: тесты API заявок/назначений написаны до реализации
+#   (api/transport_requests.php, api/transport_assignments.php) и требуют схему v15 (V10-T1). BASELINE[transport] — число
+#   проверок в зелёном состоянии (после T5). Координатор переносит transport в ALL_SUITES при приёмке T5.
+OPT_SUITES=(transport)
 SUITE_TIMEOUT=600
 
 if [ $# -gt 0 ]; then SUITES=("$@"); else SUITES=("${ALL_SUITES[@]}"); fi
 for s in "${SUITES[@]}"; do
-  case " ${ALL_SUITES[*]} " in *" $s "*) ;; *) echo "Неизвестный сьют: $s. Доступны: ${ALL_SUITES[*]}"; exit 2;; esac
+  case " ${ALL_SUITES[*]} ${OPT_SUITES[*]} " in *" $s "*) ;; *) echo "Неизвестный сьют: $s. Доступны: ${ALL_SUITES[*]}; только явно: ${OPT_SUITES[*]}"; exit 2;; esac
 done
 
 # --- предусловия --------------------------------------------------------------
@@ -49,13 +55,13 @@ run_suite() {
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
              CNT=${p:-'-'}
              if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; fi ;;
-    tasks|tasksn8n|tasksatt|tasklinks|transportdb)   # V10-T1 (transportdb — схема v15 «Транспорт», ТС, базы, пул, перенос, журнал; api/transport_db_test.php); V9 (tasklinks — связанные задачи, schema v14); T1-1 / T1-4 / V7: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети; tasksatt — вложения) — на временной копии БД (SC_APP_DB), data/app.db не трогает.
-             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php; [ "$s" = tasksatt ] && php_t=api/task_files_test.php; [ "$s" = tasklinks ] && php_t=api/tasks_links_test.php; [ "$s" = transportdb ] && php_t=api/transport_db_test.php
+    tasks|tasksn8n|tasksatt|tasklinks|transportdb|transport)   # V10-T1 (transportdb — схема v15 «Транспорт», ТС, базы, пул, перенос, журнал; api/transport_db_test.php); V9 (tasklinks — связанные задачи, schema v14); T1-1 / T1-4 / V7: блок «Задачи» (tasksn8n — интеграция с n8n на mock-webhook, без сети; tasksatt — вложения) — на временной копии БД (SC_APP_DB), data/app.db не трогает. V10-T2: transport — API заявок/назначений «Транспорта» (php -S с 4 обработчиками на копии БД; ожидаемо красный до V10-T5, только явным запуском).
+             local php_t=api/tasks_test.php; [ "$s" = tasksn8n ] && php_t=api/tasks_n8n_test.php; [ "$s" = tasksatt ] && php_t=api/task_files_test.php; [ "$s" = tasklinks ] && php_t=api/tasks_links_test.php; [ "$s" = transportdb ] && php_t=api/transport_db_test.php; [ "$s" = transport ] && php_t=api/transport_test.php
              timeout $SUITE_TIMEOUT php "$php_t" >"$log" 2>&1; rc=$?
              out=$(grep -Eo 'RESULTS: [0-9]+ passed, [0-9]+ failed' "$log" | tail -1)
              p=$(echo "$out" | awk '{print $2}'); f=$(echo "$out" | awk '{print $4}')
              CNT=${p:-'-'}
-             if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; fi ;;
+             if [ $rc -eq 0 ] && [ "${f:-x}" = 0 ] && grep -q 'DB intact: YES' "$log"; then RES=PASS; else NOTE="rc=$rc failed=${f:-?}"; [ "$s" = transport ] && NOTE="$NOTE (ожидаемо красный до V10-T5; причины — в логе)"; fi ;;
     e51|e52|hygiene|tasksui|tasksmx|taskscal|director|tripsform|emptasks|tripsstatus|tasklinksui)
              local js; case $s in e51) js=scripts/test_e51_pick_geometry.js;; e52) js=scripts/test_e52_pick_semantics.js;; hygiene) js=scripts/test_r4_hygiene.js;; tasksui) js=scripts/test_tasks_frontend.js;; tasksmx) js=scripts/test_tasks_matrix.js;; taskscal) js=scripts/test_tasks_calendar.js;; director) js=scripts/test_v6_director.js;; tripsform) js=scripts/test_trips_v8_form.js;; emptasks) js=scripts/test_emp_tasks_btn.js;; tripsstatus) js=scripts/test_trips_v8_status.js;; tasklinksui) js=scripts/test_tasks_links_ui.js;; esac
              timeout $SUITE_TIMEOUT node "$js" >"$log" 2>&1; rc=$?
