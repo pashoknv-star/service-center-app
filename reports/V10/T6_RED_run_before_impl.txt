@@ -1,0 +1,167 @@
+E5-4: Очистка audit_log удалено 5556 записей старше 2026-11-14T08:31:32+00:00
+=== TRANSPORTBOARD TEST START ===
+[1] A1 GET доски без сессии → 401 unauthorized: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 401, got 404
+[2] A2 GET доски: admin читает (200 {success, from, to, can_move_vehicle, bases, assignments, queue, absences}): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p { paddin: expected 200, got 404
+[3] A2 GET доски: supervisor_zone0 читает (200 {success, from, to, can_move_vehicle, bases, assignments, queue, absences}): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p { paddin: expected 200, got 404
+[4] A2 GET доски: supervisor_zone1 читает (200 {success, from, to, can_move_vehicle, bases, assignments, queue, absences}): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p { paddin: expected 200, got 404
+[5] A2 GET доски: viewer_test читает (200 {success, from, to, can_move_vehicle, bases, assignments, queue, absences}): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #9999cc; min-height:2em; line-height:2em; border-bottom: 1px inset black; margin: 0; }
+h1, p { paddin: expected 200, got 404
+[6] A3 can_move_vehicle для роли admin = true (admin и viewer — да, supervisor — нет): FAIL — can_move_vehicle: expected true, got null
+[7] A3 can_move_vehicle для роли z0 = false (admin и viewer — да, supervisor — нет): FAIL — can_move_vehicle: expected false, got null
+[8] A3 can_move_vehicle для роли z1 = false (admin и viewer — да, supervisor — нет): FAIL — can_move_vehicle: expected false, got null
+[9] A3 can_move_vehicle для роли view = true (admin и viewer — да, supervisor — нет): FAIL — can_move_vehicle: expected true, got null
+[10] A4 только GET: admin POST/PUT/DELETE → 405 method_not_allowed; аноним POST → 401: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 405, got 404
+[11] A5 параметры: нет from/to, пустые, не-даты (2032-02-30, 2032-13-01, "abc", SQL-инъекция, массив) → 422: FAIL — HTTP для «»: <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; : expected 422, got 404
+[12] A6 to < from → 422 invalid_range: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 422, got 404
+[13] A7 период ≤ 31 дня включительно: 31 день (март) → 200; 32 дня → 422 range_too_long; 1 день → 200; 1 год → 422: FAIL — 31 день: expected 200, got 404
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 456
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 456
+[14] B1 базы с ТС: обе базы по sort_order, у каждой vehicles с текущим base_id; поля ТС по контракту: FAIL — нет баз: 
+[15] B2 назначения периода 10–16.03: ровно a1, a2, a5, a6, a7, a9, a10; вне периода (a3 кончилось в 00:00 10.03, a4 началось 00:00 17.03, a8 — май) нет: FAIL — id назначений: expected ["tbd_a1","tbd_a10","tbd_a2","tbd_a5","tbd_a6","tbd_a7","tbd_a9"], got []
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 474
+[16] B3 назначения отсортированы по start_at, затем id: FAIL — array_map(): Argument #2 ($array) must be of type array, null given
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 482
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 482
+[17] B4 поля назначения: id, request_id, vehicle_id, base_id (текущая база ТС), driver_id/driver_name, crew, stops, start_at, end_at, duration_min, version, days, request: FAIL — a1 не найдено
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 493
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 493
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 494
+[18] B5 остановки назначения: порядок ord, kind, place, координаты и целые/дробные поля; null сохраняются: FAIL — count(): Argument #1 ($value) must be of type Countable|array, null given
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 502
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 502
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 503
+[19] B6 карточка заявки в назначении: id, display_no, title, subscriber, address, status, version, created_by(_name), can_edit; без комментария заявки: FAIL — array_keys(): Argument #1 ($array) must be of type array, null given
+[20] B7 чужие заявки видны всем ролям: viewer, zone0, zone1, admin видят одинаковый набор назначений: FAIL — доска пуста: 0
+[21] C1 назначение через полночь (a2: 12.03 22:00 → 13.03 02:00) попадает в оба дня: доска за 12.03 и за 13.03 содержит a2; days = [12, 13]: FAIL — a2 в день 2032-03-12
+[22] C2 граница «конец ровно в 00:00»: a3 (09.03 22:00–10.03 00:00) есть на 09.03 и нет на 10.03; days = [09.03]: FAIL — a3 в 09.03
+[23] C3 граница «начало ровно в 00:00»: a4 (17.03 00:00) есть на 17.03 и нет на 16.03: FAIL — a4 в 17.03
+[24] C4 последний квант периода: a5 (16.03 23:45–17.03 00:00) на 16.03 есть (days=[16.03]), на 17.03 нет: FAIL — a5 в 16.03
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 551
+[25] C5 назначение, начатое до периода (a6: 09.03 23:00 → 10.03 02:00), есть на доске 10–16.03 с days = [10.03] (дни обрезаны периодом): FAIL — array_filter(): Argument #1 ($array) must be of type array, null given
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 558
+[26] C6 многодневное назначение (a7: 14.03 08:00 → 17.03 08:00): days внутри периода = [14, 15, 16]; на 17.03 есть, на 13.03 нет: FAIL — array_filter(): Argument #1 ($array) must be of type array, null given
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 566
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 566
+[27] C7 пустой период — пустые assignments/absences, базы всё равно приходят: FAIL — пусто: expected [[],[]], got [null,null]
+[28] D1 очередь: status=new без назначений — n1, n2, n3 по display_no; new с назначением (nx1), assigned/done/cancelled без назначений не попадают: FAIL — display_no очереди: expected [9101,9102,9103], got []
+[29] D2 очередь не зависит от периода (заявка без дат): другой период — та же очередь; видна всем ролям: FAIL — очередь для admin: expected [9101,9102,9103], got []
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 585
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 585
+[30] D3 элемент очереди — карточка заявки (те же поля, что request в назначении, включая can_edit): FAIL — array_keys(): Argument #1 ($array) must be of type array, null given
+[31] D4 заявка из очереди после появления назначения уходит из очереди (прямая вставка) и возвращается после удаления: FAIL — без n3: expected [9101,9102], got []
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+[32] E1 can_edit по заявкам для роли admin (admin — все; zone0 — свои и заявки zone1; zone1 — только свои; viewer — никогда): FAIL — проверено заявок: 0
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+[33] E1 can_edit по заявкам для роли z0 (admin — все; zone0 — свои и заявки zone1; zone1 — только свои; viewer — никогда): FAIL — проверено заявок: 0
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+[34] E1 can_edit по заявкам для роли z1 (admin — все; zone0 — свои и заявки zone1; zone1 — только свои; viewer — никогда): FAIL — проверено заявок: 0
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 605
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 606
+[35] E1 can_edit по заявкам для роли view (admin — все; zone0 — свои и заявки zone1; zone1 — только свои; viewer — никогда): FAIL — проверено заявок: 0
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 631
+[36] F1 отсутствия подсвечиваются: ровно {employee_id, date, type} для водителей/бригады периода, тип отпуск/болезнь/отгул/командировка/прогноз командировки: FAIL — array_map(): Argument #2 ($array) must be of type array, null given
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 649
+[37] F2 не попадают: посторонний сотрудник (отпуск и командировка), отпуск вне периода (20.03), статус «work»; отсутствия в узком периоде — только внутри него: FAIL — array_map(): Argument #2 ($array) must be of type array, null given
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 663
+[38] F3 отсутствия не дублируются (отпуск и командировка в один день — две записи разных типов, одинаковые — одна) и отсортированы по дате и сотруднику: FAIL — array_filter(): Argument #1 ($array) must be of type array, null given
+[39] F4 приватность: в ответе нет телефона/фото сотрудников, комментариев заявок/отпусков/командировок, целей и мест командировок: FAIL — доска admin: expected 200, got 404
+[40] G1 чтение доски (все роли, все варианты ошибок) ничего не меняет: БД и журнал до/после совпадают: FAIL — доска отвечает: expected 200, got 404
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 704
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 704
+[41] H1 перенос ТС (viewer, action=move): доска показывает ТС в новой базе, version+1; назначения прежних дат остаются у ТС, base_id назначения — текущая база ТС: FAIL — v1 в базе Б
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 718
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 718
+[42] H2 перенос виден и viewer-у, и supervisor-у (одна и та же картина), перенос обратно (admin) возвращает ТС в базу А: FAIL — базa Б для z0: expected ["tv_6b0156e5bc0957.32801765","tv_6b0156e5c69858.43224940"], got []
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 733
+PHP Warning:  foreach() argument must be of type array|object, null given in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 733
+PHP Warning:  Undefined array key "tv_6b0156e5c14e79.20765495" in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 734
+[43] H3 смена статуса ТС (ремонт) и новая база видны на доске без перезапуска (чтение — всегда свежее): FAIL — v2 repair: expected "repair", got null
+[44] K1 tb_can_edit_map равен transport_can_edit_request для каждой пары (пользователь × автор): admin, zone0, zone1, viewer, аноним × admin, zone0, zone1, viewer, неизвестный, пусто: FAIL — tb_can_edit_map() не реализована
+[45] K2 tb_build_board вызывается с явным пользователем и совпадает с HTTP-ответом по составу (assignments, queue, absences): FAIL — tb_build_board() не реализована
+[46] K3 число SQL-запросов доски не зависит от числа назначений (N+1 нет): 5 назначений vs +60 (с бригадой, остановками, заявками zone1, отсутствиями) — одно и то же число: FAIL — tb_build_board() не реализована
+[47] K4 после массовых фикстур HTTP-доска отвечает 200, данные совпадают с CLI, ответ детерминирован (два запроса подряд идентичны): FAIL — status: expected 200, got 404
+[48] K5 сразу после запросов к доске БД не получила записей журнала и миграций «на лету» (journal count неизменен при чтении): FAIL — доска отвечает: expected 200, got 404
+[49] J1 журнал без сессии → 401 unauthorized (JSON и CSV): FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 401, got 404
+[50] J2 журнал: supervisor_zone0 → 403 forbidden (JSON и CSV), данных нет: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 403, got 404
+[51] J2 журнал: supervisor_zone1 → 403 forbidden (JSON и CSV), данных нет: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 403, got 404
+[52] J2 журнал: viewer_test → 403 forbidden (JSON и CSV), данных нет: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 403, got 404
+[53] J3 журнал: admin GET → 200; только GET: admin POST/PUT/DELETE/PATCH → 405; viewer POST → 403; аноним POST → 401: FAIL — GET: expected 200, got 404
+[54] L1 журнал JSON: формат {success, total, limit, offset, items[]}; элемент — id, ts, actor, role, action, entity_type, entity_id, before, after, warnings (JSON разобран): FAIL — status <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 200, got 404
+[55] L2 порядок: новые сверху (id по убыванию): FAIL — порядок: expected [14,13,12,11,10], got []
+[56] L3 фильтр entity_type: tbd_ent — 5 записей, несуществующий тип — пусто с total 0: FAIL — tbd_ent: expected 5, got 0
+[57] L4 фильтр entity_id: tbd_e1 — записи 1,2; tbd_e2 — 3,4; вместе с entity_type: FAIL — e1: expected [10,11], got []
+[58] L5 фильтр actor: tbd_actor_a — 1,2,5; tbd_actor_b — 3,4; точное совпадение (префикс tbd_actor не подходит): FAIL — a: expected [10,11,14], got []
+[59] L6 фильтр action: tbd.update — 2,3; tbd.create — 1,5; tbd.delete — 4: FAIL — update: expected [11,12], got []
+[60] L7 фильтр по датам: from=2032-01-01 — записи 3,4,5 (включая 00:00:00), to=2031-12-31 — 1,2 (включая 23:59:59), день 2032-01-01 — 3,4: FAIL — from: expected [12,13,14], got []
+[61] L8 комбинация фильтров (AND): actor=tbd_actor_a + action=tbd.update + from=2031-12-31 → запись 2; actor=b + action=create → пусто: FAIL — a+update: expected [11], got []
+[62] L9 фильтры безопасны: SQL-спецсимволы и % _ в значениях — как обычный текст (0 результатов), таблица цела: FAIL — actor=x' OR '1'='1: expected [200,[]], got [404,[]]
+[63] L10 неверные параметры → 422: from/to не дата, from > to, limit 0/-1/abc, offset -1/abc, format=xml: FAIL — HTTP <!doctype html><html><head><title>404 Not Found</title><style>
+body { background-color: #fcfcfc; color: #333333; margin: 0; padding:0; }
+h1 { font-size: 1.5em; font-weight: normal; background-color: #: expected 422, got 404
+[64] M1 пагинация: limit=2 страницами offset 0,2,4… собирает все 205 записей без дублей и пропусков; total = 205 на каждой странице; порядок — id по убыванию: FAIL — status: expected 200, got 404
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 960
+[65] M2 лимиты: по умолчанию 50; limit=200 → 200 записей; limit=500 → зажимается до 200 (в ответе limit=200): FAIL — по умолчанию: expected [50,50], got [0,null]
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 969
+[66] M3 offset за концом → пусто (total прежний); последняя страница неполная: offset=200&limit=10 → 5 записей: FAIL — за концом: expected [[],205], got [[],null]
+[67] N1 CSV: Content-Type text/csv; charset=utf-8, Content-Disposition attachment *.csv, no-store, BOM, заголовок колонок, «;»: FAIL — status: expected 200, got 404
+[68] N2 CSV: ячейки, начинающиеся с = + - @ (а также TAB/CR), получают префикс «'» (защита от формул) в actor, role, action, entity_id, after_json; обычные не меняются: FAIL — нет BOM
+[69] N3 CSV: ни одна ячейка данных (кроме заголовка) не начинается с = + - @ TAB CR — по всему выгрузке журнала (без фильтров): FAIL — нет BOM
+[70] N4 CSV: разделитель, кавычки и переводы строк внутри ячеек экранируются (RFC 4180): значения возвращаются разбором без потерь: FAIL — нет BOM
+[71] N5 CSV учитывает фильтры (actor, action, from/to) и не ограничен 200 строками: bulk (205 записей) выгружается целиком: FAIL — нет BOM
+[72] N6 CSV: limit/offset тоже работают (limit=3&offset=1 над bulk → 3 строки, начиная со второй по id): FAIL — нет BOM
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1063
+[73] N7 JSON отдаёт значения без CSV-префикса (экранирование — только в выгрузке): FAIL — array_column(): Argument #1 ($array) must be of type array, null given
+[74] P1 записи, созданные T1 (base.create, vehicle.create, vehicle.move), читаются через API: actor/role/action/entity, before/after перемещения: FAIL — status: expected 200, got 404
+[75] P2 чтение журнала (JSON, CSV, фильтры, ошибки, отказы разным ролям) не меняет журнал и БД: отпечаток до/после совпадает: FAIL — журнал отвечает: expected 200, got 404
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1099
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1099
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1100
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1100
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1100
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1100
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1100
+PHP Warning:  Trying to access array offset on null in /home/hermes/wt/v10-t6/api/transport_board_test.php on line 1100
+[76] P3 append-only не нарушен чтением: прямой UPDATE/DELETE записи журнала по-прежнему запрещён триггером; запись, считанная через API, равна строке БД: FAIL — совпадение с БД: expected ["2031-12-31T23:59:59+05:00","tbd_actor_a","admin","tbd.update","tbd_ent","tbd_e1"], got [null,null,null,null,null,null]
+[77] P4 отказ не-admin не раскрывает существование записей: тело 403 — только {error}: FAIL — array_keys(): Argument #1 ($array) must be of type array, null given
+=== RESULTS: 0 passed, 77 failed out of 77 ===
+DB intact: YES
