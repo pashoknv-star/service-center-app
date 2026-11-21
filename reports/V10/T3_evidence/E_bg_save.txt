@@ -1,0 +1,34 @@
+# V10-T3 concurrency matrix
+# {"php":"8.3.6","sqlite":"3.45.1","src":"/home/hermes/wt/v10-t3/data/app.db","src_sha1_before":"a2e65ae47cc76e74ac1cff5247c125553b6d5d6d","src_bytes":1589248,"cpus":2,"options":{"src":"/home/hermes/wt/v10-t3/data/app.db","tmp":"/home/hermes/.hermes/profiles/sd_worker_03/cache/scratch/v10_t3","ops":40,"work_ms":3,"retries":0,"transport":"proc","bg_hold_ms":1300,"bg_period_ms":1000,"contest":0.5,"no_close_cursor":0}}
+mode   tx         N |     ok  confl   busy    err |  busy%   1st% |   p50ms   p95ms   p99ms     max |   ops/s commit/s |  viol   noJ orphJ
+wal    deferred   1 |      0      0     40      0 | 100.00 100.00 |    4.38    6.70   14.16    14.2 |   200.0     0.0 |     0     0     0
+   bg writer: {"bg_commits":2,"bg_failed":0}
+   busy(1st attempt) by stage: {"insert_assignment":40}
+wal    deferred   4 |      0      0    160      0 | 100.00 100.00 |    6.07   10.68   13.70    13.8 |   557.9     0.0 |     0     0     0
+   bg writer: {"bg_commits":3,"bg_failed":0}
+   busy(1st attempt) by stage: {"insert_assignment":160}
+wal    deferred   8 |      0      0    320      0 | 100.00 100.00 |   13.61   20.53   24.46    29.0 |   534.1     0.0 |     0     0     0
+   bg writer: {"bg_commits":3,"bg_failed":0}
+   busy(1st attempt) by stage: {"insert_assignment":320}
+wal    immediate  1 |     40      0      0      0 |   0.00   0.00 |   15.65   27.31 1368.47  1368.5 |    20.1    20.1 |     0     0     0
+   bg writer: {"bg_commits":2,"bg_failed":0}
+wal    immediate  4 |    100     60      0      0 |   0.00   0.00 |    7.13   61.47 1344.21  1451.3 |    67.1    42.0 |     0     0     0
+   bg writer: {"bg_commits":2,"bg_failed":0}
+wal    immediate  8 |    180    140      0      0 |   0.00   0.00 |    8.80  147.03 1356.37  3650.6 |    78.7    44.3 |     0     0     0
+   bg writer: {"bg_commits":3,"bg_failed":0}
+delete deferred   1 |      0      0     40      0 | 100.00 100.00 |    5.18    8.46    9.34     9.3 |   176.1     0.0 |     0     0     0
+   bg writer: {"bg_commits":2,"bg_failed":0}
+   busy(1st attempt) by stage: {"insert_assignment":40}
+delete deferred   4 |      0      0    160      0 | 100.00 100.00 |    6.02    9.00   10.94    11.6 |   614.0     0.0 |     0     0     0
+   bg writer: {"bg_commits":3,"bg_failed":0}
+   busy(1st attempt) by stage: {"insert_assignment":160}
+delete deferred   8 |      6     21    293      0 |  91.56  91.56 |    8.76   34.85   99.13   161.7 |   321.4     6.0 |     0     0     0
+   bg writer: {"bg_commits":3,"bg_failed":0}
+   busy(1st attempt) by stage: {"insert_assignment":293}
+delete immediate  1 |     40      0      0      0 |   0.00   0.00 |   20.50   32.28   44.60    44.6 |    45.7    45.7 |     0     0     0
+   bg writer: {"bg_commits":2,"bg_failed":0}
+delete immediate  4 |    100     60      0      0 |   0.00   0.00 |    8.77   20.82 3660.90  3968.9 |    37.8    23.6 |     0     0     0
+   bg writer: {"bg_commits":3,"bg_failed":0}
+delete immediate  8 |    180    140      0      0 |   0.00   0.00 |    9.61 1540.15 2372.83  3983.6 |    47.4    26.7 |     0     0     0
+   bg writer: {"bg_commits":3,"bg_failed":0}
+# src sha1 before=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d after=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d UNCHANGED

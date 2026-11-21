@@ -1,0 +1,26 @@
+# V10-T3 concurrency matrix
+# {"php":"8.3.6","sqlite":"3.45.1","src":"/home/hermes/wt/v10-t3/data/app.db","src_sha1_before":"a2e65ae47cc76e74ac1cff5247c125553b6d5d6d","src_bytes":1589248,"cpus":2,"options":{"src":"/home/hermes/wt/v10-t3/data/app.db","tmp":"/home/hermes/.hermes/profiles/sd_worker_03/cache/scratch/v10_t3","ops":150,"work_ms":3,"retries":3,"transport":"proc","bg_hold_ms":0,"bg_period_ms":200,"contest":0.5,"no_close_cursor":0}}
+mode   tx         N |     ok  confl   busy    err |  busy%   1st% |   p50ms   p95ms   p99ms     max |   ops/s commit/s |  viol   noJ orphJ
+wal    deferred   1 |    150      0      0      0 |   0.00   0.00 |   16.16   29.57   40.97    70.1 |    55.6    55.6 |     0     0     0
+wal    deferred   2 |    205     74     21      0 |   7.00  23.67 |   17.44   83.85  111.13   150.0 |    70.7    48.3 |     0     0     0
+   busy(1st attempt) by stage: {"insert_assignment":71}
+wal    deferred   4 |    271    223    106      0 |  17.67  34.17 |   14.84   92.88  115.26   163.2 |   127.9    57.8 |     0     0     0
+   busy(1st attempt) by stage: {"insert_assignment":205}
+wal    deferred   8 |    362    507    331      0 |  27.58  42.33 |   15.45  105.78  121.23   129.4 |   198.9    60.0 |     0     0     0
+   busy(1st attempt) by stage: {"insert_assignment":508}
+wal    immediate  1 |    150      0      0      0 |   0.00   0.00 |   16.02   39.04   58.21    62.7 |    56.6    56.6 |     0     0     0
+wal    immediate  2 |    225     75      0      0 |   0.00   0.00 |   10.62   23.34   48.97  2069.0 |    90.2    67.6 |     0     0     0
+wal    immediate  4 |    375    225      0      0 |   0.00   0.00 |   10.31   96.28  548.79  1560.4 |   109.6    68.5 |     0     0     0
+wal    immediate  8 |    675    525      0      0 |   0.00   0.00 |   10.35  140.06 1162.78  2957.2 |   118.2    66.5 |     0     0     0
+delete deferred   1 |    150      0      0      0 |   0.00   0.00 |   12.42   25.43   46.74    63.0 |    68.0    68.0 |     0     0     0
+delete deferred   2 |    212     75     13      0 |   4.33  18.00 |   16.24   99.93  172.59   280.2 |    72.7    51.3 |     0     0     0
+   busy(1st attempt) by stage: {"insert_assignment":54}
+delete deferred   4 |    320    219     61      0 |  10.17  30.83 |   15.85  127.27  233.99   845.2 |   103.1    55.0 |     0     0     0
+   busy(1st attempt) by stage: {"insert_assignment":185}
+delete deferred   8 |    461    516    223      0 |  18.58  40.58 |   24.47  161.02  475.90  1085.2 |   136.9    52.6 |     0     0     0
+   busy(1st attempt) by stage: {"insert_assignment":487}
+delete immediate  1 |    150      0      0      0 |   0.00   0.00 |   18.03   33.02   53.29    81.8 |    50.7    50.7 |     0     0     0
+delete immediate  2 |    225     75      0      0 |   0.00   0.00 |   12.23   28.75  337.20  1655.4 |    82.5    61.9 |     0     0     0
+delete immediate  4 |    375    225      0      0 |   0.00   0.00 |    9.30   25.42  645.74  2869.3 |   114.0    71.2 |     0     0     0
+delete immediate  8 |    675    525      0      0 |   0.00   0.00 |    8.74  116.22 1353.94  2963.0 |   132.2    74.3 |     0     0     0
+# src sha1 before=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d after=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d UNCHANGED

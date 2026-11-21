@@ -1,0 +1,9 @@
+php=8.3.6 pdo_drivers=sqlite
+sqlite_version=3.45.1
+PDO default busy_timeout (до PRAGMA) = 60000 мс
+после PRAGMA как в api/db.php: busy_timeout=5000 journal_mode=wal synchronous=2 (2=FULL, 1=NORMAL) wal_autocheckpoint=1000 foreign_keys=1 recursive_triggers=0
+1) PDO::beginTransaction()+SELECT не удерживает блокировку записи: BEGIN IMMEDIATE из другого соединения прошёл
+2) повышение read→write после чужого коммита: исключение через 0.1 мс при busy_timeout=5000 (errorInfo=["HY000",5,"database is locked"]) — busy_timeout НЕ ждали
+3) после exec(BEGIN IMMEDIATE): PDO::inTransaction()=false ; PDO::commit() — ИСКЛЮЧЕНИЕ: There is no active transaction (PHP 8.3.6; на Hostland веб-PHP 8.1.34 — НЕ ПРОВЕРЕНО; безопасно использовать exec('COMMIT')/exec('ROLLBACK'))
+4) второй BEGIN IMMEDIATE при занятом писателе: исключение через 305 мс при busy_timeout=300 (errorInfo=["HY000",5,"database is locked"])
+compile_options (избранное): DEFAULT_SYNCHRONOUS=2, DEFAULT_WAL_SYNCHRONOUS=2, ENABLE_FTS3, ENABLE_FTS3_PARENTHESIS, ENABLE_FTS3_TOKENIZER, ENABLE_FTS4, ENABLE_FTS5, ENABLE_RTREE, MAX_ATTACHED=10, MAX_COLUMN=2000, MAX_COMPOUND_SELECT=500, MAX_DEFAULT_PAGE_SIZE=32768, MAX_EXPR_DEPTH=1000, MAX_FUNCTION_ARG=127, MAX_LENGTH=1000000000, MAX_LIKE_PATTERN_LENGTH=50000, MAX_MMAP_SIZE=0x7fff0000, MAX_PAGE_COUNT=0xfffffffe, MAX_PAGE_SIZE=65536, MAX_SCHEMA_RETRY=25, MAX_SQL_LENGTH=1000000000, MAX_TRIGGER_DEPTH=1000, MAX_VARIABLE_NUMBER=250000, MAX_VDBE_OP=250000000, MAX_WORKER_THREADS=8, THREADSAFE=1

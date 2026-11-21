@@ -1,0 +1,59 @@
+# Два полных прогона verify_all, где tripsform упал 128/131 (те же 3 проверки «supervisor»: П1/П2/П4); сам сьют отдельно — PASS 131/131 (05:34, 05:42, 05:46); полный прогон 05:49 — GATE: PASS (22 suites), см. L_gate_pass.txt. Другие воркеры наблюдали такие же падения tripsform на своих ветках при параллельной нагрузке (sd_worker_04: 108/131, sd_worker_02: 125/131). Код приложения этой задачей не менялся.
+== gate_run1_fail
+verify_all: 7de6e7c 2026-11-21 05:20:52 suites: smoke tasks tasksn8n tasksatt tasklinks tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips trips
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+smoke    PASS     84     84     3s  
+tasks    PASS     66     66     3s  
+tasksn8n PASS     27     27    27s  
+tasksatt PASS     24     24     5s  
+tasklinks PASS     37     37     8s  
+tasksui  PASS    334    334    28s  
+tasksmx  PASS     79     79     7s  
+taskscal PASS    220    220     6s  
+director PASS    101    101    14s  
+emptasks PASS     34     34     2s  
+tasklinksui PASS    211    211   122s  
+e51      PASS     23     23     0s  
+e52      PASS     41     41     1s  
+hygiene  PASS     19     19     0s  
+trips    PASS      7      7     3s  
+tripsform FAIL    128    131    78s  rc=1 failed=3
+tripsstatus PASS    147    147    75s  
+syntax   PASS      -      -     1s  
+phplint  PASS     38      -     2s  
+pii      PASS      -      -     0s  
+refs     PASS     28     28    25s  удалено 0, со ссылками 0, исключений 0
+tasklink PASS     43     43     6s  коммитов 3, с кодом 1, нарушений 0
+clean    PASS
+
+GATE: FAIL (1). Логи: /home/hermes/.hermes/profiles/sd_worker_03/cache/scratch/verify_all.9PsYVO
+== gate_run2_fail
+verify_all: 7de6e7c 2026-11-21 05:35:19 suites: smoke tasks tasksn8n tasksatt tasklinks tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips trips
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+smoke    PASS     84     84     3s  
+tasks    PASS     66     66     4s  
+tasksn8n PASS     27     27    27s  
+tasksatt PASS     24     24     5s  
+tasklinks PASS     37     37     6s  
+tasksui  PASS    334    334    24s  
+tasksmx  PASS     79     79     5s  
+taskscal PASS    220    220     5s  
+director PASS    101    101    12s  
+emptasks PASS     34     34     2s  
+tasklinksui PASS    211    211   115s  
+e51      PASS     23     23     0s  
+e52      PASS     41     41     0s  
+hygiene  PASS     19     19     0s  
+trips    PASS      7      7     3s  
+tripsform FAIL    128    131    72s  rc=1 failed=3
+tripsstatus PASS    147    147    75s  
+syntax   PASS      -      -     0s  
+phplint  PASS     38      -     2s  
+pii      PASS      -      -     0s  
+refs     PASS     28     28    16s  удалено 0, со ссылками 0, исключений 0
+tasklink PASS     43     43     5s  коммитов 3, с кодом 1, нарушений 0
+clean    PASS
+
+GATE: FAIL (1). Логи: /home/hermes/.hermes/profiles/sd_worker_03/cache/scratch/verify_all.Ow9arj
