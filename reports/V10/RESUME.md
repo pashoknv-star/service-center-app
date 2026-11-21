@@ -13,9 +13,20 @@
 
 Спеки: `reports/V10/specs/` (00_COMMON, CONTRACT, T1..T4). Main при старте: 30af063.
 
-## Состояние на 2026-11-21 (после приёмки)
+## Состояние на 2026-11-21 (фаза A принята, фаза B запущена)
 
-T1, T2, T3, T4 приняты и влиты в main (aa729a5, 8af5b34, a53560e, f28c91d); патчи AGENTS.md применены (ad3f729); worktree v10-t1..t4 удалены. Найден дефект: журнал обходится через `INSERT OR REPLACE` — карточка **V10-T1b `t_b66bd648`** (sd_worker_01, worktree `/home/hermes/wt/v10-t1b`, ветка `v10-t1b-journal-fix`). Остаток фазы A: принять T1b → полный гейт на main (tripsform флейкает под нагрузкой — перепроверять отдельно) → push main → ПОЛНАЯ ОСТАНОВКА до «Старт». Деплой НЕ запрошен (владелец 2026-11-21: «предложения приняты» = сначала фикс, гейт, push, стоп).
+Фаза A принята: T1–T4 + T1b влиты, полный гейт на main PASS (23 сьюта, 89e3171), main запушен. «Старт» на фазу B получен владельцем (условие: после T1b, гейта, push). Деплой НЕ запрошен.
+
+Фаза B (спеки `reports/V10/specs/T5..T8_*.md`, worktree от 89e3171):
+
+| Задача | Kanban | Воркер | Worktree / ветка |
+|---|---|---|---|
+| V10-T5 API заявок/назначений/предупреждений | t_a8604210 | sd_worker_03 | /home/hermes/wt/v10-t5 · v10-t5-api |
+| V10-T6 API доски + журнал (чтение) | t_9ee15e9a | sd_worker_01 | /home/hermes/wt/v10-t6 · v10-t6-board |
+| V10-T7 геопрокси + Leaflet | t_6cef1438 | sd_worker_04 | /home/hermes/wt/v10-t7 · v10-t7-geo |
+| V10-T8 вкладка/доска UI (после T6, parent) | t_c626702a | sd_worker_02 | /home/hermes/wt/v10-t8 · v10-t8-ui |
+
+Приёмка T5: сьют `transport` зелёный (157) БЕЗ правки api/transport_test.php; координатор переносит `transport` из OPT_SUITES в ALL_SUITES. T8 стартует после принятия T6 (при слиянии T6 — обновить ветку v10-t8-ui: `git -C /home/hermes/wt/v10-t8 merge main`). После приёмки всех четырёх — полный гейт на main, push, ПОЛНАЯ ОСТАНОВКА до «Старт» на фазу C. Открыто для владельца до деплоя: реальный e-mail для User-Agent геопрокси (заглушка OWNER_EMAIL_TO_BE_SET), проверка исходящего HTTP на Hostland (SPIKE_MAP §7).
 
 ## Шаги при перезапуске
 
