@@ -1,0 +1,13 @@
+# V10-T3 concurrency matrix
+# {"php":"8.3.6","sqlite":"3.45.1","src":"/home/hermes/wt/v10-t3/data/app.db","src_sha1_before":"a2e65ae47cc76e74ac1cff5247c125553b6d5d6d","src_bytes":1589248,"cpus":2,"options":{"src":"/home/hermes/wt/v10-t3/data/app.db","tmp":"/home/hermes/.hermes/profiles/sd_worker_03/cache/scratch/v10_t3","ops":60,"work_ms":25,"retries":0,"transport":"proc","bg_hold_ms":0,"bg_period_ms":200,"contest":0.5,"no_close_cursor":0}}
+mode   tx         N |     ok  confl   busy    err |  busy%   1st% |   p50ms   p95ms   p99ms     max |   ops/s commit/s |  viol   noJ orphJ
+wal    immediate  1 |     60      0      0      0 |   0.00   0.00 |   35.82   42.04   82.02    82.0 |    26.6    26.6 |     0     0     0
+wal    immediate  2 |     90     30      0      0 |   0.00   0.00 |   32.17   51.73  111.78  2157.6 |    35.4    26.5 |     0     0     0
+wal    immediate  4 |    150     90      0      0 |   0.00   0.00 |   33.64   77.12 1789.49  4275.2 |    39.5    24.7 |     0     0     0
+wal    immediate  8 |    270    210      0      0 |   0.00   0.00 |   33.54  876.81 2912.21  4778.8 |    44.7    25.1 |     0     0     0
+delete immediate  1 |     60      0      0      0 |   0.00   0.00 |   34.71   48.89   63.35    63.4 |    27.6    27.6 |     0     0     0
+delete immediate  2 |     90     30      0      0 |   0.00   0.00 |   37.37   53.35  267.74  2249.5 |    31.8    23.8 |     0     0     0
+delete immediate  4 |    150     90      0      0 |   0.00   0.00 |   31.66  108.34 1943.63  1984.5 |    43.6    27.3 |     0     0     0
+delete immediate  8 |    270    208      2      0 |   0.42   0.42 |   30.79  236.16 3389.56  5042.3 |    49.6    27.9 |     0     0     0
+   busy(1st attempt) by stage: {"begin":2}
+# src sha1 before=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d after=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d UNCHANGED

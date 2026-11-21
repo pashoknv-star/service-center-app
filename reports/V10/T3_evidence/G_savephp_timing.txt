@@ -1,0 +1,7 @@
+# PHP 8.3.6 (cli) (built: Oct 19 2026 15:16:58) (NTS)   src sha1 before: a2e65ae47cc76e74ac1cff5247c125553b6d5d6d
+employees    entries      payload_KB save.php, мс (5 прогонов, p50 / max)
+4            4            4          23 / 113
+50           1500         211        49 / 447
+50           18250        2396       1467 / 2618
+150          54750        7233       3362 / 9932
+# src sha1 after:  a2e65ae47cc76e74ac1cff5247c125553b6d5d6d

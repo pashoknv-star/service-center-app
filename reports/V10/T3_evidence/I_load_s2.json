@@ -1,0 +1,308 @@
+[
+    {
+        "scenario": "s2",
+        "years": 1,
+        "vehicles": 40,
+        "requests_per_day": 50,
+        "events_per_request": 8,
+        "requests": 18250,
+        "assignments": 23750,
+        "journal_rows": 146000,
+        "db_bytes": 133328896,
+        "db_MB": 127.2,
+        "journal_bytes_with_indexes": 108908544,
+        "journal_MB": 103.9,
+        "journal_bytes_per_row": 746,
+        "bytes_per_request_all_tables": 7219,
+        "dbstat_bytes": {
+            "transport_journal": 99655680,
+            "assignment_stops": 6225920,
+            "transport_requests": 5775360,
+            "idx_tj_ts": 5668864,
+            "idx_tj_entity": 3584000,
+            "transport_assignments": 3256320,
+            "assignment_crew": 2424832,
+            "idx_ta_driver": 1380352,
+            "idx_ta_vehicle": 1175552,
+            "audit_log": 671744,
+            "sync_log": 536576,
+            "idx_ta_request": 274432
+        },
+        "board": {
+            "A_plan_indexes_only\/last": {
+                "p50": 34.41,
+                "p95": 111.63,
+                "rows": 1780,
+                "plan": "SCAN a USING COVERING INDEX idx_ta_vehicle",
+                "index_build_ms": null,
+                "index_bytes": null
+            },
+            "A_plan_indexes_only\/mid": {
+                "p50": 30.14,
+                "p95": 81.09,
+                "rows": 3084,
+                "plan": "SCAN a USING COVERING INDEX idx_ta_vehicle",
+                "index_build_ms": null,
+                "index_bytes": null
+            },
+            "B_plus_start_at\/last": {
+                "p50": 14.96,
+                "p95": 53.15,
+                "rows": 1780,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_start (start_at<?)",
+                "index_build_ms": 91.7,
+                "index_bytes": 991232
+            },
+            "B_plus_start_at\/mid": {
+                "p50": 16.46,
+                "p95": 59.84,
+                "rows": 3084,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_start (start_at<?)",
+                "index_build_ms": 91.7,
+                "index_bytes": 991232
+            },
+            "C_plus_end_at\/last": {
+                "p50": 7.13,
+                "p95": 33.92,
+                "rows": 1780,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_end (end_at>?)",
+                "index_build_ms": 57.2,
+                "index_bytes": 991232
+            },
+            "C_plus_end_at\/mid": {
+                "p50": 17.22,
+                "p95": 64.79,
+                "rows": 3084,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_end (end_at>?)",
+                "index_build_ms": 57.2,
+                "index_bytes": 991232
+            }
+        },
+        "vehicle_overlap_check_ms": {
+            "p50": 0.1,
+            "p95": 0.24
+        },
+        "journal_tail50_ms": {
+            "p50": 0.1,
+            "p95": 1.24
+        },
+        "journal_by_entity_ms": {
+            "p50": 0.03,
+            "p95": 0.08
+        },
+        "journal_30d_rows": 12400,
+        "journal_30d_ms": 78,
+        "write_tx_ms_p50_p95": [
+            0.76,
+            5.01
+        ],
+        "backup_ms": 2130,
+        "backup_bytes": 134320128,
+        "integrity_check": "ok",
+        "integrity_check_ms": 2705
+    },
+    {
+        "scenario": "s2",
+        "years": 3,
+        "vehicles": 40,
+        "requests_per_day": 50,
+        "events_per_request": 8,
+        "requests": 54750,
+        "assignments": 71200,
+        "journal_rows": 438060,
+        "db_bytes": 398229504,
+        "db_MB": 379.8,
+        "journal_bytes_with_indexes": 327471104,
+        "journal_MB": 312.3,
+        "journal_bytes_per_row": 748,
+        "bytes_per_request_all_tables": 7245,
+        "dbstat_bytes": {
+            "transport_journal": 299417600,
+            "assignment_stops": 18800640,
+            "transport_requests": 17350656,
+            "idx_tj_ts": 17072128,
+            "idx_tj_entity": 10981376,
+            "transport_assignments": 9752576,
+            "assignment_crew": 7393280,
+            "idx_ta_driver": 4157440,
+            "idx_ta_vehicle": 3485696,
+            "idx_ta_request": 897024,
+            "audit_log": 671744,
+            "sync_log": 536576
+        },
+        "board": {
+            "A_plan_indexes_only\/last": {
+                "p50": 81.05,
+                "p95": 191.27,
+                "rows": 1628,
+                "plan": "SCAN a USING COVERING INDEX idx_ta_vehicle",
+                "index_build_ms": null,
+                "index_bytes": null
+            },
+            "A_plan_indexes_only\/mid": {
+                "p50": 81.72,
+                "p95": 209.76,
+                "rows": 3005,
+                "plan": "SCAN a USING COVERING INDEX idx_ta_vehicle",
+                "index_build_ms": null,
+                "index_bytes": null
+            },
+            "B_plus_start_at\/last": {
+                "p50": 34.5,
+                "p95": 121.45,
+                "rows": 1628,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_start (start_at<?)",
+                "index_build_ms": 199.6,
+                "index_bytes": 2990080
+            },
+            "B_plus_start_at\/mid": {
+                "p50": 65.84,
+                "p95": 152.08,
+                "rows": 3005,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_start (start_at<?)",
+                "index_build_ms": 199.6,
+                "index_bytes": 2990080
+            },
+            "C_plus_end_at\/last": {
+                "p50": 21.59,
+                "p95": 59.2,
+                "rows": 1628,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_end (end_at>?)",
+                "index_build_ms": 450.5,
+                "index_bytes": 2990080
+            },
+            "C_plus_end_at\/mid": {
+                "p50": 42.34,
+                "p95": 117.11,
+                "rows": 3005,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_end (end_at>?)",
+                "index_build_ms": 450.5,
+                "index_bytes": 2990080
+            }
+        },
+        "vehicle_overlap_check_ms": {
+            "p50": 0.28,
+            "p95": 3.06
+        },
+        "journal_tail50_ms": {
+            "p50": 0.12,
+            "p95": 0.21
+        },
+        "journal_by_entity_ms": {
+            "p50": 0.03,
+            "p95": 0.08
+        },
+        "journal_30d_rows": 12400,
+        "journal_30d_ms": 95.5,
+        "write_tx_ms_p50_p95": [
+            0.93,
+            2.94
+        ],
+        "backup_ms": 8954,
+        "backup_bytes": 401219584,
+        "integrity_check": "ok",
+        "integrity_check_ms": 13535
+    },
+    {
+        "scenario": "s2",
+        "years": 5,
+        "vehicles": 40,
+        "requests_per_day": 50,
+        "events_per_request": 8,
+        "requests": 91250,
+        "assignments": 118628,
+        "journal_rows": 730120,
+        "db_bytes": 663633920,
+        "db_MB": 632.9,
+        "journal_bytes_with_indexes": 546418688,
+        "journal_MB": 521.1,
+        "journal_bytes_per_row": 749,
+        "bytes_per_request_all_tables": 7255,
+        "dbstat_bytes": {
+            "transport_journal": 499515392,
+            "assignment_stops": 31391744,
+            "transport_requests": 28934144,
+            "idx_tj_ts": 28475392,
+            "idx_tj_entity": 18427904,
+            "transport_assignments": 16244736,
+            "assignment_crew": 12382208,
+            "idx_ta_driver": 6938624,
+            "idx_ta_vehicle": 5804032,
+            "idx_ta_request": 1552384,
+            "audit_log": 671744,
+            "sync_log": 536576
+        },
+        "board": {
+            "A_plan_indexes_only\/last": {
+                "p50": 151.29,
+                "p95": 313.64,
+                "rows": 1674,
+                "plan": "SCAN a USING COVERING INDEX idx_ta_vehicle",
+                "index_build_ms": null,
+                "index_bytes": null
+            },
+            "A_plan_indexes_only\/mid": {
+                "p50": 116.99,
+                "p95": 308,
+                "rows": 3017,
+                "plan": "SCAN a USING COVERING INDEX idx_ta_vehicle",
+                "index_build_ms": null,
+                "index_bytes": null
+            },
+            "B_plus_start_at\/last": {
+                "p50": 79.03,
+                "p95": 239.23,
+                "rows": 1674,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_start (start_at<?)",
+                "index_build_ms": 670.2,
+                "index_bytes": 4993024
+            },
+            "B_plus_start_at\/mid": {
+                "p50": 66.39,
+                "p95": 199.2,
+                "rows": 3017,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_start (start_at<?)",
+                "index_build_ms": 670.2,
+                "index_bytes": 4993024
+            },
+            "C_plus_end_at\/last": {
+                "p50": 35.08,
+                "p95": 76.89,
+                "rows": 1674,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_end (end_at>?)",
+                "index_build_ms": 1135.9,
+                "index_bytes": 4993024
+            },
+            "C_plus_end_at\/mid": {
+                "p50": 34.14,
+                "p95": 98.22,
+                "rows": 3017,
+                "plan": "SEARCH a USING COVERING INDEX idx_ta_end (end_at>?)",
+                "index_build_ms": 1135.9,
+                "index_bytes": 4993024
+            }
+        },
+        "vehicle_overlap_check_ms": {
+            "p50": 0.4,
+            "p95": 0.69
+        },
+        "journal_tail50_ms": {
+            "p50": 0.09,
+            "p95": 0.19
+        },
+        "journal_by_entity_ms": {
+            "p50": 0.05,
+            "p95": 0.08
+        },
+        "journal_30d_rows": 12400,
+        "journal_30d_ms": 273.7,
+        "write_tx_ms_p50_p95": [
+            0.87,
+            2.75
+        ],
+        "backup_ms": 14912,
+        "backup_bytes": 668626944,
+        "integrity_check": "ok",
+        "integrity_check_ms": 29627
+    }
+]

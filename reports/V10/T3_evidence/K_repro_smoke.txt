@@ -1,0 +1,11 @@
+# V10-T3 concurrency matrix
+# {"php":"8.3.6","sqlite":"3.45.1","src":"/home/hermes/wt/v10-t3/data/app.db","src_sha1_before":"a2e65ae47cc76e74ac1cff5247c125553b6d5d6d","src_bytes":1589248,"cpus":2,"options":{"src":"/home/hermes/wt/v10-t3/data/app.db","tmp":"/home/hermes/.hermes/profiles/sd_worker_03/cache/scratch/v10_t3","ops":40,"work_ms":3,"retries":0,"transport":"proc","bg_hold_ms":0,"bg_period_ms":200,"contest":0.5,"no_close_cursor":0}}
+mode   tx         N |     ok  confl   busy    err |  busy%   1st% |   p50ms   p95ms   p99ms     max |   ops/s commit/s |  viol   noJ orphJ
+wal    none       1 |     40      0      0      0 |   0.00   0.00 |   25.74   65.74   78.47    78.5 |    31.4    31.4 |     0     0     0
+wal    none       4 |    111     49      0      0 |   0.00   0.00 |   19.11   74.40  454.34   468.9 |    97.6    67.7 |    14     0     0
+wal    deferred   1 |     40      0      0      0 |   0.00   0.00 |   22.87   35.73   41.00    41.0 |    41.5    41.5 |     0     0     0
+wal    deferred   4 |     31     21    108      0 |  67.50  67.50 |   12.77   29.60   39.22    41.2 |   270.3    52.4 |     0     0     0
+   busy(1st attempt) by stage: {"insert_assignment":108}
+wal    immediate  1 |     40      0      0      0 |   0.00   0.00 |   19.62   32.17   46.02    46.0 |    49.3    49.3 |     0     0     0
+wal    immediate  4 |    100     60      0      0 |   0.00   0.00 |   10.22   90.06  659.97   952.2 |    97.8    61.1 |     0     0     0
+# src sha1 before=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d after=a2e65ae47cc76e74ac1cff5247c125553b6d5d6d UNCHANGED
