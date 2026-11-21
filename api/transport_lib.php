@@ -330,3 +330,253 @@ function transport_journal_write(
         ':warnings' => transport_journal_json($warnings),
     ]);
 }
+
+// =====================================================================
+// V10-T5: запись в одной транзакции с ограниченным повтором BEGIN IMMEDIATE
+// =====================================================================
+
+/** Сколько раз пробуем взять блокировку записи (BEGIN IMMEDIATE) при SQLITE_BUSY — не больше 3 попыток. */
+const TRANSPORT_BEGIN_ATTEMPTS = 3;
+/** Пауза между попытками BEGIN IMMEDIATE, мкс (умножается на номер попытки). */
+const TRANSPORT_BEGIN_PAUSE_US = 40000;
+
+/** Ошибка SQLite «занято» (SQLITE_BUSY=5 / SQLITE_LOCKED=6 / текст «database is locked»). */
+function transport_is_busy(Throwable $e): bool
+{
+    if ($e instanceof PDOException && is_array($e->errorInfo) && in_array($e->errorInfo[1] ?? null, [5, 6], true)) {
+        return true;
+    }
+    $m = $e->getMessage();
+    return stripos($m, 'database is locked') !== false || stripos($m, 'database table is locked') !== false;
+}
+
+/**
+ * Выполнить $fn в транзакции BEGIN IMMEDIATE для писателей модуля (заявки/назначения): «проверил пересечение → записал»
+ * без гонки. Повтор — ТОЛЬКО на самом BEGIN IMMEDIATE (≤ TRANSPORT_BEGIN_ATTEMPTS попыток, короткая растущая пауза);
+ * тело $fn никогда не перезапускается. Завершение — exec('COMMIT') / exec('ROLLBACK'), не PDO::commit(): PDO::inTransaction()
+ * ручной BEGIN не видит (PHP 8.3.6), поэтому состояние ведёт собственный флаг $open. Исключение откатывает транзакцию
+ * и пробрасывается; не удалось взять блокировку — 503 busy.
+ */
+function transport_write(PDO $pdo, callable $fn): mixed
+{
+    $attempt = 0;
+    while (true) {
+        $attempt++;
+        try {
+            $pdo->exec('BEGIN IMMEDIATE');
+            break;
+        } catch (Throwable $e) {
+            if (!transport_is_busy($e)) {
+                throw $e;
+            }
+            if ($attempt >= TRANSPORT_BEGIN_ATTEMPTS) {
+                error_log('[transport] BEGIN IMMEDIATE: busy after ' . $attempt . ' attempts: ' . $e->getMessage());
+                transport_fail('busy', 503);
+            }
+            usleep(TRANSPORT_BEGIN_PAUSE_US * $attempt);
+        }
+    }
+    $open = true;
+    try {
+        $result = $fn();
+        $pdo->exec('COMMIT');
+        $open = false;
+        return $result;
+    } catch (Throwable $e) {
+        if ($open) {
+            try {
+                $pdo->exec('ROLLBACK');
+            } catch (Throwable $_rollback) {
+                // транзакция уже закрыта SQLite — нечего откатывать
+            }
+        }
+        throw $e;
+    }
+}
+
+/** version из тела: нет/null/'' → null; целое/строка цифр → int; иное → 422 invalid_version. */
+function transport_read_version(array $body): ?int
+{
+    $v = $body['version'] ?? null;
+    if ($v === null || $v === '') {
+        return null;
+    }
+    if (is_int($v)) {
+        return $v;
+    }
+    if (is_string($v) && ctype_digit($v)) {
+        return (int) $v;
+    }
+    transport_fail('invalid_version', 422);
+}
+
+/** Целое из JSON: int или дробное с целым значением (60.0); иначе null. */
+function transport_int(mixed $v): ?int
+{
+    if (is_int($v)) {
+        return $v;
+    }
+    if (is_float($v) && is_finite($v) && floor($v) === $v && abs($v) < 1.0e9) {
+        return (int) $v;
+    }
+    return null;
+}
+
+/** Разбор строгого локального времени 'YYYY-MM-DDTHH:MM' (несуществующая дата/время → null). Арифметика — в UTC без переходов. */
+function transport_parse_local(mixed $v): ?DateTimeImmutable
+{
+    if (!is_string($v) || preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/', $v) !== 1) {
+        return null;
+    }
+    $d = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i', $v, new DateTimeZone('UTC'));
+    if ($d === false || $d->format('Y-m-d\TH:i') !== $v) {
+        return null;
+    }
+    return $d;
+}
+
+/** 'YYYY-MM-DDTHH:MM' + $min минут → 'YYYY-MM-DDTHH:MM' (наивное локальное время +05). */
+function transport_add_minutes(DateTimeImmutable $start, int $min): string
+{
+    return $start->modify(($min >= 0 ? '+' : '') . $min . ' minutes')->format('Y-m-d\TH:i');
+}
+
+// =====================================================================
+// V10-T5: выборки и представление заявок/назначений (весь SQL — здесь и в transport_warnings.php)
+// =====================================================================
+
+const TRANSPORT_REQUEST_STATUSES = ['new', 'assigned', 'in_progress', 'done', 'cancelled'];
+
+/** Строка заявки или null. */
+function transport_fetch_request(PDO $pdo, string $id): ?array
+{
+    $st = $pdo->prepare('SELECT * FROM transport_requests WHERE id = :id');
+    $st->execute([':id' => $id]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    return $rows[0] ?? null;
+}
+
+/** Строка назначения или null. */
+function transport_fetch_assignment(PDO $pdo, string $id): ?array
+{
+    $st = $pdo->prepare('SELECT * FROM transport_assignments WHERE id = :id');
+    $st->execute([':id' => $id]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    return $rows[0] ?? null;
+}
+
+/**
+ * Назначения заявок в публичном виде: requestId => список назначений (в порядке создания, rowid) с бригадой и маршрутом.
+ *
+ * @param list<string> $requestIds
+ * @return array<string,list<array<string,mixed>>>
+ */
+function transport_assignments_of(PDO $pdo, array $requestIds): array
+{
+    $out = [];
+    foreach ($requestIds as $rid) {
+        $out[(string) $rid] = [];
+    }
+    foreach (array_chunk(array_values(array_unique(array_map('strval', $requestIds))), 400) as $chunk) {
+        if ($chunk === []) {
+            continue;
+        }
+        $in = implode(',', array_fill(0, count($chunk), '?'));
+        $st = $pdo->prepare("SELECT * FROM transport_assignments WHERE request_id IN ($in) ORDER BY rowid");
+        $st->execute($chunk);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        if ($rows === []) {
+            continue;
+        }
+        $aids = array_map(static fn(array $r): string => (string) $r['id'], $rows);
+        $crew = [];
+        $stops = [];
+        foreach (array_chunk($aids, 400) as $achunk) {
+            $ain = implode(',', array_fill(0, count($achunk), '?'));
+            $sc = $pdo->prepare("SELECT assignment_id, employee_id, name_snap FROM assignment_crew WHERE assignment_id IN ($ain) ORDER BY name_snap, employee_id");
+            $sc->execute($achunk);
+            foreach ($sc->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $crew[(string) $c['assignment_id']][] = ['employee_id' => (string) $c['employee_id'], 'name' => (string) ($c['name_snap'] ?? '')];
+            }
+            $ss = $pdo->prepare("SELECT * FROM assignment_stops WHERE assignment_id IN ($ain) ORDER BY assignment_id, ord");
+            $ss->execute($achunk);
+            foreach ($ss->fetchAll(PDO::FETCH_ASSOC) as $s) {
+                $stops[(string) $s['assignment_id']][] = [
+                    'ord'         => (int) $s['ord'],
+                    'kind'        => (string) $s['kind'],
+                    'place'       => (string) $s['place'],
+                    'lat'         => $s['lat'] === null ? null : (float) $s['lat'],
+                    'lon'         => $s['lon'] === null ? null : (float) $s['lon'],
+                    'stay_min'    => (int) $s['stay_min'],
+                    'leg_km'      => $s['leg_km'] === null ? null : (float) $s['leg_km'],
+                    'leg_min_map' => $s['leg_min_map'] === null ? null : (int) $s['leg_min_map'],
+                    'leg_min'     => (int) $s['leg_min'],
+                ];
+            }
+        }
+        foreach ($rows as $r) {
+            $id = (string) $r['id'];
+            $confirmed = $r['override_json'] === null ? null : json_decode((string) $r['override_json'], true);
+            $out[(string) $r['request_id']][] = [
+                'id'                 => $id,
+                'request_id'         => (string) $r['request_id'],
+                'vehicle_id'         => (string) $r['vehicle_id'],
+                'driver_id'          => (string) $r['driver_id'],
+                'driver_name'        => (string) ($r['driver_name_snap'] ?? ''),
+                'start_at'           => (string) $r['start_at'],
+                'duration_min'       => (int) $r['duration_min'],
+                'end_at'             => (string) $r['end_at'],
+                'version'            => (int) $r['version'],
+                'crew'               => $crew[$id] ?? [],
+                'stops'              => $stops[$id] ?? [],
+                'confirmed_warnings' => is_array($confirmed) ? $confirmed : [],
+                'created_by'         => $r['created_by'] === null ? null : (string) $r['created_by'],
+                'created_at'         => (string) ($r['created_at'] ?? ''),
+                'updated_at'         => (string) ($r['updated_at'] ?? ''),
+            ];
+        }
+    }
+    return $out;
+}
+
+/** Одно назначение в публичном виде или null. */
+function transport_assignment_public(PDO $pdo, string $id): ?array
+{
+    $row = transport_fetch_assignment($pdo, $id);
+    if ($row === null) {
+        return null;
+    }
+    foreach (transport_assignments_of($pdo, [(string) $row['request_id']])[(string) $row['request_id']] as $a) {
+        if ($a['id'] === $id) {
+            return $a;
+        }
+    }
+    return null;
+}
+
+/**
+ * Заявка в публичном виде.
+ *
+ * @param list<array<string,mixed>> $assignments из transport_assignments_of()
+ */
+function transport_request_public(array $r, array $assignments, bool $canEdit): array
+{
+    return [
+        'id'              => (string) $r['id'],
+        'display_no'      => $r['display_no'] === null ? null : (int) $r['display_no'],
+        'title'           => (string) $r['title'],
+        'subscriber'      => $r['subscriber'] === null ? null : (string) $r['subscriber'],
+        'address'         => $r['address'] === null ? null : (string) $r['address'],
+        'comment'         => $r['comment'] === null ? null : (string) $r['comment'],
+        'status'          => (string) $r['status'],
+        'source'          => $r['source'] === null ? null : (string) $r['source'],
+        'external_id'     => $r['external_id'] === null ? null : (string) $r['external_id'],
+        'created_by'      => $r['created_by'] === null ? null : (string) $r['created_by'],
+        'created_by_name' => (string) ($r['created_by_name'] ?? ''),
+        'version'         => (int) $r['version'],
+        'created_at'      => (string) ($r['created_at'] ?? ''),
+        'updated_at'      => (string) ($r['updated_at'] ?? ''),
+        'assignments'     => $assignments,
+        'can_edit'        => $canEdit,
+    ];
+}

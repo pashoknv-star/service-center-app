@@ -1,0 +1,23 @@
+ok   base asg 201
+ok   dry codes
+ok   токен для другой заявки не годится (scope)
+ok   токен из другой сессии не годится
+ok   токен с подменённым сроком не годится
+ok   просроченный/левый токен
+ok   верный токен → 201
+ok   набор C = 1 код
+ok   токен устарел после изменения набора конфликтов → 409
+ok   частичный PUT
+ok   PUT вхолостую: версия не растёт
+ok   request_id менять нельзя
+ok   from-only
+ok   from>to 422
+ok   status bogus 422
+ok   status список
+ok   DELETE при cancelled → 422
+ok   driver не из списка → 422 и dry
+ok   in_progress + удалено последнее → new
+ok   busy → 503 после ≤3 попыток BEGIN (15.2 с)
+ok   после снятия блокировки пишет
+
+21 checks, 0 failed
