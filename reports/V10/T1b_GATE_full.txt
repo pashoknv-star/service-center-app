@@ -1,0 +1,30 @@
+verify_all: 624aa0b 2026-11-21 07:30:40 suites: smoke tasks tasksn8n tasksatt tasklinks transportdb tasksui tasksmx taskscal director emptasks tasklinksui e51 e52 hygiene trips tripsform tripsstatus syntax phplint pii refs tasklink
+
+SUITE    RES  PASSED EXPECT   TIME  NOTE
+smoke    PASS     84     84     3s  
+tasks    PASS     66     66     3s  
+tasksn8n PASS     27     27    26s  
+tasksatt PASS     24     24     6s  
+tasklinks PASS     37     37     8s  
+transportdb PASS    117    117     5s  
+tasksui  PASS    334    334    24s  
+tasksmx  PASS     79     79     8s  
+taskscal PASS    220    220     6s  
+director PASS    101    101    11s  
+emptasks PASS     34     34     2s  
+tasklinksui PASS    211    211   120s  
+e51      PASS     23     23     0s  
+e52      PASS     41     41     1s  
+hygiene  PASS     19     19     0s  
+trips    PASS      7      7     3s  
+tripsform PASS    131    131    57s  
+tripsstatus PASS    147    147    71s  
+syntax   PASS      -      -     1s  
+phplint  PASS     42      -     3s  
+pii      PASS      -      -     0s  
+refs     PASS     28     28    17s  удалено 0, со ссылками 0, исключений 0
+tasklink PASS     43     43     6s  коммитов 12, с кодом 5, нарушений 0
+clean    PASS
+
+GATE: PASS (23 suites)
+exit=0

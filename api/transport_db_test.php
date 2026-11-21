@@ -215,7 +215,7 @@ $run('M2 v14 → v15 на копии: прежние данные на мест�
         $p->exec("INSERT INTO task_assignees (task_id, employee_id, role, full_name_snapshot) VALUES ('m2_t1', 'm2_e', 'assignee', 'Миграционов Е')");
         $p->exec("INSERT INTO audit_log (ts, actor, role, action, entity_type, entity_id, details) VALUES ('2999-01-01T00:00:00+00:00', 'x', 'admin', 'm2.keep', 'system', NULL, '{}')");
         $full = transportObjects($p);   // эталон: что создаёт обычная миграция (schema.sql + db.php)
-        ok(count($full) >= 9 + 5 + 2, 'эталон схемы транспорта не пуст: ' . count($full) . ' объектов');
+        ok(count($full) >= 9 + 5 + 3, 'эталон схемы транспорта не пуст: ' . count($full) . ' объектов');
         downgradeTo14($p);
         eq(transportObjects($p), [], 'подготовка: объектов транспорта нет');
         $before = snapshotTables($p, ['audit_log', 'meta']);
@@ -283,7 +283,7 @@ $run('M4 свежая пустая БД: migrate() создаёт полную �
             eq((int) $q->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='$t'")->fetchColumn(), 1, $t);
         }
         $trg = $q->query("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='transport_journal' ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
-        eq(count($trg), 2, 'два триггера журнала: ' . implode(',', $trg));
+        eq($trg, ['trg_transport_journal_no_delete', 'trg_transport_journal_no_replace', 'trg_transport_journal_no_update'], 'три триггера журнала: ' . implode(',', $trg));
         unset($q);
     } finally {
         $rmDb($f);
@@ -480,7 +480,7 @@ $run('J3 журнал: INSERT разрешён, id монотонный (AUTOINC
     $pdo->exec("INSERT INTO transport_journal (ts, actor, role, action, entity_type, entity_id) VALUES ('2020-01-02T00:00:00+05:00', 'a', 'admin', 'test.new', 'vehicle', 'chk_v')");
     $newId = (int) $pdo->lastInsertId();
     ok($newId > $oldJournalId, 'id растёт');
-    throws($pdo, "INSERT INTO transport_journal (id, ts, actor, role, action, entity_type, entity_id) VALUES ($oldJournalId, 'x', 'x', 'x', 'x', 'x', 'x')", 'unique');
+    throws($pdo, "INSERT INTO transport_journal (id, ts, actor, role, action, entity_type, entity_id) VALUES ($oldJournalId, 'x', 'x', 'x', 'x', 'x', 'x')", 'append-only');
     eq($pdo->query("SELECT actor FROM transport_journal WHERE id = $oldJournalId")->fetchColumn(), 'old_actor', 'старая запись цела');
     return 'id ' . $oldJournalId . '→' . $newId;
 });
@@ -508,6 +508,135 @@ $run('J5 ротация в db.php (cleanupAuditLog при migrate) тоже не
     eq($pdo->query('SELECT * FROM transport_journal ORDER BY id')->fetchAll(), $jBefore, 'журнал цел после migrate()');
     eq(transportObjects($pdo), $objs, 'схема не изменилась');
     return 'ok';
+});
+
+// V10-T1b: обход неизменяемости через REPLACE / OR IGNORE / upsert с уже существующим id
+$jRow = function (PDO $p, int $id): array {
+    return $p->query("SELECT * FROM transport_journal WHERE id = $id")->fetch() ?: [];
+};
+$jIns = static fn(string $verb, int $id, string $actor): string =>
+    "$verb INTO transport_journal (id, ts, actor, role, action, entity_type, entity_id, after_json) VALUES ($id, '2020-03-01T00:00:00+05:00', '$actor', 'admin', 'test.forged', 'vehicle', 'x', '{}')";
+
+$run('JR1 журнал: INSERT OR REPLACE и REPLACE INTO с существующим id → ошибка append-only, запись не перезаписана', function () use ($pdo, $oldJournalId, $jRow, $jIns) {
+    $row = $jRow($pdo, $oldJournalId);
+    ok($row !== [] && $row['actor'] === 'old_actor', 'исходная запись на месте');
+    $n = (int) $pdo->query('SELECT COUNT(*) FROM transport_journal')->fetchColumn();
+    // Оба варианта проверяются независимо: до фикса запрос проходит и перезаписывает запись — провал перечисляет, что именно прошло.
+    $bad = [];
+    $m = '';
+    foreach (['INSERT OR REPLACE' => 'HACK_or_replace', 'REPLACE' => 'HACK_replace'] as $verb => $actor) {
+        try {
+            $pdo->exec($jIns($verb, $oldJournalId, $actor));
+            $bad[] = "«{$verb}» ПРОШЁЛ без ошибки, actor стал «" . ($jRow($pdo, $oldJournalId)['actor'] ?? '∅') . '»';
+        } catch (PDOException $e) {
+            if (stripos($e->getMessage(), 'append-only') === false) {
+                $bad[] = $verb . ': неожиданная ошибка ' . $e->getMessage();
+            }
+            $m = $e->getMessage();
+        }
+        if ($jRow($pdo, $oldJournalId) !== $row) {
+            $bad[] = $verb . ': запись журнала изменена';
+            $row = $jRow($pdo, $oldJournalId);   // дальше сравниваем с актуальным состоянием — второй вариант оценивается отдельно
+        }
+    }
+    eq($bad, [], 'обход неизменяемости журнала: ' . implode('; ', $bad));
+    eq((int) $pdo->query('SELECT COUNT(*) FROM transport_journal')->fetchColumn(), $n, 'число записей');
+    eq((int) $pdo->query("SELECT COUNT(*) FROM transport_journal WHERE actor LIKE 'HACK%'")->fetchColumn(), 0, 'подделок нет');
+    return $m;
+});
+
+$run('JR2 журнал: INSERT OR IGNORE и INSERT … ON CONFLICT(id) DO UPDATE / DO NOTHING с существующим id не меняют запись (ошибка или пропуск)', function () use ($pdo, $oldJournalId, $jRow, $jIns) {
+    $row = $jRow($pdo, $oldJournalId);
+    $n = (int) $pdo->query('SELECT COUNT(*) FROM transport_journal')->fetchColumn();
+    $res = [];
+    foreach ([
+        'OR IGNORE' => $jIns('INSERT OR IGNORE', $oldJournalId, 'HACK_ignore'),
+        'ON CONFLICT DO UPDATE' => $jIns('INSERT', $oldJournalId, 'HACK_upsert') . " ON CONFLICT(id) DO UPDATE SET actor = 'HACK_upsert', after_json = '{\"forged\":1}'",
+        'ON CONFLICT DO NOTHING' => $jIns('INSERT', $oldJournalId, 'HACK_nothing') . ' ON CONFLICT(id) DO NOTHING',
+    ] as $name => $sql) {
+        try {
+            $pdo->exec($sql);
+            $res[] = $name . ': пропуск';
+        } catch (Throwable $e) {
+            ok(stripos($e->getMessage(), 'append-only') !== false, $name . ': неожиданная ошибка ' . $e->getMessage());
+            $res[] = $name . ': ошибка append-only';
+        }
+        eq($jRow($pdo, $oldJournalId), $row, $name . ': запись журнала не изменилась');
+    }
+    eq((int) $pdo->query('SELECT COUNT(*) FROM transport_journal')->fetchColumn(), $n, 'число записей');
+    return implode('; ', $res);
+});
+
+$run('JR3 журнал: штатные вставки работают — без id, id = NULL, новый id (в т.ч. через INSERT OR REPLACE); UPDATE/DELETE по-прежнему запрещены', function () use ($pdo, $oldJournalId, $jRow, $jIns) {
+    $n = (int) $pdo->query('SELECT COUNT(*) FROM transport_journal')->fetchColumn();
+    $pdo->exec("INSERT INTO transport_journal (ts, actor, role, action, entity_type, entity_id) VALUES ('2020-02-01T00:00:00+05:00', 'j8_noid', 'admin', 'test.j8', 'vehicle', 'chk_v')");
+    $id1 = (int) $pdo->lastInsertId();
+    $pdo->exec("INSERT INTO transport_journal (id, ts, actor, role, action, entity_type, entity_id) VALUES (NULL, '2020-02-01T00:00:00+05:00', 'j8_null', 'admin', 'test.j8', 'vehicle', 'chk_v')");
+    $id2 = (int) $pdo->lastInsertId();
+    $pdo->exec("INSERT OR REPLACE INTO transport_journal (ts, actor, role, action, entity_type, entity_id) VALUES ('2020-02-01T00:00:00+05:00', 'j8_orr', 'admin', 'test.j8', 'vehicle', 'chk_v')");
+    $id3 = (int) $pdo->lastInsertId();
+    $new = (int) $pdo->query('SELECT MAX(id) FROM transport_journal')->fetchColumn() + 100;
+    $pdo->exec($jIns('INSERT', $new, 'j8_newid'));
+    $pdo->exec($jIns('INSERT OR REPLACE', $new + 1, 'j8_newid_orr'));
+    ok($id1 > $oldJournalId && $id2 > $id1 && $id3 > $id2, "id монотонны: $id1, $id2, $id3");
+    eq((int) $pdo->query('SELECT COUNT(*) FROM transport_journal')->fetchColumn(), $n + 5, 'добавлено 5 записей');
+    eq($jRow($pdo, $new)['actor'], 'j8_newid', 'запись с новым id создана');
+    throws($pdo, "UPDATE transport_journal SET actor = 'hacker' WHERE id = $id1", 'append-only');
+    throws($pdo, "DELETE FROM transport_journal WHERE id = $id1", 'append-only');
+    eq($jRow($pdo, $id1)['actor'], 'j8_noid', 'запись цела');
+    return "id $id1, $id2, $id3, $new";
+});
+
+$run('JR4 журнал: запись с id ≤ 0 не «отравляет» журнал — вставка без id после неё работает (условие NEW.id > 0 в триггере); записи с id > 0 защищены', function () use ($tmpDir, $migrate, $rmDb) {
+    $f = tempnam($tmpDir, 'sc_tdb_j9_');
+    ok($f !== false, 'файл');
+    try {
+        eq($migrate($f, 'fresh'), '0>15', 'свежая БД');
+        $q = openDb($f);
+        $q->exec("INSERT INTO transport_journal (ts, actor) VALUES ('t', 'legit')");
+        // В BEFORE INSERT NEW.id у вставки без id равен -1: без условия NEW.id > 0 строка с id = -1 блокировала бы все штатные вставки.
+        $q->exec("INSERT INTO transport_journal (id, ts, actor) VALUES (-1, 't', 'neg')");
+        $q->exec("INSERT INTO transport_journal (ts, actor) VALUES ('t', 'after_neg')");
+        eq($q->query("SELECT actor FROM transport_journal WHERE actor = 'after_neg'")->fetchColumn(), 'after_neg', 'вставка без id после id = -1');
+        throws($q, "INSERT OR REPLACE INTO transport_journal (id, ts, actor) VALUES (1, 't', 'HACK')", 'append-only');
+        eq($q->query('SELECT actor FROM transport_journal WHERE id = 1')->fetchColumn(), 'legit', 'запись id=1 цела');
+        unset($q);
+    } finally {
+        $rmDb($f);
+    }
+    return 'ok';
+});
+
+$run('M5 БД, уже мигрированная до v15 без триггера trg_transport_journal_no_replace (dev-копия): migrate() создаёт его, данные журнала целы, повтор — no-op', function () use ($tmpDir, $realDb, $migrate, $rmDb) {
+    $f = tempnam($tmpDir, 'sc_tdb_m5_');
+    ok($f !== false && copy($realDb, $f), 'копия');
+    try {
+        eq($migrate($f, 'prep'), '6>15', 'подготовка: v15');
+        $p = openDb($f);
+        $p->exec('PRAGMA journal_mode = DELETE');
+        $full = transportObjects($p);
+        ok(isset($full['trigger:trg_transport_journal_no_replace']), 'эталон содержит триггер trg_transport_journal_no_replace');
+        $p->exec('DROP TRIGGER trg_transport_journal_no_replace');   // состояние «v15 до фикса T1b»
+        $p->exec("INSERT INTO transport_journal (ts, actor) VALUES ('m5', 'keep')");
+        $p->exec("INSERT OR REPLACE INTO transport_journal (id, ts, actor) VALUES (1, 'm5', 'overwritten_before_fix')");   // без триггера — проходит
+        eq(count(transportObjects($p)), count($full) - 1, 'триггера нет');
+        unset($p);
+        eq($migrate($f, 'plain'), '15>15', 'migrate() на актуальной версии');
+        $q = openDb($f);
+        eq(transportObjects($q), $full, 'триггер восстановлен, прочие объекты те же');
+        eq($q->query('SELECT actor FROM transport_journal WHERE id = 1')->fetchColumn(), 'overwritten_before_fix', 'данные журнала не тронуты миграцией');
+        throws($q, "INSERT OR REPLACE INTO transport_journal (id, ts, actor) VALUES (1, 'm5', 'HACK')", 'append-only');
+        $snap = snapshotTables($q, ['audit_log', 'meta']);
+        unset($q);
+        eq($migrate($f, 'plain'), '15>15', 'повтор');
+        $q = openDb($f);
+        eq(transportObjects($q), $full, 'повтор — no-op: объекты');
+        eq(snapshotTables($q, ['audit_log', 'meta']), $snap, 'повтор — no-op: данные');
+        unset($q);
+    } finally {
+        $rmDb($f);
+    }
+    return 'триггер добавлен, повтор — no-op';
 });
 
 // ----------------------------------------------------------------------------
